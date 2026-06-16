@@ -29,6 +29,9 @@ QWEN_API_KEY: str | None = _str("QWEN_API_KEY")
 QWEN_API_URL: str = _str("QWEN_API_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions") or "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 QWEN_VL_MODEL: str = _str("QWEN_VL_MODEL", "qwen3.7-plus") or "qwen3.7-plus"
 
+# --- Luckin CLI ---
+LUCKIN_BINARY_PATH: str = _str("LUCKIN_BINARY_PATH", "luckin") or "luckin"
+
 # --- Ollama (local fallback, unused by default) ---
 OLLAMA_HOST: str = _str("OLLAMA_HOST", "http://localhost:11434") or "http://localhost:11434"
 OLLAMA_VL_MODEL: str = _str("OLLAMA_VL_MODEL", "qwen2.5vl:3b") or "qwen2.5vl:3b"

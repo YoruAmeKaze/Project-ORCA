@@ -86,6 +86,34 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "luckin_lookup",
+            "description": "查询瑞幸咖啡门店和菜单信息。输入饮品名称或门店名称，自动查找附近门店和商品信息。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "要查询的内容，如饮品名'生椰拿铁'或门店名'望京店'"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "luckin_order",
+            "description": "通过瑞幸 CLI 下单。必须先调用 luckin_lookup 获取门店ID和商品ID后再使用。参数用JSON格式传入，包含dept_id/items/lat/lng字段",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "params": {"type": "string", "description": "JSON 字符串，包含: dept_id(门店ID), items(商品列表，每个含product_id/sku_code/amount), lat(纬度), lng(经度), coupon(可选券码)"},
+                },
+                "required": ["params"],
+            },
+        },
+    },
 ]
 
 
@@ -94,7 +122,10 @@ INSTRUCTIONS = (
     "- analyze_screenshot: 需要看图时调用（查看桌面、找坐标）\n"
     "- execute_action: 要操作电脑时调用（点击、打字、滚动）\n"
     "- send_message: 处理过程中给用户发消息，让对方了解进度\n"
-    "- search_web: 需要实时信息时搜索网络\n\n"
+    "- search_web: 需要实时信息时搜索网络\n"
+    "- luckin_lookup: 查询瑞幸咖啡的门店和饮品信息\n"
+    "- luckin_order: 通过瑞幸 CLI 下单（先 luckin_lookup 再下单）\n\n"
+    "点咖啡流程：先 luckin_lookup 查饮品和门店 → 发消息让用户确认 → 再 luckin_order 下单。\n"
     "思考过程如果有话说，通过 send_message 发给用户。\n"
     "任务完成后，直接回复用户，不要再调工具。"
 )
@@ -111,6 +142,8 @@ async def run(
     on_screenshot: Callable[[str], str],
     on_action: Callable[[str, dict], str],
     on_search: Callable[[str], str] | None = None,
+    on_luckin_lookup: Callable[[str], str] | None = None,
+    on_luckin_order: Callable[[str], str] | None = None,
 ) -> str:
     """Run the ReAct agent loop.
 
@@ -204,6 +237,14 @@ async def run(
             elif name == "search_web" and on_search:
                 result = await on_search(args.get("query", ""))
                 logger.info("Search result: %.80s", result)
+
+            elif name == "luckin_lookup" and on_luckin_lookup:
+                result = await on_luckin_lookup(args.get("query", ""))
+                logger.info("Luckin lookup: %.80s", result)
+
+            elif name == "luckin_order" and on_luckin_order:
+                result = await on_luckin_order(args.get("params", "{}"))
+                logger.info("Luckin order: %.80s", result)
 
             else:
                 result = f"未知工具: {name}"
