@@ -22,5 +22,11 @@ Thumbs.db
 # Logs
 logs/
 
+# Project docs (local only)
+TODO.md
+dev-log.md
+logo.png
+project-orca-overview.md
+
 # Reasonix internal
 .reasonix/
