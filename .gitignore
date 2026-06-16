@@ -1,0 +1,26 @@
+# Environment variables (API keys, secrets)
+.env
+
+# API key file
+api.txt
+
+# SSH keys
+*.pem
+*.key
+
+# Local config / startup script
+start.bat
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Logs
+logs/
+
+# Reasonix internal
+.reasonix/

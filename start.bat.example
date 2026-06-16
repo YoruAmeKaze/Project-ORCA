@@ -1,0 +1,73 @@
+@echo off
+title Project Orca — 启动中...
+cd /d "%~dp0"
+
+echo ========================================
+echo   Project Orca — Phase 1
+echo ========================================
+echo.
+
+:: 检查 Python
+python --version >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [错误] 未找到 Python
+    pause
+    exit /b 1
+)
+
+:: 检查依赖
+pip show fastapi uvicorn httpx pyautogui pillow >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [安装依赖] pip install -r requirements.txt
+    pip install -r requirements.txt
+)
+
+:: === 修改以下配置为你自己的服务器信息 ===
+set SSH_HOST=your.server.ip
+set SSH_USER=root
+set SSH_KEY_PATH=C:\path\to\your\ssh_key.pem
+set LOCAL_PORT=8000
+
+:: 清理服务器上残留的 SSH 隧道端口
+echo [清理] 服务器旧端口...
+python -c "
+import paramiko
+try:
+    key = paramiko.RSAKey.from_private_key_file('%SSH_KEY_PATH%')
+    c = paramiko.SSHClient()
+    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    c.connect('%SSH_HOST%', port=22, username='%SSH_USER%', pkey=key, timeout=5)
+    c.exec_command('ss -tlnp | grep %LOCAL_PORT% | grep -o pid=[0-9]* | cut -d= -f2 | sort -u | xargs -r kill 2>/dev/null')
+    c.close()
+    echo   服务器端口已清理
+except Exception as e:
+    echo   清理失败: %e
+" 2>nul
+
+:: 启动 SSH 隧道（最小化窗口）
+echo [启动] SSH 隧道 %SSH_HOST%:%LOCAL_PORT% ^> localhost:%LOCAL_PORT%
+start /min "Orca-SSH" cmd /c "ssh -R 0.0.0.0:%LOCAL_PORT%:localhost:%LOCAL_PORT% -i %SSH_KEY_PATH% -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -N %SSH_USER%@%SSH_HOST%"
+if %errorlevel% neq 0 (
+    echo [警告] SSH 隧道启动失败
+) else (
+    echo   SSH 隧道已启动
+)
+echo.
+
+:: 启动 FastAPI
+echo [启动] FastAPI — http://127.0.0.1:%LOCAL_PORT%
+echo [启动] 公网 — http://%SSH_HOST%:%LOCAL_PORT%
+echo.
+echo ========================================
+echo   日志输出（按 Ctrl+C 停止）
+echo ========================================
+echo.
+
+python -c "import sys; sys.path.insert(0, '.'); import uvicorn; uvicorn.run('src.main:app', host='127.0.0.1', port=%LOCAL_PORT%, log_level='info')"
+
+:: 退出时清理 SSH 隧道
+echo.
+echo [清理] 关闭 SSH 隧道...
+taskkill /f /fi "WINDOWTITLE eq Orca-SSH" >nul 2>&1
+echo 已退出。
+pause
