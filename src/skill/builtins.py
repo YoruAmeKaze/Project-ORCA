@@ -48,7 +48,14 @@ def create_registry() -> SkillRegistry:
         # ── analyze_image ──────────────────────────────────────────────
         SkillMetadata(
             name="analyze_image",
-            description="用视觉模型分析指定图片的内容，可用于查找 UI 元素坐标或描述桌面状态。",
+            description=(
+                "分析、查看、识别图片内容。可用于看图、看桌面、看屏幕、识别界面元素。\n"
+                "用视觉模型分析指定图片的内容。\n"
+                "image_path 的来源分三种情况：\n"
+                "1. 用户意图涉及桌面/屏幕时——先调用 capture_screenshot 获取路径，再传给此 skill\n"
+                "2. 用户发来图片时——直接用用户提供的图片路径\n"
+                "3. 不确定图片来源时——用 reply skill 告知用户需要提供图片"
+            ),
             params={
                 "task": {
                     "type": "string",
@@ -58,7 +65,7 @@ def create_registry() -> SkillRegistry:
                 "image_path": {
                     "type": "string",
                     "required": True,
-                    "description": "图片文件路径",
+                    "description": "图片文件路径，来源见 skill 描述",
                 },
             },
             output="string（文字分析结果）",

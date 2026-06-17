@@ -5,14 +5,15 @@ import logging
 import httpx
 
 from src.config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_MODEL
+from src.core.persona import ORCA_PERSONA_PROMPT
 
 logger = logging.getLogger(__name__)
 
-REFINE_PROMPT = (
-    "你是一个语言润色助手。请将以下原始内容用 Orca 的语气改写——"
-    "简短、自然、技术宅室友感。"
-    "保留所有关键信息，去掉多余的技术细节，让普通用户能看懂。\n"
-    "直接输出润色后的结果，不要加任何前缀或解释。\n\n"
+REFINE_INSTRUCTION = (
+    "\n\n---\n"
+    "请用上面的人设将以下原始内容改写成 Orca 会说的话——"
+    "简短、自然，保留关键信息，去掉多余的技术细节让普通用户能看懂。\n"
+    "直接输出改写后的结果，不要加任何前缀或解释。\n\n"
 )
 
 
@@ -29,7 +30,7 @@ async def handle(args: dict, deps) -> str:
         return ""
 
     messages = [
-        {"role": "system", "content": REFINE_PROMPT},
+        {"role": "system", "content": f"{ORCA_PERSONA_PROMPT}\n{REFINE_INSTRUCTION}"},
         {"role": "user", "content": raw},
     ]
 

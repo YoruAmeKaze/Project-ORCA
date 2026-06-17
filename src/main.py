@@ -31,7 +31,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- App ---
-app = FastAPI(title="Project Orca", version="2.1.0", description="Phase 2 — Plan-then-Execute Architecture")
+app = FastAPI(title="Project Orca", version="2.1.1", description="Phase 2 — Plan-then-Execute Architecture")
 
 app.include_router(feishu_router)
 

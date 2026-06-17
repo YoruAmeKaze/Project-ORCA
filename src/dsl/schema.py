@@ -46,6 +46,7 @@ class SkillCall:
     skill: str
     args: dict[str, Any] = field(default_factory=dict)
     id: str | None = None  # optional; Runtime fills _step_N if absent
+    narration: str | None = None  # optional; LLM-generated message sent before execution
 
 
 @dataclass
@@ -98,6 +99,7 @@ def plan_from_json(data: dict) -> Plan:
             skill=item["skill"],
             args=item.get("args", {}),
             id=item.get("id"),
+            narration=item.get("narration"),
         ))
 
     return Plan(reasoning=reasoning, steps=steps)

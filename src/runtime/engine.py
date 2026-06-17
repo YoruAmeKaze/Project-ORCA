@@ -94,11 +94,10 @@ class Engine:
                 if skill_meta.handler is None:
                     raise RuntimeError(f"Skill '{step.skill}' has no handler")
 
-                # Step 3: Emit progress message if configured
-                if skill_meta.progress_message and self._deps.feishu:
-                    await self._deps.feishu.send_text(
-                        session_id, skill_meta.progress_message
-                    )
+                # Step 3: Emit narration or fallback progress message
+                msg = step.narration or skill_meta.progress_message
+                if msg and self._deps.feishu:
+                    await self._deps.feishu.send_text(session_id, msg)
 
                 # Step 4: Execute handler
                 output = await skill_meta.handler(resolved_args, self._deps)
