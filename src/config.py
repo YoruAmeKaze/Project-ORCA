@@ -29,6 +29,9 @@ QWEN_API_KEY: str | None = _str("QWEN_API_KEY")
 QWEN_API_URL: str = _str("QWEN_API_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions") or "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 QWEN_VL_MODEL: str = _str("QWEN_VL_MODEL", "qwen3.7-plus") or "qwen3.7-plus"
 
+# --- Architecture switch (Phase 2 migration) ---
+USE_NEW_ARCH: bool = _str("USE_NEW_ARCH", "").lower() in ("true", "1", "yes")
+
 # --- Luckin CLI ---
 LUCKIN_BINARY_PATH: str = _str("LUCKIN_BINARY_PATH", "luckin") or "luckin"
 
