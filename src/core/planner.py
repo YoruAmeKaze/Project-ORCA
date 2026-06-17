@@ -15,7 +15,6 @@ from typing import Any
 import httpx
 
 from src.config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_MODEL
-from src.core.persona import ORCA_PERSONA_PROMPT
 from src.skill.registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
@@ -23,6 +22,23 @@ logger = logging.getLogger(__name__)
 # ── System prompt template ──────────────────────────────────────────────────
 
 SYSTEM_PROMPT_HEADER = """你是 Orca 的规划器。根据用户的意图，从可用 skill 中选择合适的 skill 编排执行计划。
+
+重要：只输出 JSON，不要包含任何其他文字、解释、markdown 代码块标记。
+
+输出格式严格遵循以下 JSON schema：
+{
+    "ack": "可选。当 plan 需要实际执行（多步或操作）时，简短告知用户正在处理。纯闲聊不需要此字段。",
+    "reasoning": "你的思考过程",
+    "steps": [
+        {
+            "id": "可选，被后续步骤引用时需要",
+            "skill": "skill名称",
+            "args": {
+                "参数名": "参数值"
+            }
+        }
+    ]
+}
 
 规则：
 1. 只使用下面列出的 skill，不要 invent 不存在的 skill
@@ -32,11 +48,59 @@ SYSTEM_PROMPT_HEADER = """你是 Orca 的规划器。根据用户的意图，从
 5. 如果某步的结果需要被后面的步骤使用，给该步加一个 id，后面用 {{{{step.<id>.output}}}} 引用
 6. 如果用户只是闲聊或问候，直接生成一步 reply 即可
 7. 不需要用户输入即可完成的步骤，不要询问用户，直接执行
+8. args 是一个对象，参数直接放在 args 里面，不要放在 step 的顶层
+
+正确示例（闲聊）：
+{"ack": "嗯，在呢。", "reasoning": "用户只是打招呼，直接回复", "steps": [{"skill": "reply", "args": {"message": "嗯，还行。"}}]}
+
+正确示例（多步）：
+{"ack": "截个图看看。", "reasoning": "用户想截图看桌面", "steps": [{"id": "cap", "skill": "capture_screenshot", "args": {}}, {"skill": "reply", "args": {"message": "{{step.cap.output}}"}}]}
 
 可用 skill：
 
-{s kills}
+{skills}
 """
+
+
+# ── Helper: Chinese-aware message segmentation ──────────────────────────────
+
+
+def _segment_message(msg: str) -> list[str]:
+    """Split a message into meaningful segments for keyword matching.
+
+    For English: split by whitespace.
+    For Chinese: extract 2-4 character sliding windows.
+    """
+    parts = msg.split()
+    if len(parts) > 1:
+        return parts
+    segments = []
+    for length in (4, 3, 2):
+        for i in range(len(msg) - length + 1):
+            seg = msg[i:i + length]
+            if not seg.isdigit():
+                segments.append(seg)
+    return segments
+
+
+def _strip_markdown_json(text: str) -> str:
+    """Strip markdown code block markers from LLM output.
+
+    Handles ```json ... ```, ``` ... ```, and plain JSON.
+    """
+    text = text.strip()
+    # Remove ```json ... ``` or ``` ... ```
+    if text.startswith("```"):
+        # Find the end of the first line (language specifier)
+        first_nl = text.find("\n")
+        if first_nl != -1:
+            text = text[first_nl + 1:]
+        # Remove trailing ```
+        if text.endswith("```"):
+            text = text[:-3]
+        elif "```" in text:
+            text = text[:text.rfind("```")]
+    return text.strip()
 
 
 # ── Planner ──────────────────────────────────────────────────────────────────
@@ -53,7 +117,9 @@ class Planner:
     def _match_skills(self, user_message: str) -> list[str]:
         """Retrieve candidate skills by keyword matching.
 
-        Phase 1: simple substring matching on skill names and descriptions.
+        Phase 1: substring matching on skill names and descriptions.
+        Supports both English and Chinese: checks if any meaningful segment
+        of the user message appears in the skill's name or description.
         reply is always included (D-PLAN-02).
         """
         candidates = {"reply"}  # always included
@@ -62,18 +128,28 @@ class Planner:
         for skill in self._registry.list():
             if skill.name == "reply":
                 continue
-            # Match against name
+
+            # Match against skill name (English)
             if skill.name.lower() in lower_msg:
                 candidates.add(skill.name)
                 continue
-            # Match against description keywords
-            desc = skill.description.lower()
-            # Simple: if any Chinese/English word from message appears in description
-            msg_words = set(lower_msg.split())
-            desc_words = set(desc.split())
-            if msg_words & desc_words:
+
+            # Match against description (supports Chinese)
+            desc = skill.description.lower() + " " + " ".join(skill.params.keys())
+            # Check if any Chinese/English word from message appears in description
+            # For Chinese: use simple character-bigram overlap
+            msg_contains_desc_part = any(
+                len(seg) >= 2 and seg in desc
+                for seg in _segment_message(lower_msg)
+            )
+            if msg_contains_desc_part:
                 candidates.add(skill.name)
                 continue
+
+        # Post-processing: implicit skill associations
+        # If analyze_image is selected, also offer refine
+        if "analyze_image" in candidates:
+            candidates.add("refine")
 
         return list(candidates)
 
@@ -91,10 +167,11 @@ class Planner:
 
     # ── Stage 3: LLM DSL generation ─────────────────────────────────────
 
-    async def _generate_dsl(self, user_message: str, skills: list[str], history: str) -> str:
-        """Call LLM to produce a DSL execution plan.
+    async def _generate_dsl(self, user_message: str, skills: list[str], history: str) -> tuple[str, str]:
+        """Call LLM to produce a DSL execution plan and ACK message.
 
-        Returns raw JSON string from LLM.
+        Returns:
+            (raw_dsl_json_string, ack_message)
         """
         # Build skill descriptions for selected skills
         desc_lines = []
@@ -105,10 +182,8 @@ class Planner:
 
         skills_text = "\n\n".join(desc_lines) if desc_lines else "当前没有可用 skill。"
 
-        system_prompt = (
-            f"{ORCA_PERSONA_PROMPT}\n\n"
-            f"{SYSTEM_PROMPT_HEADER.format(skills=skills_text)}"
-        )
+        # Use string replacement to avoid .format() conflicts with JSON braces
+        system_prompt = SYSTEM_PROMPT_HEADER.replace('{skills}', skills_text)
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -138,28 +213,45 @@ class Planner:
                 resp = await client.post(DEEPSEEK_API_URL, json=payload, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()
-                content = data["choices"][0]["message"]["content"].strip()
-                return content
+                raw = data["choices"][0]["message"]["content"].strip()
+                logger.debug("Raw LLM output: %.300s", raw)
+                cleaned = _strip_markdown_json(raw) or raw
+                ack_msg = self._extract_ack(cleaned)
+                return cleaned, ack_msg
         except httpx.HTTPError as e:
             logger.warning("Planner API error: %s", e)
-            return json.dumps({
+            dsl = json.dumps({
                 "reasoning": "LLM 调用失败",
                 "steps": [{"skill": "reply", "args": {"message": "嗯，出问题了，稍等一下。"}}],
             })
+            return dsl, "出问题了，稍等一下。"
         except Exception as e:
             logger.warning("Planner failed: %s", e)
-            return json.dumps({
+            dsl = json.dumps({
                 "reasoning": "规划器异常",
                 "steps": [{"skill": "reply", "args": {"message": "嗯，出问题了，稍等一下。"}}],
             })
+            return dsl, "出问题了，稍等一下。"
+
+    @staticmethod
+    def _extract_ack(dsl_json: str) -> str:
+        """Extract ack message from DSL JSON, with fallback."""
+        try:
+            data = json.loads(dsl_json)
+            ack = data.get("ack", "")
+            if ack and isinstance(ack, str):
+                return ack
+        except (json.JSONDecodeError, KeyError):
+            pass
+        return "好的，正在处理。"
 
     # ── Full pipeline ───────────────────────────────────────────────────
 
-    async def plan(self, user_message: str, history: str) -> tuple[str, list[str]]:
+    async def plan(self, user_message: str, history: str) -> tuple[str, str, list[str]]:
         """Run the full three-stage planning pipeline.
 
         Returns:
-            (raw_dsl_json, candidate_skill_names)
+            (ack_message, raw_dsl_json, candidate_skill_names)
         """
         logger.info("Planning for: %.80s", user_message)
 
@@ -172,7 +264,8 @@ class Planner:
         logger.debug("Stage 2 — after filter: %s", filtered)
 
         # Stage 3: Generate
-        raw_dsl = await self._generate_dsl(user_message, filtered, history)
+        raw_dsl, ack_msg = await self._generate_dsl(user_message, filtered, history)
         logger.debug("Stage 3 — raw DSL: %.150s", raw_dsl)
+        logger.debug("Stage 3 — ACK: %s", ack_msg)
 
-        return raw_dsl, filtered
+        return ack_msg, raw_dsl, filtered

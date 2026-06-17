@@ -173,7 +173,7 @@ Planner 一次 LLM 调用时顺带生成 reply 的 message 内容，不额外调
 Phase 1 不并入 DSL 框架，继续用现有的 `HistoryManager` 维护最近 N 轮对话上下文。
 
 ### D-ORC-03: ACK 和 Narration 是 Orchestrator 层行为
-- **ack（必填）**：Orchestrator 收到消息后立即回复的即时确认，由 Planner 在出 DSL 时顺带生成
+- **ack（条件触发）**：仅当 plan 需要实际执行时发送。纯闲聊（一步 reply，固定内容）跳过 ack
 - **narration（可选）**：执行过程中告知用户进度的中间消息，Orchestrator 在 Runtime 执行期间触发
 - **两者都不是 skill**，不进入 DSL、不入 Skill Registry、不走 step 执行流程。Runtime 完全不知晓它们的存在
 - `reply`（DSL 最后一步）只负责发最终结果给用户

@@ -74,10 +74,36 @@ class Validator:
 
     # ── Layer 1: Format check ───────────────────────────────────────────
 
+    @staticmethod
+    def _extract_json(text: str) -> str | None:
+        """Try to extract JSON from text that may contain extra content."""
+        text = text.strip()
+        # Direct parse first
+        try:
+            json.loads(text)
+            return text
+        except json.JSONDecodeError:
+            pass
+        # Try to find JSON object in text {...}
+        brace_start = text.find("{")
+        brace_end = text.rfind("}")
+        if brace_start != -1 and brace_end > brace_start:
+            candidate = text[brace_start:brace_end + 1]
+            try:
+                json.loads(candidate)
+                return candidate
+            except json.JSONDecodeError:
+                pass
+        return None
+
     def check_format(self, raw: str) -> ValidationResult:
         """Validate JSON structure and required fields."""
+        extracted = self._extract_json(raw)
+        if extracted is None:
+            return ValidationResult.failed(1, f"JSON 格式错误: 无法从输出中提取合法 JSON")
+
         try:
-            data = json.loads(raw)
+            data = json.loads(extracted)
         except json.JSONDecodeError as e:
             return ValidationResult.failed(1, f"JSON 格式错误: {e}")
 

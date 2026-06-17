@@ -1,4 +1,4 @@
-# Project Orca
+# Project Orca — v2.1.0
 
 通过飞书聊天的本地 AI 桌面助手。发消息给 Orca，它帮你操作电脑。
 

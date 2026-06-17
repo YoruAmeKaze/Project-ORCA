@@ -6,6 +6,7 @@ Import this to get a fully populated registry for the Runtime.
 from src.skill.handlers import (
     action,
     analyze,
+    refine,
     reply,
     screenshot,
     search,
@@ -147,6 +148,22 @@ def create_registry() -> SkillRegistry:
             },
             progress_message=None,
             handler=action.handle_scroll,
+        ),
+
+        # ── refine ─────────────────────────────────────────────────────
+        SkillMetadata(
+            name="refine",
+            description="将上一步的原始输出润色成 Orca 人设的自然语言。用于把视觉分析等原始结果转成适合回复用户的文本。",
+            params={
+                "raw_output": {
+                    "type": "string",
+                    "required": True,
+                    "description": "需要润色的原始文本",
+                },
+            },
+            output="string（润色后的文本）",
+            progress_message=None,
+            handler=refine.handle,
         ),
 
         # ── search_web ─────────────────────────────────────────────────

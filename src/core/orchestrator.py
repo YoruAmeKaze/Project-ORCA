@@ -5,6 +5,7 @@ Phase 2 migration: controlled by USE_NEW_ARCH config flag.
 - USE_NEW_ARCH=false: 旧架构 (ReAct loop)
 """
 
+import asyncio
 import json
 import logging
 
@@ -25,6 +26,11 @@ class Orchestrator:
         self._validator = None
         self._registry = None
         self._engine = None
+
+        # ── Serial lock (D-ORC-04) ──────────────────────────────────────
+        self._lock = asyncio.Lock()
+        self._pending: list[tuple[str, str]] = []  # (sender_id, content)
+        self._busy = False
 
     # ── Lazy initializers (new arch) ─────────────────────────────────────
 
@@ -53,23 +59,58 @@ class Orchestrator:
         logger.info("Processing message from %s: %.80s", sender_id, content)
         self.history.add_turn(sender_id, "user", content)
 
-        if USE_NEW_ARCH:
-            return await self._process_new(sender_id, content)
-        else:
-            return await self._process_old(sender_id, content)
+        if self._busy:
+            logger.info("Orchestrator busy, queuing message from %s", sender_id)
+            self._pending.append((sender_id, content))
+            return "queued"
+
+        await self._process_with_lock(sender_id, content)
+        return "ok"
+
+    async def _process_with_lock(self, sender_id: str, content: str) -> None:
+        """Process a message, holding the serial lock.
+        
+        After finishing, processes the next queued message if any.
+        """
+        self._busy = True
+        try:
+            async with self._lock:
+                if USE_NEW_ARCH:
+                    await self._process_new(sender_id, content)
+                else:
+                    await self._process_old(sender_id, content)
+        finally:
+            self._busy = False
+
+        # Process next queued message
+        if self._pending:
+            next_sender, next_content = self._pending.pop(0)
+            asyncio.create_task(self._process_with_lock(next_sender, next_content))
+
+    @staticmethod
+    def _is_simple_chat(raw_dsl: str) -> bool:
+        """Check if the DSL is just a single reply step (pure chat, no ACK needed)."""
+        try:
+            data = json.loads(raw_dsl)
+            steps = data.get("steps", [])
+            return len(steps) == 1 and steps[0].get("skill") == "reply"
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return False
 
     # ── New architecture (Plan-then-Execute) ─────────────────────────────
 
     async def _process_new(self, sender_id: str, content: str) -> str:
         self._init_new_arch()
 
-        # Step 0: ACK — immediate confirmation
-        ack_msg = f"收到，正在处理。"
-        await self.feishu.send_text(sender_id, ack_msg)
-
-        # Step 1: Planner
+        # Step 1: Planner (generates both ACK and DSL)
         ctx = self.history.get_or_create(sender_id).recent_context(4)
-        raw_dsl, candidates = await self._planner.plan(content, ctx)
+        ack_msg, raw_dsl, candidates = await self._planner.plan(content, ctx)
+
+        # Step 0: ACK — only for non-trivial plans (multi-step or action)
+        ack_sent = False
+        if not self._is_simple_chat(raw_dsl):
+            await self.feishu.send_text(sender_id, ack_msg)
+            ack_sent = True
 
         # Step 2: Validator (with retry)
         result = await self._validator.validate(raw_dsl, content)
@@ -78,7 +119,11 @@ class Orchestrator:
             if result.layer == 1:
                 logger.info("Format validation failed, retrying once: %s", result.message)
                 await self.feishu.send_text(sender_id, f"格式有误，重新规划…")
-                raw_dsl, candidates = await self._planner.plan(content, ctx)
+                ack_msg, raw_dsl, candidates = await self._planner.plan(content, ctx)
+                # Re-check ACK for retried plan (only if not sent already)
+                if not ack_sent and not self._is_simple_chat(raw_dsl):
+                    await self.feishu.send_text(sender_id, ack_msg)
+                    ack_sent = True
                 result = await self._validator.validate(raw_dsl, content)
 
             if not result.ok:
@@ -92,6 +137,7 @@ class Orchestrator:
         logger.info("Plan validated: %d steps", len(plan.steps))
 
         # Step 3: Runtime
+        self._deps.session_id = sender_id
         exec_result = await self._engine.execute(plan, sender_id)
 
         # Step 4: Record history
