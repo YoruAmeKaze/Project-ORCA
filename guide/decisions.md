@@ -269,3 +269,27 @@ class RuntimeContext:
     plan: Plan                    # 当前执行的 DSL
     # 无外部依赖
 ```
+
+---
+
+## 版本号管理
+
+### D-VER-01: 语义化版本 vMAJOR.MINOR.PATCH
+
+| 级别 | 触发条件 | 示例 |
+|------|---------|------|
+| MAJOR | 架构级变更、DSL schema 不兼容 | ReAct → PTE 重构 |
+| MINOR | 新增功能 | 新 skill、active_task、接入瑞幸 MCP |
+| PATCH | bug 修复、小幅调整 | 修 Validator 逻辑漏洞、调 prompt 措辞 |
+
+### D-VER-02: 版本号与 commit 对齐
+每次完成一个功能点或修复后准备 commit 时：
+1. 判断本次改动级别
+2. 更新 `src/main.py` 中 `version`
+3. 写 `dev-log.md` 对应条目
+4. commit message 带版本号前缀（如 `v2.2.0: xxx`）
+
+禁止攒多个改动一次性升版本。
+
+### D-VER-03: 混合改动处理
+如果一次 commit 同时包含 bug 修复和新功能，按新功能升 MINOR，但 dev-log 条目里分别说明两类改动，不笼统带过。
