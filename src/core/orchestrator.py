@@ -114,6 +114,12 @@ class Orchestrator:
             ctx_parts.append(f"门店 dept_id={ctx['selected_dept_id']}")
         if ctx.get("store_list"):
             ctx_parts.append(f"附近有 {len(ctx['store_list'])} 家门店可选")
+        if ctx.get("menu_items"):
+            menu_summary = "\n".join(
+                f"  {i+1}. {s.get('productName','?')} [ID:{s.get('productId','?')}]"
+                for i, s in enumerate(ctx["menu_items"])
+            )
+            lines.append(f"当前菜单列表：\n{menu_summary}")
         if ctx_parts:
             lines.append("已知信息：" + "，".join(ctx_parts))
         return "\n".join(lines)
@@ -128,7 +134,7 @@ class Orchestrator:
         if not active_task or not session_state:
             return (active_task or {}).get("context", {})
         ctx = dict(active_task.get("context", {}))
-        for k in ("selected_dept_id", "selected_dept_name", "store_list"):
+        for k in ("selected_dept_id", "selected_dept_name", "store_list", "menu_items"):
             if k in session_state:
                 ctx[k] = session_state[k]
         return ctx

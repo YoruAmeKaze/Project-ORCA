@@ -223,6 +223,19 @@ async def handle_search_menu(args: dict, deps) -> str:
     if not products:
         return "该门店暂无可用商品"
 
+    # Save structured menu items to session_state for LLM reference
+    menu_items = [
+        {
+            "productId": p.get("productId", p.get("id", "")),
+            "productName": p.get("productName", p.get("name", "未知")),
+            "skuCode": p.get("skuCode", ""),
+            "price": p.get("salePrice", p.get("price", "")),
+        }
+        for p in products[:10]
+    ]
+    deps.session_state["menu_items"] = menu_items
+    logger.info("session_state: saved %d menu_items", len(menu_items))
+
     title = f"菜单（{query}）：" if query else "菜单："
     lines = [title]
     shown = 0
