@@ -283,6 +283,60 @@ def create_registry() -> SkillRegistry:
             handler=luckin.handle_get_product_detail,
         ),
 
+        # ── luckin_switch_product ──────────────────────────────────────
+        SkillMetadata(
+            name="luckin_switch_product",
+            keywords=["切换", "规格", "冰", "热", "糖度", "杯型", "大杯", "中杯", "少糖", "少甜", "标准"],
+            description=(
+                "切换瑞幸咖啡商品的规格选项（冰/热、杯型、糖度等）。"
+                "用户在 get_product_detail 看到可用规格后，选择具体选项时调用此 skill，"
+                "返回切换后的 variant SKU。后续预览和下单必须使用此 SKU。"
+            ),
+            params={
+                "dept_id": {"type": "int", "required": True, "description": "门店ID"},
+                "product_id": {"type": "int", "required": True, "description": "商品ID"},
+                "sku_code": {"type": "string", "required": True, "description": "当前商品 SKU（来自 search_menu 结果）"},
+                "attribute_id": {"type": "int", "required": True, "description": "属性组ID（如 17=温度, 18=糖度, 64=杯型），从 get_product_detail 的 attributeId 字段获取"},
+                "sub_attribute_id": {"type": "int", "required": True, "description": "属性值ID（如 57=冰, 59=少少甜），从 get_product_detail 的 productSubAttrs[].attributeId 获取"},
+                "amount": {"type": "int", "required": False, "description": "数量，默认1"},
+            },
+            output="string（切换后的商品信息 + variant SKU）",
+            progress_message="正在切换规格…",
+            handler=luckin.handle_switch_product,
+        ),
+
+        # ── luckin_query_order ─────────────────────────────────────────
+        SkillMetadata(
+            name="luckin_query_order",
+            keywords=["订单", "查询", "状态", "取餐码", "查看"],
+            description=(
+                "查询瑞幸咖啡订单详情，包括订单状态、取餐码、金额等。"
+                "下单后调用，可查看订单是否已支付、制作进度。"
+            ),
+            params={
+                "order_id": {"type": "string", "required": True, "description": "订单ID（字符串）"},
+            },
+            output="string（订单详情）",
+            progress_message="正在查询订单…",
+            handler=luckin.handle_query_order,
+        ),
+
+        # ── luckin_cancel_order ────────────────────────────────────────
+        SkillMetadata(
+            name="luckin_cancel_order",
+            keywords=["取消", "退", "撤销"],
+            description=(
+                "取消瑞幸咖啡订单。仅可取消待付款或制作中的订单。"
+                "需要订单ID，从 createOrder 或 queryOrder 结果中获取。"
+            ),
+            params={
+                "order_id": {"type": "string", "required": True, "description": "订单ID（字符串）"},
+            },
+            output="string（取消结果）",
+            progress_message="正在取消订单…",
+            handler=luckin.handle_cancel_order,
+        ),
+
         # ── search_web ─────────────────────────────────────────────────
         SkillMetadata(
             name="search_web",

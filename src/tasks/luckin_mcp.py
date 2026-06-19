@@ -118,6 +118,39 @@ class LuckinMCPClient:
         content = self._extract_content(result)
         return self._parse_json(content)
 
+    async def switch_product(self, dept_id: int, product_id: int, sku_code: str,
+                             attribute_id: int, sub_attribute_id: int,
+                             amount: int = 1) -> dict:
+        """切换商品规格选项，返回切换后的 SKU 编码和属性列表."""
+        result = await self._call("switchProduct", {
+            "deptId": dept_id,
+            "productId": product_id,
+            "skuCode": sku_code,
+            "attrOperationParam": {
+                "attributeId": attribute_id,
+                "subAttr": {"attributeId": sub_attribute_id, "operation": 3},
+            },
+            "amount": amount,
+        })
+        content = self._extract_content(result)
+        return self._parse_json(content)
+
+    async def query_order_detail(self, order_id: str) -> dict:
+        """查询订单详情."""
+        result = await self._call("queryOrderDetailInfo", {
+            "orderId": order_id,
+        })
+        content = self._extract_content(result)
+        return self._parse_json(content)
+
+    async def cancel_order(self, order_id: str) -> dict:
+        """取消订单."""
+        result = await self._call("cancelOrder", {
+            "orderId": order_id,
+        })
+        content = self._extract_content(result)
+        return self._parse_json(content)
+
     # ── Response parsing helpers ─────────────────────────────────────────
 
     @staticmethod

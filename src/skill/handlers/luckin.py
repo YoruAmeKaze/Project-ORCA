@@ -424,6 +424,87 @@ async def handle_create_order(args: dict, deps) -> str:
     return msg
 
 
+async def handle_switch_product(args: dict, deps) -> str:
+    """切换瑞幸咖啡商品规格选项，获取 variant SKU.
+
+    Args:
+        dept_id: 门店ID
+        product_id: 商品ID
+        sku_code: 当前产品级 SKU
+        attribute_id: 属性组ID（如 17=温度, 18=糖度, 64=杯型），从 get_product_detail 结果中获取
+        sub_attribute_id: 属性值ID（如 57=冰, 59=少少甜），从 get_product_detail 结果中获取
+        amount: 数量，默认1
+    """
+    client = deps.luckin_mcp
+    result = await client.switch_product(
+        dept_id=int(args["dept_id"]),
+        product_id=int(args["product_id"]),
+        sku_code=args["sku_code"],
+        attribute_id=int(args["attribute_id"]),
+        sub_attribute_id=int(args["sub_attribute_id"]),
+        amount=int(args.get("amount", 1)),
+    )
+    data = result.get("data") or result
+    name = data.get("productName") or data.get("name") or "未知"
+    sku = data.get("skuCode") or ""
+    lines = [f"🔄 {name}"]
+    if sku:
+        lines.append(f"  SKU：{sku}")
+    # Show updated attributes with selection marks
+    attrs = data.get("productAttrs") or []
+    for attr in attrs[:6]:
+        attr_name = attr.get("attributeName") or "?"
+        subs = attr.get("productSubAttrs") or []
+        opts = [s.get("attributeName", "?") + (" ✓" if s.get("selected") else "") for s in subs[:8]]
+        lines.append(f"  {attr_name}：{'、'.join(opts)}")
+    return "\n".join(lines)
+
+
+async def handle_query_order(args: dict, deps) -> str:
+    """查询瑞幸咖啡订单详情.
+
+    Args:
+        order_id: 订单ID（字符串）
+    """
+    client = deps.luckin_mcp
+    result = await client.query_order_detail(args["order_id"])
+    data = result.get("data") or result
+    status = data.get("orderStatusName", "未知")
+    order_id = data.get("orderId", "")
+    pay_amount = data.get("orderPayAmount", "")
+    take_code = ""
+    code_info = data.get("takeMealCodeInfo") or {}
+    if code_info.get("code"):
+        take_code = code_info["code"]
+    lines = [f"📋 订单 {order_id}"]
+    lines.append(f"  状态：{status}")
+    if pay_amount:
+        lines.append(f"  金额：¥{pay_amount}")
+    if take_code:
+        lines.append(f"  取餐码：{take_code}")
+    # Product info
+    products = data.get("productInfoList") or data.get("orderCommodityList") or []
+    for p in products[:5]:
+        pname = p.get("name") or p.get("commodityName") or "?"
+        qty = p.get("amount", 1)
+        lines.append(f"  · {pname} ×{qty}")
+    return "\n".join(lines)
+
+
+async def handle_cancel_order(args: dict, deps) -> str:
+    """取消瑞幸咖啡订单.
+
+    Args:
+        order_id: 订单ID（字符串）
+    """
+    client = deps.luckin_mcp
+    result = await client.cancel_order(args["order_id"])
+    data = result.get("data") or result
+    if data is True:
+        return "✅ 订单已取消"
+    return f"取消失败: {result.get('msg', '未知错误')}"
+
+
 async def handle_get_product_detail(args: dict, deps) -> str:
     """查询瑞幸咖啡商品详情（含规格选项）.
 
