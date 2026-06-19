@@ -162,12 +162,15 @@ class Orchestrator:
         # Step 2: Validator (with retry)
         result = await self._validator.validate(raw_dsl, content)
         if not result.ok:
-            # Layer 1 failure → one retry
+            # Layer 1 failure → one retry with error feedback
             if result.layer == 1:
                 logger.info("Format validation failed, retrying once: %s", result.message)
                 await self.feishu.send_text(sender_id, f"格式有误，重新规划…")
+                # Feed the validation error back to LLM so it can correct
+                retry_ctx = dict(planner_ctx)
+                retry_ctx["_last_error"] = f"上一次的输出不是合法 JSON：{result.message}。请只输出 JSON，不要包含任何其他文字。"
                 ack_msg, raw_dsl, candidates = await self._planner.plan(
-                    content, ctx, planner_ctx
+                    content, ctx, retry_ctx
                 )
                 # Re-check ACK for retried plan (only if not sent already)
                 if not ack_sent and not self._is_simple_chat(raw_dsl):
