@@ -431,6 +431,7 @@ async def handle_get_product_detail(args: dict, deps) -> str:
     product_id = int(args["product_id"])
 
     result = await client.get_product_detail(dept_id, product_id)
+    logger.warning("get_product_detail RAW: %s", json.dumps(result, ensure_ascii=False)[:1000])
     logger.debug("get_product_detail raw: %s", json.dumps(result, ensure_ascii=False)[:500])
 
     if not result:
