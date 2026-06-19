@@ -206,14 +206,20 @@ class Planner:
         if "analyze_image" in candidates:
             candidates.add("refine")
 
-        # Session with store_list + user confirms store → add search_menu
+        # User confirms "第N个" — pick store or pick product depending on stage
         if session_state and session_state.get("store_list"):
-            store_confirm_keywords = ["第", "一", "二", "三", "四", "五",
-                                      "这家", "那家", "就它", "就这个",
-                                      "对", "好", "可以", "行", "嗯"]
-            if any(kw in user_message for kw in store_confirm_keywords):
-                candidates.add("luckin_search_menu")
-                logger.debug("Session has store_list + confirm keywords: added luckin_search_menu")
+            confirm_keywords = ["第", "一", "二", "三", "四", "五",
+                                "这家", "那家", "就它", "就这个",
+                                "对", "好", "可以", "行", "嗯"]
+            if any(kw in user_message for kw in confirm_keywords):
+                # Store already selected → user is picking a PRODUCT from menu
+                if session_state.get("selected_dept_id"):
+                    candidates.add("luckin_get_product_detail")
+                    logger.debug("Store selected + confirm: added luckin_get_product_detail")
+                else:
+                    # No store yet → user is picking a STORE
+                    candidates.add("luckin_search_menu")
+                    logger.debug("Store not yet selected + confirm: added luckin_search_menu")
 
         return list(candidates)
 

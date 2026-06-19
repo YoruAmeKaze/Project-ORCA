@@ -1,5 +1,6 @@
 """Skills: Luckin Coffee ordering via MCP."""
 
+import json
 import logging
 
 import httpx
