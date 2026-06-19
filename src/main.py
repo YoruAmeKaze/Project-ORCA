@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
 
 
 # --- App ---
-app = FastAPI(title="Project Orca", version="2.1.1", description="Phase 2 — Plan-then-Execute Architecture", lifespan=lifespan)
+app = FastAPI(title="Project Orca", version="2.2.0", description="Phase 2 — Plan-then-Execute Architecture", lifespan=lifespan)
 
 app.include_router(feishu_router)
 
