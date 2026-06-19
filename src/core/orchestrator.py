@@ -170,10 +170,11 @@ class Orchestrator:
         # Step 2: Validator (with retry)
         result = await self._validator.validate(raw_dsl, content)
         if not result.ok:
-            # Layer 1 failure → one retry with error feedback
-            if result.layer == 1:
-                logger.info("Format validation failed, retrying once: %s", result.message)
-                await self.feishu.send_text(sender_id, f"格式有误，重新规划…")
+            # Layer 1 or 3 failure → one retry with error feedback
+            if result.layer in (1, 3):
+                logger.info("Validation (layer %d) failed, retrying once: %s", result.layer, result.message)
+                hint = "格式有误" if result.layer == 1 else "参数有误"
+                await self.feishu.send_text(sender_id, f"{hint}，重新规划…")
                 # Feed the validation error back to LLM so it can correct
                 retry_ctx = dict(planner_ctx)
                 retry_ctx["_last_error"] = f"上一次的输出不是合法 JSON：{result.message}。请只输出 JSON，不要包含任何其他文字。"
