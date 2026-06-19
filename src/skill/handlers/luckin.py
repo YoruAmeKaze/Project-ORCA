@@ -355,10 +355,12 @@ async def handle_create_order(args: dict, deps) -> str:
     # Debug: log full response for troubleshooting
     logger.debug("create_order raw response: %s", json.dumps(result, ensure_ascii=False)[:500])
 
-    # Check for top-level error
+    # Check for top-level error or API failure
     err = result.get("error") or result.get("errMsg") or result.get("message")
     if err:
         return f"下单失败: {err}"
+    if result.get("success") is False:
+        return f"下单失败: {result.get('msg', '未知错误')}"
 
     # Try to extract order identifiers from various possible response structures
     # Common patterns: flat keys, nested "data" object, or result wrapper
