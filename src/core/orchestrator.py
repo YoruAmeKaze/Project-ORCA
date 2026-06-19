@@ -146,6 +146,8 @@ class Orchestrator:
             active_task_str = self._format_active_task(conv.active_task)
             if active_task_str:
                 planner_ctx["_active_task"] = active_task_str
+            planner_ctx["_task_type"] = conv.active_task.get("task_type")
+            planner_ctx["_stage"] = conv.active_task.get("stage")
 
         # Step 1: Planner (generates both ACK and DSL)
         ctx = conv.recent_context(4)
