@@ -351,8 +351,11 @@ async def handle_create_order(args: dict, deps) -> str:
         "skuCode": args["sku_code"],
         "amount": int(args.get("amount", 1)),
     }]
-    lat = float(args.get("latitude", 39.9042))
-    lng = float(args.get("longitude", 116.4074))
+    # Use .env coordinates as default (matches find_store/search_menu)
+    default_lat = LUCKIN_LAT or 39.9042
+    default_lng = LUCKIN_LNG or 116.4074
+    lat = float(args.get("latitude", default_lat))
+    lng = float(args.get("longitude", default_lng))
 
     result = await client.create_order(dept_id, items, lat, lng)
 
