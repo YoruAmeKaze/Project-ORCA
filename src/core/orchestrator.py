@@ -1,15 +1,13 @@
 """Orchestrator — routes messages through the Planner → Validator → Runtime pipeline.
 
-Phase 2 migration: controlled by USE_NEW_ARCH config flag.
-- USE_NEW_ARCH=true: 新架构 (DSL + Skill Registry + Runtime)
-- USE_NEW_ARCH=false: 旧架构 (ReAct loop)
+New architecture (Plan-then-Execute):
+  Planner(LLM) → DSL → Validator → Runtime → Skill 执行 → 回复
 """
 
 import asyncio
 import json
 import logging
 
-from src.config import USE_NEW_ARCH
 from src.core.history import HistoryManager
 from src.feishu.client import FeishuClient
 
@@ -50,7 +48,10 @@ class Orchestrator:
             skill_names=self._registry.names,
             skill_schemas=self._registry.schemas,
         )
-        self._deps = SkillDeps(feishu=self.feishu)
+        from src.tasks.luckin_mcp import LuckinMCPClient
+
+        self._luckin_mcp = LuckinMCPClient()
+        self._deps = SkillDeps(feishu=self.feishu, luckin_mcp=self._luckin_mcp)
         self._engine = Engine(self._registry, self._deps)
 
     # ── Message processing ──────────────────────────────────────────────
@@ -75,10 +76,7 @@ class Orchestrator:
         self._busy = True
         try:
             async with self._lock:
-                if USE_NEW_ARCH:
-                    await self._process_new(sender_id, content)
-                else:
-                    await self._process_old(sender_id, content)
+                await self._process_new(sender_id, content)
         finally:
             self._busy = False
 
@@ -97,14 +95,63 @@ class Orchestrator:
         except (json.JSONDecodeError, KeyError, TypeError):
             return False
 
+    # ── Active task: helpers ───────────────────────────────────────────
+
+    @staticmethod
+    def _format_active_task(active_task: dict | None) -> str:
+        """Format active_task as a human-readable context block for Planner injection."""
+        if not active_task:
+            return ""
+        lines = []
+        task_type = active_task.get("task_type", "unknown")
+        stage = active_task.get("stage", "in_progress")
+        lines.append(f"当前有未完成任务：{task_type}，进度：{stage}")
+        ctx = active_task.get("context", {})
+        ctx_parts = []
+        if ctx.get("selected_dept_name") and ctx.get("selected_dept_id"):
+            ctx_parts.append(f"门店={ctx['selected_dept_name']}(dept_id:{ctx['selected_dept_id']})")
+        elif ctx.get("selected_dept_id"):
+            ctx_parts.append(f"门店 dept_id={ctx['selected_dept_id']}")
+        if ctx.get("store_list"):
+            ctx_parts.append(f"附近有 {len(ctx['store_list'])} 家门店可选")
+        if ctx_parts:
+            lines.append("已知信息：" + "，".join(ctx_parts))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _sync_task_context(active_task: dict | None, session_state: dict) -> dict:
+        """Sync relevant keys from session_state into active_task.context.
+
+        Handler-written session_state (selected_dept_id, store_list, etc.)
+        is pulled into the task context so the Planner sees it next turn.
+        """
+        if not active_task or not session_state:
+            return (active_task or {}).get("context", {})
+        ctx = dict(active_task.get("context", {}))
+        for k in ("selected_dept_id", "selected_dept_name", "store_list"):
+            if k in session_state:
+                ctx[k] = session_state[k]
+        return ctx
+
     # ── New architecture (Plan-then-Execute) ─────────────────────────────
 
     async def _process_new(self, sender_id: str, content: str) -> str:
         self._init_new_arch()
 
+        conv = self.history.get_or_create(sender_id)
+
+        # ── Build planner context: session_state + active_task ──────────
+        planner_ctx = dict(self._deps.session_state or {})
+        if conv.active_task:
+            active_task_str = self._format_active_task(conv.active_task)
+            if active_task_str:
+                planner_ctx["_active_task"] = active_task_str
+
         # Step 1: Planner (generates both ACK and DSL)
-        ctx = self.history.get_or_create(sender_id).recent_context(4)
-        ack_msg, raw_dsl, candidates = await self._planner.plan(content, ctx)
+        ctx = conv.recent_context(4)
+        ack_msg, raw_dsl, candidates = await self._planner.plan(
+            content, ctx, planner_ctx
+        )
 
         # Step 0: ACK — only for non-trivial plans (multi-step or action)
         ack_sent = False
@@ -119,7 +166,9 @@ class Orchestrator:
             if result.layer == 1:
                 logger.info("Format validation failed, retrying once: %s", result.message)
                 await self.feishu.send_text(sender_id, f"格式有误，重新规划…")
-                ack_msg, raw_dsl, candidates = await self._planner.plan(content, ctx)
+                ack_msg, raw_dsl, candidates = await self._planner.plan(
+                    content, ctx, planner_ctx
+                )
                 # Re-check ACK for retried plan (only if not sent already)
                 if not ack_sent and not self._is_simple_chat(raw_dsl):
                     await self.feishu.send_text(sender_id, ack_msg)
@@ -140,7 +189,22 @@ class Orchestrator:
         self._deps.session_id = sender_id
         exec_result = await self._engine.execute(plan, sender_id)
 
-        # Step 4: Record history
+        # Step 4: Update active_task from plan metadata
+        if plan.task_type:
+            task_context = self._sync_task_context(conv.active_task, self._deps.session_state)
+            conv.active_task = {
+                "task_type": plan.task_type,
+                "stage": plan.stage or "in_progress",
+                "context": task_context,
+            }
+            logger.info("active_task: %s / %s (ctx: %s)",
+                        plan.task_type, conv.active_task["stage"], list(task_context.keys()))
+        else:
+            if conv.active_task:
+                logger.info("active_task cleared — no task_type in DSL")
+            conv.active_task = None
+
+        # Step 5: Record history
         if exec_result.results:
             last = exec_result.results[-1]
             self.history.add_turn(
@@ -155,117 +219,13 @@ class Orchestrator:
             logger.info("Final reply: %.80s", exec_result.final_message)
         return exec_result.final_message
 
-    # ── Old architecture (ReAct loop) ────────────────────────────────────
+    # ── Lifecycle ─────────────────────────────────────────────────────────
 
-    async def _process_old(self, sender_id: str, content: str) -> str:
-        """Original ReAct-based message processing."""
-        from src.action.executor import execute
-        from src.core.agent import run as agent_run
-        from src.core.search import search as web_search
-        from src.tasks.luckin import LuckinClient, LuckinError
-        from src.vision.interpreter import analyze_screenshot
-        from src.vision.screenshot import capture_screenshot
-
-        # Callback: send a message to the user during processing
-        async def _on_send(text: str):
-            await self.feishu.send_text(sender_id, text)
-
-        # Callback: take screenshot and analyze with Qwen
-        async def _on_screenshot(task: str) -> str:
+    async def close(self):
+        """Release resources: close HTTP clients, etc."""
+        if hasattr(self, "_luckin_mcp") and self._luckin_mcp is not None:
             try:
-                image_bytes, _path = capture_screenshot()
-            except RuntimeError as e:
-                return f"截图失败: {e}"
-            return await analyze_screenshot(image_bytes, task)
-
-        # Callback: execute desktop action
-        async def _on_action(action: str, params: dict) -> str:
-            return await execute(action, params)
-
-        # Callback: search web
-        async def _on_search(query: str) -> str:
-            return await web_search(query) or "没有找到相关信息"
-
-        # Callback: luckin lookup (store / menu)
-        luckin = LuckinClient()
-
-        async def _on_luckin_lookup(query: str) -> str:
-            try:
-                if not await luckin.check_login():
-                    return "请先登录瑞幸 CLI：在终端执行「luckin login」完成手机验证"
-                lat, lng = 39.9042, 116.4074
-                stores = await luckin.find_store(lat, lng, query)
-                if stores:
-                    lines = [f"找到 {len(stores)} 家门店："]
-                    for s in stores[:5]:
-                        lines.append(f"  · {s.name} (ID: {s.dept_id})")
-                    return "\n".join(lines)
-                stores = await luckin.find_store(lat, lng)
-                if stores:
-                    dept_id = stores[0].dept_id
-                    products = await luckin.get_menu(dept_id, query)
-                    if products:
-                        lines = [f"在 {stores[0].name} 找到相关商品："]
-                        for p in products[:10]:
-                            sku = f" [{p.sku_code}]" if p.sku_code else ""
-                            price = f" ¥{p.price}" if p.price else ""
-                            lines.append(f"  · {p.name}{price}{sku}")
-                        return "\n".join(lines)
-                return f"未找到与「{query}」相关的门店或商品"
-            except LuckinError as e:
-                return f"瑞幸查询失败: {e}"
-
-        async def _on_luckin_order(params_json: str) -> str:
-            try:
-                params = json.loads(params_json)
-            except json.JSONDecodeError:
-                return "下单参数格式错误，需要 JSON 字符串"
-            try:
-                dept_id = params["dept_id"]
-                items_data = params["items"]
-                lat = params.get("lat", 39.9042)
-                lng = params.get("lng", 116.4074)
-                coupon = params.get("coupon")
-
-                from src.tasks.luckin import OrderItem
-                items = [OrderItem(
-                    product_id=i["product_id"],
-                    sku_code=i["sku_code"],
-                    amount=i.get("amount", 1),
-                ) for i in items_data]
-
-                preview = await luckin.preview_order(dept_id, items)
-                await self.feishu.send_text(sender_id, f"订单预览已生成，正在下单...")
-                result = await luckin.create_order(
-                    dept_id=dept_id, lat=lat, lng=lng, items=items, coupon=coupon,
-                )
-                if result.success:
-                    msg = f"下单成功！"
-                    if result.order_id:
-                        msg += f" 订单号: {result.order_id}"
-                    if result.pick_code:
-                        msg += f" 取餐码: {result.pick_code}"
-                    return msg
-                return f"下单失败: {result.message}"
-            except LuckinError as e:
-                return f"瑞幸下单失败: {e}"
-            except KeyError as e:
-                return f"下单参数缺少必要字段: {e}"
-
-        ctx = self.history.get_or_create(sender_id).recent_context(4)
-        reply = await agent_run(
-            content, ctx,
-            on_send=_on_send,
-            on_screenshot=_on_screenshot,
-            on_action=_on_action,
-            on_search=_on_search,
-            on_luckin_lookup=_on_luckin_lookup,
-            on_luckin_order=_on_luckin_order,
-        )
-
-        if reply:
-            await self.feishu.send_text(sender_id, reply)
-
-        self.history.add_turn(sender_id, "assistant", reply, action="agent")
-        logger.info("Final reply: %.80s", reply)
-        return reply
+                await self._luckin_mcp.close()
+                logger.info("LuckinMCPClient closed")
+            except Exception as e:
+                logger.warning("Failed to close LuckinMCPClient: %s", e)

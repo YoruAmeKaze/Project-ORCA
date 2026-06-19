@@ -134,20 +134,29 @@ class Validator:
     # ── Layer 2: Reference check ────────────────────────────────────────
 
     def check_references(self, plan: Plan) -> ValidationResult:
-        """Validate all {{step.<id>.output}} references."""
-        step_ids = plan.step_ids()
-        # Build map of step index → id for ordering check
+        """Validate all {{step.<id>.output}} references.
+
+        Accepts both explicit step ids AND skill names as reference targets.
+        A step without an explicit id will use its skill name as its implicit id.
+        """
+        # Build set of valid reference targets: explicit ids + skill names for steps without ids
+        valid_refs: set[str] = set()
         step_id_by_index: dict[int, str | None] = {}
         for i, s in enumerate(plan.steps):
             step_id_by_index[i] = s.id
+            if s.id:
+                valid_refs.add(s.id)
+            else:
+                # Skill name serves as implicit step id (matches Engine behavior)
+                valid_refs.add(s.skill)
 
         for i, step in enumerate(plan.steps):
             for key, value in step.args.items():
                 if not isinstance(value, str):
                     continue
                 for ref_id in REF_PATTERN.findall(value):
-                    # Check existence
-                    if ref_id not in step_ids:
+                    # Check existence (supports both explicit ids and skill names)
+                    if ref_id not in valid_refs:
                         msg = f"steps[{i}].args.{key} 引用了不存在的 step id: {ref_id}"
                         return ValidationResult.failed(2, msg)
                     # Check ordering: referenced step must come before current
@@ -159,9 +168,10 @@ class Validator:
         return ValidationResult.passed(plan)
 
     @staticmethod
-    def _find_step_index(steps: list[SkillCall], step_id: str) -> int | None:
+    def _find_step_index(steps: list[SkillCall], ref_id: str) -> int | None:
+        """Find the index of a step by its explicit id or skill name."""
         for i, s in enumerate(steps):
-            if s.id == step_id:
+            if s.id == ref_id or (s.id is None and s.skill == ref_id):
                 return i
         return None
 
@@ -187,10 +197,19 @@ class Validator:
                 if param_name in step.args:
                     value = step.args[param_name]
                     expected_type = param_rules.get("type", "string")
-                    if expected_type == "int" and not isinstance(value, int):
-                        # Allow float that looks like int
-                        if not (isinstance(value, float) and value == int(value)):
-                            msg = f"steps[{i}].{step.skill}: 参数 '{param_name}' 应为 {expected_type}"
+
+                    # Skip type check for {{...}} references (resolved at runtime)
+                    if isinstance(value, str) and "{{" in value:
+                        continue
+
+                    if expected_type == "int":
+                        # Accept int, float-like-int, and numeric strings
+                        if isinstance(value, str) and value.strip().isdigit():
+                            step.args[param_name] = int(value)
+                        elif isinstance(value, float) and value == int(value):
+                            step.args[param_name] = int(value)
+                        elif not isinstance(value, int):
+                            msg = f"steps[{i}].{step.skill}: 参数 '{param_name}' 应为数字"
                             return ValidationResult.failed(3, msg)
 
                     # Enum check

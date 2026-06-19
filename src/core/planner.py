@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 # ── System prompt template ──────────────────────────────────────────────────
 
-SYSTEM_PROMPT_HEADER = """你是 Orca 的规划器。根据用户的意图，从可用 skill 中选择合适的 skill 编排执行计划。
+SYSTEM_PROMPT_HEADER = """你是 Orca 的规划器，负责把用户需求转成执行计划。
+
+reply 的 message 内容按 Orca 的语气写：简短、技术宅室友感、话不多但不冷漠。不说客套话，不反问撑场子。
 
 重要：只输出 JSON，不要包含任何其他文字、解释、markdown 代码块标记。
 
@@ -44,19 +46,37 @@ SYSTEM_PROMPT_HEADER = """你是 Orca 的规划器。根据用户的意图，从
 规则：
 1. 只使用下面列出的 skill，不要 invent 不存在的 skill
 2. 输出严格的 JSON，不要包含 markdown 代码块标记
-3. 如果需要用户确认或信息不足，直接用 reply skill 告知用户
-4. plan 的最后一步必须是 reply
-5. 如果某步的结果需要被后面的步骤引用，给该步加一个 id。被引用的 step 必须有 id
-6. 引用格式严格为 {{{{step.<实际的id>.output}}}}，不能用 skill 名称代替 id
-7. 如果用户只是闲聊或问候，直接生成一步 reply 即可
-8. 不需要用户输入即可完成的步骤，不要询问用户，直接执行
-9. args 是一个对象，参数直接放在 args 里面，不要放在 step 的顶层
+3. plan 的最后一步必须是 reply
+4. 如果某步的结果需要被后面的步骤引用，可以用 skill 名称作为隐式 id：{{{{step.<skill名>.output}}}}。如果该步有显式 id（如 {{id: "store"}}），则用显式 id：{{{{step.store.output}}}}
+5. 如果用户只是闲聊或问候，直接生成一步 reply 即可
+6. args 是一个对象，参数直接放在 args 里面，不要放在 step 的顶层
+7. 信息不足时先用 skill 尝试，失败再用 reply 告知。例如用户说"想喝咖啡"，先调 luckin_find_store 查门店（不传参数自动 IP 定位），不要问"你在哪个城市"
+8. 需要用户选择时才问，比如查出门店列表后问用户去哪家
+9. 如果用户已经选了门店（说门店名/编号/这家），直接搜菜单或下单，不要再调 luckin_find_store。同理，用户选了饮品后直接下单，不走回头路
 
 正确示例（闲聊）：
 {"ack": "嗯，在呢。", "reasoning": "用户只是打招呼，直接回复", "steps": [{"skill": "reply", "args": {"message": "嗯，还行。"}}]}
 
 正确示例（多步——截图→分析→润色→回复）：
 {"ack": "看一下你的桌面。", "reasoning": "用户想看桌面，截图、分析、润色后回复", "steps": [{"id": "cap", "skill": "capture_screenshot", "args": {}, "narration": "截个图看看。"}, {"id": "ana", "skill": "analyze_image", "args": {"task": "描述桌面内容", "image_path": "{{step.cap.output}}", "narration": "分析一下这张图。"}}, {"id": "ref", "skill": "refine", "args": {"raw_output": "{{step.ana.output}}", "narration": "把结果整理一下。"}}, {"skill": "reply", "args": {"message": "{{step.ref.output}}"}}]}
+
+正确示例（点咖啡——查门店，reply 引用 luckin_find_store 的输出展示门店列表）：
+{"ack": "看看附近。", "reasoning": "用户想喝咖啡，先查门店让用户选", "steps": [{"skill": "luckin_find_store", "args": {}, "narration": "找找附近的门店。"}, {"skill": "reply", "args": {"message": "{{step.luckin_find_store.output}}\n想去哪家？"}}]}
+
+正确示例（点咖啡——用户选了门店但没说喝什么，query 传空字符串展示全部商品）：
+{"ack": "看看菜单。", "reasoning": "用户选了店但没说喝什么，搜全部饮品让用户挑", "steps": [{"skill": "luckin_search_menu", "args": {"dept_id": 610287, "query": ""}, "narration": "看看有什么喝的。"}, {"skill": "reply", "args": {"message": "这家店有这些，看看想喝哪个？\n{{step.luckin_search_menu.output}}"}}]}
+
+正确示例（点咖啡——用户指定了饮品名后搜）：
+{"ack": "搜一下。", "reasoning": "用户点了饮品名，搜匹配的", "steps": [{"skill": "luckin_search_menu", "args": {"dept_id": 610287, "query": "拿铁"}, "narration": "搜一下。"}, {"skill": "reply", "args": {"message": "找到了：\n{{step.luckin_search_menu.output}}"}}]}
+
+正确示例（点咖啡——用户指定了商品后下单）：
+{"ack": "下单了。", "reasoning": "用户选好了门店和商品，直接下单", "steps": [{"skill": "luckin_preview_order", "args": {"dept_id": 12345, "product_id": 678, "sku_code": "SKU001"}, "narration": "先预览一下。"}, {"skill": "luckin_create_order", "args": {"dept_id": 12345, "product_id": 678, "sku_code": "SKU001"}, "narration": "下单中。"}, {"skill": "reply", "args": {"message": "好了，取餐码 886。"}}]}
+
+正确示例（多轮——用户说"第一家"，从 session_state 的 store_list 中取 dept_id）：
+{"ack": "好的。", "reasoning": "用户选了第一家门店，从 session_state.store_list 取 dept_id=610287，搜菜单", "steps": [{"skill": "luckin_search_menu", "args": {"dept_id": 610287, "query": ""}, "narration": "看看这家店有什么喝的。"}, {"skill": "reply", "args": {"message": "这家店有这些，看看想喝哪个？\n{{step.luckin_search_menu.output}}"}}]}
+
+正确示例（多轮——用户说"喝生椰拿铁"，已有 selected_dept_id，直接搜该店菜单）：
+{"ack": "搜一下。", "reasoning": "用户已有选中门店 dept_id=610287，搜生椰拿铁", "steps": [{"skill": "luckin_search_menu", "args": {"dept_id": 610287, "query": "生椰拿铁"}, "narration": "搜一下。"}, {"skill": "reply", "args": {"message": "找到了：\n{{step.luckin_search_menu.output}}"}}]}
 
 可用 skill：
 
@@ -121,38 +141,55 @@ class Planner:
 
     # ── Stage 1: Keyword matching ───────────────────────────────────────
 
-    def _match_skills(self, user_message: str) -> list[str]:
+    def _match_skills(self, user_message: str, session_state: dict | None = None) -> list[str]:
         """Retrieve candidate skills by keyword matching.
 
         Phase 1: substring matching on skill names and descriptions.
         Supports both English and Chinese: checks if any meaningful segment
         of the user message appears in the skill's name or description.
         reply is always included (D-PLAN-02).
+
+        If session_state has selected_dept_id, luckin_find_store is excluded
+        since the user has already chosen a store (rule 9).
         """
+        # ── Context-based exclusion ─────────────────────────────────────
+        has_selected_store = bool(
+            session_state and session_state.get("selected_dept_id")
+        )
+        excluded = set()
+        if has_selected_store:
+            excluded.add("luckin_find_store")
+
         candidates = {"reply"}  # always included
         lower_msg = user_message.lower()
 
         for skill in self._registry.list():
             if skill.name == "reply":
                 continue
+            if skill.name in excluded:
+                continue
 
-            # Match against skill name (English)
+            # Priority 1: keywords match (fast, precise)
+            if skill.keywords:
+                kw_combined = "".join(skill.keywords).lower()
+                if any(kw in lower_msg for kw in skill.keywords):
+                    candidates.add(skill.name)
+                    continue
+
+            # Priority 2: skill name match (English)
             if skill.name.lower() in lower_msg:
                 candidates.add(skill.name)
                 continue
 
-            # Match against description (supports Chinese)
+            # Priority 3: description + params segment match (Chinese)
             desc = skill.description.lower() + " " + " ".join(skill.params.keys())
             msg_segs = _segment_message(lower_msg)
             desc_segs = _segment_message(desc)
-            # Check if any segment from message appears in description
             msg_matches_desc = any(
                 seg in desc
                 for seg in msg_segs
                 if len(seg) >= 2 or ('\u4e00' <= seg <= '\u9fff' and seg not in "的了是在有我")
             )
-            # Check if any segment from description appears in message (reverse)
-            # Allow single Chinese chars for better recall
             desc_matches_msg = any(
                 seg in lower_msg
                 for seg in desc_segs
@@ -162,10 +199,20 @@ class Planner:
                 candidates.add(skill.name)
                 continue
 
-        # Post-processing: implicit skill associations
-        # If analyze_image is selected, also offer refine
+        # ── Post-processing: implicit skill associations ────────────────
+
+        # analyze_image → needs refine
         if "analyze_image" in candidates:
             candidates.add("refine")
+
+        # Session with store_list + user confirms store → add search_menu
+        if session_state and session_state.get("store_list"):
+            store_confirm_keywords = ["第", "一", "二", "三", "四", "五",
+                                      "这家", "那家", "就它", "就这个",
+                                      "对", "好", "可以", "行", "嗯"]
+            if any(kw in user_message for kw in store_confirm_keywords):
+                candidates.add("luckin_search_menu")
+                logger.debug("Session has store_list + confirm keywords: added luckin_search_menu")
 
         return list(candidates)
 
@@ -183,7 +230,8 @@ class Planner:
 
     # ── Stage 3: LLM DSL generation ─────────────────────────────────────
 
-    async def _generate_dsl(self, user_message: str, skills: list[str], history: str) -> tuple[str, str]:
+    async def _generate_dsl(self, user_message: str, skills: list[str], history: str,
+                            session_state: dict | None = None) -> tuple[str, str]:
         """Call LLM to produce a DSL execution plan and ACK message.
 
         Returns:
@@ -201,9 +249,43 @@ class Planner:
         # Use string replacement to avoid .format() conflicts with JSON braces
         system_prompt = SYSTEM_PROMPT_HEADER.replace('{skills}', skills_text)
 
+        # ── Inject session_state + active_task (multi-turn context) ─────
+        session_lines = []
+        if session_state:
+            # Priority 1: active_task from Orchestrator (cross-plan task tracking)
+            active_task_str = session_state.pop("_active_task", None)
+            if active_task_str:
+                session_lines.append(active_task_str)
+
+            # Priority 2: session_state details (handler-written cross-turn data)
+            selected_dept_id = session_state.get("selected_dept_id")
+            selected_dept_name = session_state.get("selected_dept_name")
+            store_list = session_state.get("store_list")
+
+            if selected_dept_id:
+                name_hint = f"（{selected_dept_name}）" if selected_dept_name else ""
+                session_lines.append(
+                    f"已选中门店 dept_id={selected_dept_id}{name_hint}"
+                )
+                session_lines.append(
+                    "规则 9 适用：用户已选门店，直接搜索菜单或下单，不要调 luckin_find_store。"
+                )
+            if store_list:
+                store_summary = "\n".join(
+                    f"  {i+1}. {s.get('deptName', '?')} [dept_id: {s.get('deptId', '?')}]"
+                    for i, s in enumerate(store_list)
+                )
+                session_lines.append(f"附近门店列表：\n{store_summary}")
+
+        session_prompt = "\n".join(session_lines)
+
         messages = [
             {"role": "system", "content": system_prompt},
         ]
+
+        if session_prompt:
+            messages.append({"role": "user", "content": session_prompt})
+            messages.append({"role": "assistant", "content": "已了解当前会话状态。"})
 
         if history:
             messages.append({"role": "user", "content": f"之前的对话：\n{history}"})
@@ -263,24 +345,35 @@ class Planner:
 
     # ── Full pipeline ───────────────────────────────────────────────────
 
-    async def plan(self, user_message: str, history: str) -> tuple[str, str, list[str]]:
+    async def plan(self, user_message: str, history: str,
+                   session_state: dict | None = None) -> tuple[str, str, list[str]]:
         """Run the full three-stage planning pipeline.
+
+        Args:
+            user_message: The user's latest message.
+            history: Recent conversation turns as formatted text.
+            session_state: Cross-turn context (selected_dept_id, store_list, etc.).
 
         Returns:
             (ack_message, raw_dsl_json, candidate_skill_names)
         """
         logger.info("Planning for: %.80s", user_message)
+        if session_state and session_state.get("selected_dept_id"):
+            logger.info("Session has selected store: dept_id=%s",
+                        session_state["selected_dept_id"])
 
-        # Stage 1: Match
-        candidates = self._match_skills(user_message)
+        # Stage 1: Match (with session context to skip luckin_find_store)
+        candidates = self._match_skills(user_message, session_state)
         logger.debug("Stage 1 — matched skills: %s", candidates)
 
         # Stage 2: Filter
         filtered = self._filter_skills(candidates)
         logger.debug("Stage 2 — after filter: %s", filtered)
 
-        # Stage 3: Generate
-        raw_dsl, ack_msg = await self._generate_dsl(user_message, filtered, history)
+        # Stage 3: Generate (with session context injected into prompt)
+        raw_dsl, ack_msg = await self._generate_dsl(
+            user_message, filtered, history, session_state
+        )
         logger.debug("Stage 3 — raw DSL: %.150s", raw_dsl)
         logger.debug("Stage 3 — ACK: %s", ack_msg)
 

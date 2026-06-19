@@ -7,6 +7,7 @@ No reasoning, no branching. Pure execution.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -46,9 +47,15 @@ class SkillDeps:
     - feishu: For sending messages (used by reply handler)
     - session_id: Current user/session identifier
     - Any future dependencies (db, http client, etc.)
+
+    session_state: Cross-turn session context for multi-turn workflows.
+                   Persists across Plan executions within the same session.
+                   Examples: {"selected_dept_id": 610287, "store_list": [...]}
     """
     feishu: Any = None      # FeishuClient
     session_id: str = ""    # Current user's open_id
+    luckin_mcp: Any = None  # LuckinMCPClient (injected by Orchestrator)
+    session_state: dict = field(default_factory=dict)  # Cross-turn state
 
 
 # ── Engine ──────────────────────────────────────────────────────────────────
@@ -82,15 +89,19 @@ class Engine:
         results: list[StepResult] = []
 
         for i, step in enumerate(plan.steps):
-            step_id = step.id or f"_step_{i}"
+            step_id = step.id or step.skill
+            # Deduplicate: if same skill appears twice, append _N
+            if step_id in ctx.outputs:
+                step_id = f"{step.skill}_{i}"
             logger.info("Executing step %s: %s", step_id, step.skill)
 
             try:
-                # Step 1: Resolve references in args
-                resolved_args = self._resolve_refs(step.args, ctx)
+                # Step 1: Resolve references in args (with int param coercion)
+                skill_meta = self._registry.require(step.skill)
+                int_params = {p for p, s in skill_meta.params.items() if s.get("type") == "int"}
+                resolved_args = self._resolve_refs(step.args, ctx, int_params)
 
                 # Step 2: Look up skill handler
-                skill_meta = self._registry.require(step.skill)
                 if skill_meta.handler is None:
                     raise RuntimeError(f"Skill '{step.skill}' has no handler")
 
@@ -138,8 +149,12 @@ class Engine:
 
     # ── Reference resolution ────────────────────────────────────────────
 
-    def _resolve_refs(self, args: dict, ctx: RuntimeContext) -> dict:
-        """Replace {{step.<id>.output}} with actual values from ctx.outputs."""
+    def _resolve_refs(self, args: dict, ctx: RuntimeContext, int_params: set[str] | None = None) -> dict:
+        """Replace {{step.<id>.output}} with actual values from ctx.outputs.
+
+        For int_params, tries to extract a numeric value from the resolved text
+        (e.g. "店名 [dept_id: 12345]" → 12345).
+        """
         resolved = {}
         for key, value in args.items():
             if isinstance(value, str):
@@ -148,6 +163,23 @@ class Engine:
                 )
             else:
                 resolved[key] = value
+
+            # Post-process: extract number from text for int params
+            if int_params and key in int_params and isinstance(resolved[key], str):
+                text = resolved[key]
+                # First try: pure number
+                if text.strip().isdigit():
+                    resolved[key] = int(text)
+                else:
+                    # Try: dept_id: 12345 or ID: 12345 or [数字]
+                    m = re.search(r'(?:dept_id|ID|id)[：:]\s*(\d+)', text)
+                    if m:
+                        resolved[key] = int(m.group(1))
+                    else:
+                        # Try: any number in the text
+                        nums = re.findall(r'\d+', text)
+                        if nums:
+                            resolved[key] = int(nums[0])
         return resolved
 
     def _resolve_one(self, match: re.Match, ctx: RuntimeContext) -> str:

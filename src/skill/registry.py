@@ -26,6 +26,8 @@ class SkillMetadata:
 
     name: str
     description: str
+    keywords: list[str] = field(default_factory=list)
+    """Trigger keywords for Planner matching. Independent of description."""
     params: dict[str, dict] = field(default_factory=dict)
     """param_name → {type, required, enum?, description}
 
@@ -116,6 +118,8 @@ class SkillRegistry:
     def _format_one(skill: SkillMetadata) -> str:
         parts = [f"## {skill.name}"]
         parts.append(f"描述：{skill.description}")
+        if skill.keywords:
+            parts.append(f"关键词：{'、'.join(skill.keywords)}")
 
         if skill.params:
             param_lines = []

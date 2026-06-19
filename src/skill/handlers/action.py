@@ -5,14 +5,41 @@ Each skill is a single atomic operation:
 """
 
 import logging
+from dataclasses import dataclass
 
 import pyautogui
-
-from src.action.validator import validate_coordinates
 
 logger = logging.getLogger(__name__)
 
 pyautogui.FAILSAFE = True
+
+
+# ── Coordinate validation (inlined from old src/action/validator.py) ──────────
+
+
+@dataclass
+class _ValidationResult:
+    valid: bool
+    message: str = ""
+
+
+def get_screen_size() -> tuple[int, int]:
+    """Return (width, height) of the primary monitor."""
+    w, h = pyautogui.size()
+    return w, h
+
+
+def validate_coordinates(x: int, y: int) -> _ValidationResult:
+    """Check that (x, y) falls within the visible screen area."""
+    w, h = get_screen_size()
+    if x < 0 or y < 0:
+        return _ValidationResult(False, f"坐标 ({x}, {y}) 为负数，无效")
+    if x > w or y > h:
+        return _ValidationResult(
+            False,
+            f"坐标 ({x}, {y}) 超出屏幕范围 ({w}x{h})",
+        )
+    return _ValidationResult(True)
 
 
 async def handle_click(args: dict, deps) -> str:

@@ -26,6 +26,7 @@ class Conversation:
     sender: str
     turns: list[Turn] = field(default_factory=list)
     max_turns: int = 10
+    active_task: dict | None = None  # Cross-plan state: {task_type, stage, context}
 
     def add_turn(self, role: Literal["user", "assistant"], content: str, action: str | None = None):
         self.turns.append(Turn(role=role, content=content, action=action))

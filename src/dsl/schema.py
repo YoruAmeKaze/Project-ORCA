@@ -55,6 +55,8 @@ class Plan:
 
     reasoning: str = ""  # LLM's thinking (not validated, for debug/audit)
     steps: list[SkillCall] = field(default_factory=list)
+    task_type: str | None = None  # Cross-plan task type (e.g. "luckin_order")
+    stage: str | None = None      # Current stage within the task
 
     # ── Validation helpers ───────────────────────────────────────────────
 
@@ -84,6 +86,8 @@ def plan_from_json(data: dict) -> Plan:
     Expected format:
     {
         "reasoning": "...",
+        "task_type": "luckin_order",    # optional — cross-task tracking
+        "stage": "store_selected",      # optional — current progress
         "steps": [
             {"skill": "name", "args": {...}},
             {"id": "step1", "skill": "name", "args": {...}}
@@ -91,6 +95,8 @@ def plan_from_json(data: dict) -> Plan:
     }
     """
     reasoning = data.get("reasoning", "")
+    task_type = data.get("task_type") or None
+    stage = data.get("stage") or None
     steps_data = data.get("steps", [])
 
     steps = []
@@ -102,4 +108,4 @@ def plan_from_json(data: dict) -> Plan:
             narration=item.get("narration"),
         ))
 
-    return Plan(reasoning=reasoning, steps=steps)
+    return Plan(reasoning=reasoning, steps=steps, task_type=task_type, stage=stage)

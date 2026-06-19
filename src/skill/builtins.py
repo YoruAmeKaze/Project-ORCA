@@ -6,6 +6,7 @@ Import this to get a fully populated registry for the Runtime.
 from src.skill.handlers import (
     action,
     analyze,
+    luckin,
     refine,
     reply,
     screenshot,
@@ -171,6 +172,110 @@ def create_registry() -> SkillRegistry:
             output="string（润色后的文本）",
             progress_message=None,
             handler=refine.handle,
+        ),
+
+        # ── luckin_find_store ──────────────────────────────────────────
+        SkillMetadata(
+            name="luckin_find_store",
+            keywords=["瑞幸", "咖啡", "门店", "查门店", "附近", "地址", "点单", "点咖啡", "想喝", "来一杯"],
+            description=(
+                "查找附近的瑞幸咖啡门店。"
+                "传地点名（如\"重庆\"、\"解放碑\"）可指定位置。"
+                "不传参数则自动通过 IP 定位你附近的门店。"
+                "返回门店列表和门店ID供后续搜索菜单和下单使用。"
+            ),
+            params={
+                "query": {
+                    "type": "string",
+                    "required": False,
+                    "description": "城市名、区域名或门店名称。不传则自动搜索附近门店。如\"重庆\"、\"上海\"、\"王府井喜悦店\"",
+                },
+            },
+            output="string（门店列表）",
+            progress_message="正在查找门店…",
+            handler=luckin.handle_find_store,
+        ),
+
+        # ── luckin_search_menu ─────────────────────────────────────────
+        SkillMetadata(
+            name="luckin_search_menu",
+            keywords=["菜单", "饮品", "咖啡", "生椰拿铁", "拿铁", "美式", "点单", "搜", "喝"],
+            description=(
+                "搜索瑞幸咖啡门店的菜单，按饮品名称查找商品。"
+                "需要先有门店ID（通过 luckin_find_store 获取）。"
+            ),
+            params={
+                "dept_id": {
+                    "type": "int",
+                    "required": True,
+                    "description": "门店ID（数字），从 luckin_find_store 结果中提取",
+                },
+                "query": {
+                    "type": "string",
+                    "required": True,
+                    "description": "饮品名称关键词",
+                },
+            },
+            output="string（商品列表）",
+            progress_message="正在搜索饮品…",
+            handler=luckin.handle_search_menu,
+        ),
+
+        # ── luckin_preview_order ──────────────────────────────────────
+        SkillMetadata(
+            name="luckin_preview_order",
+            keywords=["预览", "看看订单", "多少钱"],
+            description=(
+                "预览瑞幸咖啡订单，显示商品明细和价格。"
+                "下单前调用，需要门店ID和商品信息。"
+            ),
+            params={
+                "dept_id": {"type": "int", "required": True, "description": "门店ID"},
+                "product_id": {"type": "int", "required": True, "description": "商品ID"},
+                "sku_code": {"type": "string", "required": True, "description": "商品SKU编码"},
+                "amount": {"type": "int", "required": False, "description": "数量，默认1"},
+            },
+            output="string（订单预览）",
+            progress_message="正在预览订单…",
+            handler=luckin.handle_preview_order,
+        ),
+
+        # ── luckin_create_order ────────────────────────────────────────
+        SkillMetadata(
+            name="luckin_create_order",
+            keywords=["下单", "点单", "买", "点咖啡", "来一杯", "要一杯"],
+            description=(
+                "创建瑞幸咖啡订单并完成支付。"
+                "需要先通过 luckin_find_store 获取门店ID，"
+                "通过 luckin_search_menu 获取商品信息。"
+                "下单前建议先调用 luckin_preview_order 预览。"
+            ),
+            params={
+                "dept_id": {"type": "int", "required": True, "description": "门店ID"},
+                "product_id": {"type": "int", "required": True, "description": "商品ID"},
+                "sku_code": {"type": "string", "required": True, "description": "商品SKU编码"},
+                "amount": {"type": "int", "required": False, "description": "数量，默认1"},
+            },
+            output="string（下单结果）",
+            progress_message="正在下单…",
+            handler=luckin.handle_create_order,
+        ),
+
+        # ── luckin_get_product_detail ──────────────────────────────────
+        SkillMetadata(
+            name="luckin_get_product_detail",
+            keywords=["详情", "规格", "选项", "冰", "热", "糖度", "杯型", "看", "看看"],
+            description=(
+                "查看瑞幸咖啡饮品的详细信息和规格选项（冰/热、糖度、杯型、SKU编码等）。"
+                "需要先有门店ID和商品ID（通过 luckin_search_menu 获取商品ID）。"
+            ),
+            params={
+                "dept_id": {"type": "int", "required": True, "description": "门店ID"},
+                "product_id": {"type": "int", "required": True, "description": "商品ID，从 luckin_search_menu 结果中提取"},
+            },
+            output="string（商品详情 + 规格选项）",
+            progress_message="正在查询商品详情…",
+            handler=luckin.handle_get_product_detail,
         ),
 
         # ── search_web ─────────────────────────────────────────────────

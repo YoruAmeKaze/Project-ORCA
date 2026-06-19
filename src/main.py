@@ -12,6 +12,7 @@ Usage:
 """
 
 import logging
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
@@ -30,28 +31,39 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# --- App ---
-app = FastAPI(title="Project Orca", version="2.1.1", description="Phase 2 — Plan-then-Execute Architecture")
-
-app.include_router(feishu_router)
+# Shared orchestrator instance, managed by lifespan
+_orchestrator: Orchestrator | None = None
 
 
-@app.on_event("startup")
-async def startup():
-    """Initialize shared services on app startup."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI lifespan: startup → yield → shutdown."""
+    global _orchestrator
+
+    # ── Startup ─────────────────────────────────────────────────────────
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
         logger.error("FEISHU_APP_ID or FEISHU_APP_SECRET not configured")
+        yield
         return
 
     feishu = FeishuClient(app_id=FEISHU_APP_ID, app_secret=FEISHU_APP_SECRET)
     orchestrator = Orchestrator(feishu=feishu)
+    _orchestrator = orchestrator
     init_routes(orchestrator)
     logger.info("Orca started — listening on %s:%s", HOST, PORT)
 
+    yield  # ← server runs here
 
-@app.on_event("shutdown")
-async def shutdown():
+    # ── Shutdown ─────────────────────────────────────────────────────────
     logger.info("Orca shutting down")
+    if _orchestrator is not None:
+        await _orchestrator.close()
+
+
+# --- App ---
+app = FastAPI(title="Project Orca", version="2.1.1", description="Phase 2 — Plan-then-Execute Architecture", lifespan=lifespan)
+
+app.include_router(feishu_router)
 
 
 # --- CLI entry ---
