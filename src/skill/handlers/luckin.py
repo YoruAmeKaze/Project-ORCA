@@ -261,6 +261,10 @@ async def handle_preview_order(args: dict, deps) -> str:
         sku_code: SKU编码
         amount: 数量（默认1）
     """
+    # 下单前必须展示过商品规格或用户给出了具体规格
+    if not deps.session_state.get("specs_shown"):
+        return "请先查看商品规格（luckin_get_product_detail）或说明你要的温度、糖度和杯型再下单。"
+
     client = deps.luckin_mcp
     items = [{
         "productId": int(args["product_id"]),

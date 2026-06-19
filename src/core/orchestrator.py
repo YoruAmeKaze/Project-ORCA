@@ -134,7 +134,7 @@ class Orchestrator:
         if not active_task or not session_state:
             return (active_task or {}).get("context", {})
         ctx = dict(active_task.get("context", {}))
-        for k in ("selected_dept_id", "selected_dept_name", "store_list", "menu_items"):
+        for k in ("selected_dept_id", "selected_dept_name", "store_list", "menu_items", "specs_shown"):
             if k in session_state:
                 ctx[k] = session_state[k]
         return ctx
