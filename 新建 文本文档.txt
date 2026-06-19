@@ -1,0 +1,548 @@
+工具文档
+共 8 个工具，覆盖瑞幸咖啡点单全流程
+
+门店
+1 个工具
+queryShopList
+瑞幸咖啡查询门店列表
+
+入参
+参数名	类型	必填	说明
+deptName	string	—	门店名称
+longitude	number	必填	经度
+latitude	number	必填	纬度
+
+例子
+{
+  "deptName": "示例",
+  "longitude": 118.08891,
+  "latitude": 24.479627
+}
+响应data
+字段	类型	说明
+deptId	number	门店ID
+deptName	string	门店名称
+address	string	门店地址
+deptTags	array[string]	门店标签
+longitude	number	门店经度
+latitude	number	门店纬度
+workTimeStart	string	营业开始时间
+workTimeEnd	string	营业结束时间
+distance	number	距离，单位千米
+number	string	门店编号
+
+例子
+{
+  "code": 0,
+  "msg": "success",
+  "data": [
+    {
+      "deptId": 245062453,
+      "deptName": "AI点单专用",
+      "address": "北京安贞环宇荟",
+      "deptTags": [],
+      "longitude": 116.392435,
+      "latitude": 39.982376,
+      "workTimeStart": "00:00",
+      "workTimeEnd": "24:00",
+      "distance": 8.2038,
+      "number": "(No.100070)"
+    }
+  ],
+  "success": true
+}
+商品
+3 个工具
+searchProductForMcp
+瑞幸咖啡根据用户 query 匹配商品推荐结果
+
+入参
+参数名	类型	必填	说明
+deptId	integer	必填	门店ID
+query	string	必填	用户原始查询文本
+
+例子
+{
+  "deptId": "345187",
+  "query": "示例"
+}
+响应data
+字段	类型	说明
+productId	number	商品ID
+productName	string	商品名称
+skuCode	string	商品 SKU 编码
+pictureUrl	string	商品图片URL
+productAttrs	array[object]	商品属性列表，每项包含以下字段
+attributeId	number	属性组ID
+attributeName	string	属性组名称
+productSubAttrs	array[object]	属性值列表，每项包含以下字段
+attributeId	number	属性值ID
+attributeName	string	属性值名称
+selected	boolean | null	是否选中
+price	number	属性加价
+canSelected	number | null	是否可选
+tags	array[string]	商品标签
+initialPrice	number	面价
+estimatePrice	number	预估到手价
+
+例子
+{
+  "code": 0,
+  "msg": "success",
+  "data": [
+    {
+      "productId": 11447,
+      "productName": "耶加雪菲拿铁",
+      "skuCode": "SP9636-00001",
+      "pictureUrl": "https://imgtest03.luckincoffeecdn.com/group1/M00/0C/1E/CtoVwWZhj_aAWlpBAAFtxBsbwVg275.jpg",
+      "productAttrs": [
+        {
+          "attributeId": 122,
+          "attributeName": "温度",
+          "productSubAttrs": [
+            {
+              "attributeId": 429,
+              "attributeName": "热",
+              "selected": null,
+              "price": 0,
+              "canSelected": null
+            }
+          ]
+        }
+      ],
+      "tags": ["新品"],
+      "initialPrice": 16,
+      "estimatePrice": 16
+    }
+  ],
+  "success": true
+}
+switchProduct
+瑞幸咖啡商品属性切换
+
+入参
+参数名	类型	必填	说明
+deptId	integer	必填	门店ID
+productId	integer	必填	商品ID
+skuCode	string	必填	商品 SKU 编码
+attrOperationParam	object	必填	属性切换参数
+attributeId	integer	必填	属性组ID
+subAttr	object	必填	属性值操作信息
+attributeId	integer	必填	属性值ID
+operation	integer	必填	操作类型，选中传 3
+amount	integer	必填	商品数量
+
+例子
+{
+  "deptId": "345187",
+  "productId": "5293",
+  "skuCode": "SP3713-00051",
+  "attrOperationParam": {
+    "attributeId": "0",
+    "subAttr": {
+      "attributeId": "0",
+      "operation": "示例"
+    }
+  },
+  "amount": "示例"
+}
+响应data
+字段	类型	说明
+productId	number	商品ID
+productName	string	商品名称
+skuCode	string	切换后的商品 SKU 编码
+pictureUrl	string	商品图片URL
+productAttrs	array[object]	切换后的商品属性列表，每项包含以下字段
+attributeId	number	属性组ID
+attributeName	string	属性组名称
+productSubAttrs	array[object]	属性值列表，每项包含以下字段
+attributeId	number	属性值ID
+attributeName	string	属性值名称
+selected	boolean | null	是否选中
+price	number	属性加价
+canSelected	number | null	是否可选
+tags	array[string]	商品标签
+initialPrice	number	面价
+estimatePrice	number	预估到手价
+
+例子
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "productId": 17443,
+    "productName": "冬至五养拿铁",
+    "skuCode": "SP11795-00006",
+    "pictureUrl": "",
+    "productAttrs": [
+      {
+        "attributeId": 122,
+        "attributeName": "温度",
+        "productSubAttrs": [
+          { "attributeId": 429, "attributeName": "热", "selected": false, "price": 0, "canSelected": 1 },
+          { "attributeId": 428, "attributeName": "冰", "selected": true, "price": 0, "canSelected": 1 }
+        ]
+      },
+      {
+        "attributeId": 416,
+        "attributeName": "杯型",
+        "productSubAttrs": [
+          { "attributeId": 719, "attributeName": "大杯", "selected": false, "price": 0, "canSelected": 1 },
+          { "attributeId": 4050, "attributeName": "超大杯", "selected": true, "price": 5, "canSelected": 1 }
+        ]
+      }
+    ],
+    "tags": null,
+    "initialPrice": 17,
+    "estimatePrice": 13
+  },
+  "success": true
+}
+queryProductDetailInfo
+瑞幸咖啡查询商品详情
+
+入参
+参数名	类型	必填	说明
+deptId	integer	必填	门店ID
+productId	integer	必填	商品ID
+
+例子
+{
+  "deptId": "345187",
+  "productId": "5293"
+}
+响应data
+字段	类型	说明
+productId	number	商品ID
+productName	string	商品名称
+skuCode	string	商品 SKU 编码
+pictureUrl	string	商品图片URL
+productAttrs	array[object]	商品属性列表，每项包含以下字段
+attributeId	number	属性组ID
+attributeName	string	属性组名称
+productSubAttrs	array[object]	属性值列表，每项包含以下字段
+attributeId	number	属性值ID
+attributeName	string	属性值名称
+selected	boolean | null	是否选中
+price	number	属性加价
+canSelected	number | null	是否可选
+tags	array[string]	商品标签
+initialPrice	number	面价
+estimatePrice	number	预估到手价
+
+例子
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "productId": 17443,
+    "productName": "冬至五养拿铁",
+    "skuCode": "SP11795-00006",
+    "pictureUrl": "https://imgtest03.luckincoffeecdn.com/group1/M00/0B/EE/CtoVumZhkA6ACH7RAAW5NWILDQk306.jpg",
+    "productAttrs": [
+      {
+        "attributeId": 122,
+        "attributeName": "温度",
+        "productSubAttrs": [
+          { "attributeId": 429, "attributeName": "热", "selected": false, "price": 0, "canSelected": 1 },
+          { "attributeId": 428, "attributeName": "冰", "selected": true, "price": 0, "canSelected": 1 }
+        ]
+      }
+    ],
+    "tags": null,
+    "initialPrice": 17,
+    "estimatePrice": 13
+  },
+  "success": true
+}
+订单
+4 个工具
+previewOrder
+瑞幸咖啡订单预览
+
+入参
+参数名	类型	必填	说明
+deptId	integer	必填	门店ID
+productList	array[object]	必填	订单商品列表，每项包含以下字段
+amount	integer	必填	商品数量
+productId	integer	必填	商品ID
+skuCode	string	必填	商品 SKU 编码
+
+例子
+{
+  "deptId": "345187",
+  "productList": [
+    {
+      "amount": "示例",
+      "productId": "5293",
+      "skuCode": "SP3713-00051"
+    }
+  ]
+}
+响应data
+字段	类型	说明
+aboutTime	number	预计取餐/送达时间戳
+discountPrice	number	实际付款价/商品总价
+shopInfo	object	门店信息
+deptId	number	门店ID
+deptName	string	门店名称
+address	string	门店地址
+deptTags	array[string]	门店标签
+longitude	number	门店经度
+latitude	number	门店纬度
+workTimeStart	string	营业开始时间
+workTimeEnd	string	营业结束时间
+distance	number	距离，单位千米
+number	string	门店编号
+productInfoList	array[object]	商品信息列表，每项包含以下字段
+productId	number	商品ID
+skuCode	string	商品 SKU 编码
+name	string	商品名称
+amount	number	商品数量
+additionDesc	string	商品附属备注描述
+bigPicUrl	string | null	商品大图URL
+breviaryPicUrl	string | null	商品缩略图URL
+initPrice	number	商品面价
+estimatePrice	number	预估到手价
+estimateTotalPrice	number	预估总价
+couponCodeList	array[string]	优惠券编码列表
+orderGranularCommodityList	array[object]	订单商品粒度价格信息，每项包含以下字段
+commodityId	number	商品ID
+commodityCode	string	商品编码
+commodityName	string	商品名称
+payableMoney	number	应付金额
+payMoney	number	实付金额
+expressExpectTime	number | null	配送预计送达时间
+privilegeMoney	number	优惠金额
+totalInitialPrice	number	商品总面价
+
+例子
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "aboutTime": 1778751420000,
+    "discountPrice": 16,
+    "shopInfo": {
+      "deptId": 245062453,
+      "deptName": "AI点单专用",
+      "address": "北京安贞环宇荟",
+      "deptTags": [],
+      "longitude": 116.392435,
+      "latitude": 39.982376,
+      "workTimeStart": "00:00",
+      "workTimeEnd": "24:00",
+      "distance": 0,
+      "number": "(No.100070)"
+    },
+    "productInfoList": [
+      {
+        "productId": 11447,
+        "skuCode": "SP9636-00001",
+        "name": "耶加雪菲拿铁",
+        "amount": 1,
+        "additionDesc": "热",
+        "bigPicUrl": null,
+        "breviaryPicUrl": "https://imgtest03.luckincoffeecdn.com/group1/M00/0C/1E/CtoVwWZhj_aAWlpBAAFtxBsbwVg275.jpg",
+        "initPrice": 16,
+        "estimatePrice": 16,
+        "estimateTotalPrice": 16
+      }
+    ],
+    "couponCodeList": [],
+    "orderGranularCommodityList": [
+      {
+        "commodityId": 11447,
+        "commodityCode": "SP9636",
+        "commodityName": "耶加雪菲拿铁",
+        "payableMoney": 16,
+        "payMoney": 0
+      }
+    ],
+    "expressExpectTime": null,
+    "privilegeMoney": 0,
+    "totalInitialPrice": 16
+  },
+  "success": true
+}
+createOrder
+瑞幸咖啡创建订单
+
+入参
+参数名	类型	必填	说明
+deptId	integer	必填	门店ID
+productList	array[object]	必填	订单商品列表，每项包含以下字段
+amount	integer	必填	商品数量
+productId	integer	必填	商品ID
+skuCode	string	必填	商品 SKU 编码
+longitude	number	必填	经度
+latitude	number	必填	纬度
+couponCodeList	array[string]	—	优惠券列表
+
+例子
+{
+  "deptId": "345187",
+  "productList": [
+    {
+      "amount": "示例",
+      "productId": "5293",
+      "skuCode": "SP3713-00051"
+    }
+  ],
+  "longitude": 118.08891,
+  "latitude": 24.479627,
+  "couponCodeList": []
+}
+响应data
+字段	类型	说明
+orderId	number	订单ID
+payOrderUrl	string	微信支付 URL
+payOrderQrCodeUrl	string	支付二维码链接
+discountPrice	number	实付付款价/商品总价
+needPay	boolean	是否需要支付
+tradeNo	string | null	交易号
+description	string | null	描述信息
+businessNotifyUrl	string | null	业务通知地址
+subMchid	string | null	微信支付子商户号
+orderIdStr	string	字符串类型订单ID
+
+例子
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "orderId": 7639308439653908490,
+    "payOrderUrl": "weixin://wxpay/bizpayurl?pr=xxxx",
+    "payOrderQrCodeUrl": "https://opentest03.lkcoffee.com/transfer/qrcode?token=xxxx",
+    "discountPrice": 16,
+    "needPay": true,
+    "tradeNo": null,
+    "description": null,
+    "businessNotifyUrl": null,
+    "subMchid": null,
+    "orderIdStr": "7639308439653908490"
+  },
+  "success": true
+}
+queryOrderDetailInfo
+瑞幸咖啡查询订单详情
+
+入参
+参数名	类型	必填	说明
+orderId	string	必填	订单ID
+
+例子
+{
+  "orderId": "7620266734302527497"
+}
+响应data
+字段	类型	说明
+orderId	string	订单ID
+orderStatus	number	订单状态，10=待付款，20=下单成功，30=制作中，60=等待取餐，80=已完成，100=已取消
+orderStatusName	string	订单状态名称
+aboutTime	number	预计取餐/送达时间戳
+takeMealTime	string	实际取餐时间
+takeMealCodeInfo	object	取餐码信息
+code	string	取餐码
+takeOrderId	string	取餐单ID
+shopInfo	object	门店信息
+deptId	number	门店ID
+deptName	string	门店名称
+address	string	门店地址
+deptTags	array[string]	门店标签
+longitude	number	门店经度
+latitude	number	门店纬度
+workTimeStart	string	营业开始时间
+workTimeEnd	string	营业结束时间
+distance	number	距离，单位千米
+number	string	门店编号
+productInfoList	array[object] | null	商品信息列表，待付款订单可能为 null
+productId	number	商品ID
+skuCode	string	商品 SKU 编码
+name	string	商品名称
+amount	number	商品数量
+additionDesc	string	商品附属备注描述
+bigPicUrl	string | null	商品大图URL
+breviaryPicUrl	string | null	商品缩略图URL
+orderPayAmount	number	订单支付金额
+dispatchInfo	object	配送信息
+dispatcherName	string	配送员姓名
+dispatcherMobile	string	配送员手机号
+dispatchAboutTime	string	预计配送时间
+destinationDistance	number	配送距离
+orderCommodityList	array[object]	订单商品列表，每项包含以下字段
+commodityId	number	商品ID
+commodityCode	string	商品编码
+commodityName	string	商品名称
+payableMoney	number	应付金额
+payMoney	number	实付金额
+orderType	string	订单类型
+customerParams	object | null	自定义参数
+
+例子
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "orderId": "7639308439653908490",
+    "orderStatus": 10,
+    "orderStatusName": "待付款",
+    "aboutTime": 0,
+    "takeMealTime": "",
+    "takeMealCodeInfo": {
+      "code": "生成中",
+      "takeOrderId": "agRGjRM3AAo="
+    },
+    "shopInfo": {
+      "deptId": 245062453,
+      "deptName": "AI点单专用",
+      "address": "北京安贞环宇荟",
+      "deptTags": [],
+      "longitude": 116.392435,
+      "latitude": 39.982376,
+      "workTimeStart": "00:00",
+      "workTimeEnd": "24:00",
+      "distance": 0,
+      "number": "(No.100070)"
+    },
+    "productInfoList": null,
+    "orderPayAmount": 16,
+    "dispatchInfo": {
+      "dispatcherName": "",
+      "dispatcherMobile": "",
+      "dispatchAboutTime": "",
+      "destinationDistance": 0
+    },
+    "orderCommodityList": [
+      {
+        "commodityId": 11447,
+        "commodityCode": "SP9636",
+        "commodityName": "耶加雪菲拿铁",
+        "payableMoney": 16,
+        "payMoney": 16
+      }
+    ],
+    "orderType": "2",
+    "customerParams": null
+  },
+  "success": true
+}
+cancelOrder
+瑞幸咖啡取消订单
+
+入参
+参数名	类型	必填	说明
+orderId	string	必填	订单ID
+
+例子
+响应data
+字段	类型	说明
+data	boolean	是否取消成功
+
+例子
+{
+  "code": 0,
+  "msg": "success",
+  "data": true,
+  "success": true
+}

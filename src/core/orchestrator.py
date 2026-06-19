@@ -99,29 +99,45 @@ class Orchestrator:
 
     @staticmethod
     def _format_active_task(active_task: dict | None) -> str:
-        """Format active_task as a human-readable context block for Planner injection."""
+        """Format active_task as a human-readable context block for Planner injection.
+
+        Output format: task header → known values (可直接用作字面量) → option lists.
+        """
         if not active_task:
             return ""
         lines = []
         task_type = active_task.get("task_type", "unknown")
         stage = active_task.get("stage", "in_progress")
         lines.append(f"当前有未完成任务：{task_type}，进度：{stage}")
+
         ctx = active_task.get("context", {})
-        ctx_parts = []
+
+        # ── Known values (可直接用作字面量，不用 {{step.x.output}} 引用) ──
+        known = []
         if ctx.get("selected_dept_name") and ctx.get("selected_dept_id"):
-            ctx_parts.append(f"门店={ctx['selected_dept_name']}(dept_id:{ctx['selected_dept_id']})")
+            known.append(f"门店名称：{ctx['selected_dept_name']}")
+            known.append(f"门店ID：{ctx['selected_dept_id']}")
         elif ctx.get("selected_dept_id"):
-            ctx_parts.append(f"门店 dept_id={ctx['selected_dept_id']}")
+            known.append(f"门店ID：{ctx['selected_dept_id']}")
+        if known:
+            lines.append("当前已知信息（可直接用作参数值，不用引用上一步 output）：")
+            for k in known:
+                lines.append(f"  · {k}")
+
+        # ── Option lists for user to choose from ────────────────────────
         if ctx.get("store_list"):
-            ctx_parts.append(f"附近有 {len(ctx['store_list'])} 家门店可选")
+            store_summary = "\n".join(
+                f"  {i+1}. {s.get('deptName','?')} [dept_id: {s.get('deptId','?')}]"
+                for i, s in enumerate(ctx["store_list"])
+            )
+            lines.append(f"附近门店列表：\n{store_summary}")
         if ctx.get("menu_items"):
             menu_summary = "\n".join(
                 f"  {i+1}. {s.get('productName','?')} [ID:{s.get('productId','?')}]"
                 for i, s in enumerate(ctx["menu_items"])
             )
             lines.append(f"当前菜单列表：\n{menu_summary}")
-        if ctx_parts:
-            lines.append("已知信息：" + "，".join(ctx_parts))
+
         return "\n".join(lines)
 
     @staticmethod
