@@ -306,7 +306,7 @@ class Planner:
             "model": DEEPSEEK_MODEL,
             "messages": messages,
             "temperature": 0.3,
-            "max_tokens": 2000,
+            "max_tokens": 4000,
             # No tools/function_calling — LLM outputs DSL as JSON text
         }
 
@@ -316,7 +316,7 @@ class Planner:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(DEEPSEEK_API_URL, json=payload, headers=headers)
                 resp.raise_for_status()
                 data = resp.json()

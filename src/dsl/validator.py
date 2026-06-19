@@ -78,8 +78,6 @@ class Validator:
     def _extract_json(text: str) -> str | None:
         """Try to extract JSON from text that may contain extra content."""
         text = text.strip()
-        import logging
-        logging.getLogger(__name__).warning("Raw LLM output (first 500 chars): %s", text[:500])
         # Direct parse first
         brace_start = text.find("{")
         brace_end = text.rfind("}")
