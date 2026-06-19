@@ -438,48 +438,55 @@ async def handle_get_product_detail(args: dict, deps) -> str:
     logger.warning("get_product_detail RAW: %s", json.dumps(result, ensure_ascii=False)[:1000])
     logger.debug("get_product_detail raw: %s", json.dumps(result, ensure_ascii=False)[:500])
 
-    if not result:
+    # API wraps result in {"code":0, "data":{...}}
+    data = result.get("data") or result
+    if not data:
         return "未找到该商品详情"
 
     name = (
-        result.get("productName")
-        or result.get("name")
-        or result.get("itemName")
+        data.get("productName")
+        or data.get("name")
+        or data.get("itemName")
         or "未知商品"
     )
     price = (
-        result.get("salePrice")
-        or result.get("price")
-        or result.get("minPrice")
+        data.get("salePrice")
+        or data.get("price")
+        or data.get("minPrice")
         or ""
     )
-    desc = result.get("description") or result.get("desc") or ""
-    sku_code = result.get("skuCode") or result.get("sku") or ""
+    desc = data.get("description") or data.get("desc") or ""
+    sku_code = data.get("skuCode") or data.get("sku") or ""
+
+    deps.session_state["specs_shown"] = True
+    logger.info("session_state: specs_shown=True for product %s", product_id)
 
     lines = [f"📄 {name}"]
     if price:
         lines.append(f"  价格：¥{price}")
     if desc:
         lines.append(f"  说明：{desc[:100]}")
+    if sku_code:
+        lines.append(f"  SKU：{sku_code}")
 
-    # Extract SKU/spec options if present
-    sku_list = result.get("skuList") or result.get("specList") or result.get("skus") or []
-    if isinstance(sku_list, list) and sku_list:
-        lines.append(f"  规格选项：")
-        for sku in sku_list[:10]:
-            sku_name = sku.get("skuName") or sku.get("name") or sku.get("spec") or ""
-            sku_price = sku.get("salePrice") or sku.get("price") or ""
-            sku_code_val = sku.get("skuCode") or sku.get("code") or ""
-            sku_parts = [sku_name]
-            if sku_price:
-                sku_parts.append(f"¥{sku_price}")
-            if sku_code_val:
-                sku_parts.append(f"[{sku_code_val}]")
-            lines.append(f"    · {' '.join(sku_parts)}")
+    # Extract spec options from productAttrs (MCP API format)
+    product_attrs = data.get("productAttrs") or []
+    if isinstance(product_attrs, list) and product_attrs:
+        for attr in product_attrs[:6]:
+            attr_name = attr.get("attributeName") or "?"
+            sub_attrs = attr.get("productSubAttrs") or []
+            if sub_attrs:
+                options = []
+                for sa in sub_attrs[:8]:
+                    opt_name = sa.get("attributeName") or "?"
+                    if sa.get("selected"):
+                        options.append(f"{opt_name} ✓")
+                    else:
+                        options.append(opt_name)
+                lines.append(f"  {attr_name}：" + "、".join(options))
     else:
-        # Fallback: show raw data keys
-        keys = list(result.keys())[:10]
-        if sku_code:
-            lines.append(f"  SKU：{sku_code}")
+        keys = list(data.keys())[:10]
+        if keys:
+            lines.append("  原始字段：" + "、".join(keys))
 
     return "\n".join(lines)
