@@ -203,6 +203,8 @@ def create_registry() -> SkillRegistry:
             description=(
                 "搜索瑞幸咖啡门店的菜单，按饮品名称查找商品。"
                 "需要先有门店ID（通过 luckin_find_store 获取）。"
+                "注意：搜索结果中的 SKU 是产品级 SKU，不要直接用于下单。"
+                "必须先调 luckin_get_product_detail 获取 variant 级 SKU。"
             ),
             params={
                 "dept_id": {
@@ -228,11 +230,13 @@ def create_registry() -> SkillRegistry:
             description=(
                 "预览瑞幸咖啡订单，显示商品明细和价格。"
                 "下单前调用，需要门店ID和商品信息。"
+                "注意：sku_code 必须使用 luckin_get_product_detail 返回的 variant 级 SKU，"
+                "不可用 luckin_search_menu 返回的产品级 SKU。"
             ),
             params={
                 "dept_id": {"type": "int", "required": True, "description": "门店ID"},
                 "product_id": {"type": "int", "required": True, "description": "商品ID"},
-                "sku_code": {"type": "string", "required": True, "description": "商品SKU编码"},
+                "sku_code": {"type": "string", "required": True, "description": "variant 级 SKU（从 luckin_get_product_detail 获取）"},
                 "amount": {"type": "int", "required": False, "description": "数量，默认1"},
             },
             output="string（订单预览）",
@@ -247,13 +251,13 @@ def create_registry() -> SkillRegistry:
             description=(
                 "创建瑞幸咖啡订单并完成支付。"
                 "需要先通过 luckin_find_store 获取门店ID，"
-                "通过 luckin_search_menu 获取商品信息。"
+                "通过 luckin_search_menu + luckin_get_product_detail 获取 variant SKU。"
                 "下单前建议先调用 luckin_preview_order 预览。"
             ),
             params={
                 "dept_id": {"type": "int", "required": True, "description": "门店ID"},
                 "product_id": {"type": "int", "required": True, "description": "商品ID"},
-                "sku_code": {"type": "string", "required": True, "description": "商品SKU编码"},
+                "sku_code": {"type": "string", "required": True, "description": "variant 级 SKU（从 luckin_get_product_detail 获取）"},
                 "amount": {"type": "int", "required": False, "description": "数量，默认1"},
             },
             output="string（下单结果）",
@@ -266,14 +270,15 @@ def create_registry() -> SkillRegistry:
             name="luckin_get_product_detail",
             keywords=["详情", "规格", "选项", "冰", "热", "糖度", "杯型", "看", "看看"],
             description=(
-                "查看瑞幸咖啡饮品的详细信息和规格选项（冰/热、糖度、杯型、SKU编码等）。"
+                "查看瑞幸咖啡饮品的详细信息和规格选项（冰/热、糖度、杯型）。"
+                "返回 variant 级 SKU 编码，预览和下单必须使用此 SKU，不可用产品级 SKU。"
                 "需要先有门店ID和商品ID（通过 luckin_search_menu 获取商品ID）。"
             ),
             params={
                 "dept_id": {"type": "int", "required": True, "description": "门店ID"},
                 "product_id": {"type": "int", "required": True, "description": "商品ID，从 luckin_search_menu 结果中提取"},
             },
-            output="string（商品详情 + 规格选项）",
+            output="string（商品详情 + 规格选项 + variant SKU）",
             progress_message="正在查询商品详情…",
             handler=luckin.handle_get_product_detail,
         ),
