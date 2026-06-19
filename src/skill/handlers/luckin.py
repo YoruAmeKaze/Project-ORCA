@@ -357,7 +357,7 @@ async def handle_create_order(args: dict, deps) -> str:
     result = await client.create_order(dept_id, items, lat, lng)
 
     # Debug: log full response for troubleshooting
-    logger.debug("create_order raw response: %s", json.dumps(result, ensure_ascii=False)[:500])
+    logger.warning("create_order RAW response: %s", json.dumps(result, ensure_ascii=False)[:1000])
 
     # Check for top-level error or API failure
     err = result.get("error") or result.get("errMsg") or result.get("message")
