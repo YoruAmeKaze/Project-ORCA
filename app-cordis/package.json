@@ -1,0 +1,24 @@
+{
+  "name": "app-cordis",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Project Orca — Cordis(TypeScript) 版，迁移 Phase 1：飞书 → AI 回复最小闭环",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.0"
+  }
+}
