@@ -16,7 +16,7 @@ import { InfoExecutor } from '../dist/agents/executor.js'
 import { JsonlInfoRecordStore } from '../dist/agents/store.js'
 import { route } from '../dist/agents/router.js'
 import { foodLogAgent } from '../dist/agents/builtins/food-log.js'
-import { createReceiverHandler } from '../dist/plugins/info-receiver.js'
+import { createReceiverHandler, createImageUploadHandler } from '../dist/plugins/info-receiver.js'
 import { processFoodImage } from '../dist/plugins/food-image.js'
 import { resolveChatAgent, imageRouter } from '../dist/plugins/image-router.js'
 
@@ -318,6 +318,53 @@ const store = new JsonlInfoRecordStore(recordsDir)
   await new Promise((r) => setTimeout(r, 200))
   const afterBad = await store8.query({})
   check('router: 绑定未知 agent → 忽略（不写档不回复）', afterBad.length === 1 && replies.length === 1)
+}
+
+// ---------- 8. 直连图片上传通道（info-images，POST /info/images，跳过飞书） ----------
+{
+  const store9 = new JsonlInfoRecordStore(join(recordsDir, 'phase9'))
+  const imagesDir = join(tmpDir, 'images9')
+  const stubVision = { describe: async () => '{"food":"麻辣烫","kcal":720,"confidence":0.8}' }
+  const tokens = { 'food-token-1': ['food-agent'], 'other-token-1': ['stock-agent'] }
+  const handler = createImageUploadHandler(
+    { port: 0, host: '127.0.0.1', tokens },
+    { store: store9, vision: stubVision, logger, imagesDir },
+  )
+  const server = createServer((req, res) => { void handler(req, res).catch(() => res.writeHead(500).end()) })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const base = `http://127.0.0.1:${server.address().port}`
+  const pngB64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]).toString('base64')
+
+  const post = async (body, token) => {
+    const res = await fetch(base + '/info/images', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', connection: 'close', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(body),
+    })
+    return { status: res.status, json: await res.json().catch(() => ({})) }
+  }
+
+  const ok = await post({ imageBase64: pngB64 }, 'food-token-1')
+  check('info-images: 合法上传 → 200 + 识别结果', ok.status === 200 && ok.json.ok && ok.json.food === '麻辣烫' && ok.json.kcal === 720 && ok.json.reply.includes('720 千卡'))
+  const rec = await store9.query({ namespaces: ['food-agent'], types: ['food-log'] })
+  check('info-images: 识别后写 food-log 档案', rec.length === 1 && rec[0].payload.food === '麻辣烫', `len=${rec.length} rec=${JSON.stringify(rec)}`)
+
+  const noAuth = await post({ imageBase64: pngB64 }, undefined)
+  check('info-images: 无 token → 401', noAuth.status === 401)
+  const badToken = await post({ imageBase64: pngB64 }, 'wrong-token')
+  check('info-images: 错误 token → 401', badToken.status === 401)
+  const badNs = await post({ imageBase64: pngB64 }, 'other-token-1')
+  check('info-images: token 未授权 food-agent → 403', badNs.status === 403)
+  const badB64 = await post({ imageBase64: 'not-base64!!!' }, 'food-token-1')
+  check('info-images: 非法 base64 → 400', badB64.status === 400)
+  const noImg = await post({ note: '没有图' }, 'food-token-1')
+  check('info-images: 缺 imageBase64/imageUrl → 400', noImg.status === 400)
+
+  const health = await fetch(`${base}/health`, { headers: { connection: 'close' } })
+  check('info-images: /health → 200', health.status === 200)
+
+  await new Promise((r) => server.close(r))
+  server.closeAllConnections()
 }
 
 // ---------- 清理 ----------

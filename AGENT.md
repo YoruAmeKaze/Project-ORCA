@@ -242,8 +242,9 @@ FastAPI + Uvicorn（reload）；DeepSeek API（规划/润色）；Qwen API（视
   - **视觉后端可切换**：`ORCA_VISION_BACKEND=ollama`（本地 Ollama，`OLLAMA_VL_MODEL=qwen3-vl:4b`，免 apiKey，`max_tokens` 3000 防 reasoning 截断 + 空响应重试）| `dashscope`（默认，QWEN_API_*）
   - **人设**（用户指定）：平级称呼（不喊"老板"）+ 语气"淡淡死感"（平静简短、可靠不煽情、不用 emoji）；识别回复模板 `这份X，约 Y 千卡。记下了。`
   - 配置键：`ORCA_VISION_BACKEND`、`QWEN_API_KEY/URL/MODEL`、`OLLAMA_HOST/OLLAMA_VL_MODEL`、`INFO_RECORDS_DIR`（默认 app-cordis/data/records）、`IMAGES_DIR`（默认 app-cordis/data/images）、`INFO_RECEIVER_PORT`（默认 8101）、`INFO_RECEIVER_TOKENS`、`ORCA_CHAT_BINDINGS`
-  - 验证：typecheck/build ✅；冒烟 `node scripts/smoke-info-agent.mjs` **53/53** ✅（含 chat_id 绑定路由、inject 断言、平级模板断言）；真实 iPhone 闭环 ✅ —— 食物群发图 → 消息资源下载 → 本地 qwen3-vl 识别"荷兰豆炒鸡丁 ≈ 320kcal" → 写档 → 独立消息回复 → 问"吃了多少卡" R0 命中
+  - 验证：typecheck/build ✅；冒烟 `node scripts/smoke-info-agent.mjs` **61/61** ✅（含 chat_id 绑定路由、inject 断言、平级模板断言、直连图片上传用例）；真实 iPhone 闭环 ✅ —— 食物群发图 → 消息资源下载 → 本地 qwen3-vl 识别"荷兰豆炒鸡丁 ≈ 320kcal" → 写档 → 独立消息回复 → 问"吃了多少卡" R0 命中
   - 合规修复（2026-08-25）：①控制台 exporter `levels.default: 1 → 2`（fork 语义：level ≤ 阈值才导出，default:1 吞 WARN）；②`downloadImage` 消息资源接口 + 10s 超时 + 错误带 code/msg；③`store.append` 校验 ts/urgency；④food-agent `timeoutMs` 60s + executor 超时 abort 底层请求；⑤image-router 补 `plugin.inject` + 监听器 try/catch（防 unhandledRejection 崩服务）
+  - **直连图片上传（app-cordis v0.4.0，2026-08-25）**：`POST /info/images`（info-receiver 新端点，Bearer 鉴权，token 白名单须含 food-agent）——iPhone 快捷指令 Base64 直传跳过飞书 → food 管线识别 → 写 food-log 档案 → **同步返回** `{food,kcal,confidence,recordId,reply}`（快捷指令可直接弹结果）；base64 往返校验防非法输入；`infoReceiver.inject=['infoStore','vision']`（cordis 服务访问必须声明 inject，漏则激活即崩）。验证：smoke 61/61 + 手动 401/200/400 全通
 - 下一步：迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull），refine 留主 agent；会话持久化（jsonl）；urgency=2 主动推送（按落地安排后置）；独立飞书 bot 的 app_id 路由（远期，D-AGENT-13）；群聊免 @ 替代方案（图片走 p2p）
 
 ---

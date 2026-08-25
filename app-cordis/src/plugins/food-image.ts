@@ -24,7 +24,7 @@ export interface FoodImageDeps {
 export async function processFoodImage(
   buf: Buffer,
   deps: FoodImageDeps,
-): Promise<{ reply: string; food: string; kcal: number; recordId?: string }> {
+): Promise<{ reply: string; food: string; kcal: number; confidence?: number; recordId?: string }> {
   await mkdir(deps.imagesDir, { recursive: true })
   const filePath = resolve(deps.imagesDir, `${Date.now()}-${randomUUID().slice(0, 8)}.jpg`)
   await writeFile(filePath, buf)
@@ -36,7 +36,7 @@ export async function processFoodImage(
   const d = result.data
   // 平级 + 平淡（2026-08-25 用户指定）：不喊"老板"，记账式短句
   const reply = `这${d.amount ? d.amount : '份'}${d.food}，约 ${d.kcal} 千卡。记下了。`
-  return { reply, food: d.food, kcal: d.kcal, recordId: d.recordId }
+  return { reply, food: d.food, kcal: d.kcal, confidence: d.confidence, recordId: d.recordId }
 }
 
 /**
