@@ -41,20 +41,24 @@ export class FeishuClient {
     return this.token.value
   }
 
-  /** 回复指定消息（im.message.receive_v1 的 message_id） */
-  async replyText(messageId: string, text: string): Promise<void> {
+  /**
+   * 向会话发送独立文本消息（receive_id_type=chat_id，p2p 与群聊均可）。
+   * 注意：用「发送消息」接口（im/v1/messages）而不是「回复消息」接口（messages/{id}/reply）——
+   * 回复接口在飞书 UI 显示为引用气泡；发送接口是普通聊天消息（2026-08-25 用户要求）。
+   */
+  async sendToChat(chatId: string, text: string): Promise<void> {
     const token = await this.getTenantAccessToken()
-    const res = await fetch(`${this.config.baseUrl}/open-apis/im/v1/messages/${messageId}/reply`, {
+    const res = await fetch(`${this.config.baseUrl}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${token}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }) }),
+      body: JSON.stringify({ receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text }) }),
     })
     const data = (await res.json().catch(() => null)) as ApiResponse | null
     if (!res.ok || !data || data.code !== 0) {
-      throw new Error(`feishu reply failed: http ${res.status} code ${data?.code} ${data?.msg ?? ''}`)
+      throw new Error(`feishu sendToChat failed: http ${res.status} code ${data?.code} ${data?.msg ?? ''}`)
     }
   }
 
@@ -78,15 +82,24 @@ export class FeishuClient {
     }
   }
 
-  /** 下载图片消息的二进制（im.message.receive_v1 image 的 image_key → 图片字节） */
-  async downloadImage(imageKey: string): Promise<Buffer> {
+  /**
+   * 下载图片消息的二进制（im.message.receive_v1 image 消息 → 图片字节）。
+   * 注意：消息里收到的图片必须走「消息资源下载」接口（im/v1/messages/{message_id}/resources/{file_key}?type=image），
+   * 不能用 im/v1/images/{image_key}（那是上传场景的 key，对消息图片返回 234001 Invalid request param）。
+   */
+  async downloadImage(messageId: string, imageKey: string): Promise<Buffer> {
     const token = await this.getTenantAccessToken()
+    const url = `${this.config.baseUrl}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(imageKey)}?type=image`
     // 10s 超时：防止网络挂起时 food-image 监听器永久 pending（坏 key 正常 ~1s 抛 400）
-    const res = await fetch(`${this.config.baseUrl}/open-apis/im/v1/images/${encodeURIComponent(imageKey)}`, {
+    const res = await fetch(url, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(10_000),
     })
-    if (!res.ok) throw new Error(`feishu image download http ${res.status}`)
+    if (!res.ok) {
+      // 带上飞书返回的 code/msg，便于定位（权限/参数/key 时效等）
+      const body = await res.text().catch(() => '')
+      throw new Error(`feishu image download http ${res.status}: ${body.slice(0, 300)}`)
+    }
     const buf = Buffer.from(await res.arrayBuffer())
     if (!buf.length) throw new Error('feishu image empty')
     return buf

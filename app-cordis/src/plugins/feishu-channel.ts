@@ -8,15 +8,17 @@ export interface FeishuMessageEvent {
   sessionId: string
   openId: string
   messageId: string
+  chatId: string
   text: string
 }
 
-/** 飞书图片消息事件（food-image 插件订阅，D-AGENT-13 通道①） */
+/** 飞书图片消息事件（image-router 订阅，D-AGENT-13 通道① + D-AGENT-15 会话绑定路由） */
 export interface FeishuImageEvent {
   eventId: string
   sessionId: string
   openId: string
   messageId: string
+  chatId: string
   imageKey: string
 }
 
@@ -30,6 +32,7 @@ interface FeishuPayload {
       message_id?: string
       message_type?: string
       chat_type?: string
+      chat_id?: string
       content?: string
     }
   }
@@ -37,8 +40,9 @@ interface FeishuPayload {
 
 /**
  * 飞书 webhook 通道插件（纯 Cordis 自写，对应 Python 版 router/feishu.py）。
- * 职责：challenge 验证、event_id 60s 去重、仅 p2p（text 与 image）、fire-and-forget 立即回 200。
- * image 消息 → 派发 'feishu/image' 事件（D-AGENT-13 通道①：手机快捷指令发图到飞书）。
+ * 职责：challenge 验证、event_id 60s 去重、支持 p2p 与群聊（chat_type 不设限，D-AGENT-15 工位路由）、
+ * fire-and-forget 立即回 200。事件统一带 chatId，供上层按 chat_id → agent 绑定表路由。
+ * text 消息 → 'feishu/message'；image 消息 → 'feishu/image'（D-AGENT-13 通道①）。
  */
 export function feishuChannel(ctx: Context, config: OrcaConfig) {
   const recentEvents = new Map<string, number>()
@@ -94,17 +98,36 @@ export function feishuChannel(ctx: Context, config: OrcaConfig) {
 
     const eventId = payload.header.event_id ?? ''
     if (isDuplicate(eventId)) {
+      ctx.logger.info('[feishu-channel] 重复事件跳过: %s', eventId)
       return sendJson(res, 200, { ok: true, skipped: 'duplicate' })
     }
 
     const sender = payload.event?.sender
     const message = payload.event?.message
-    if (!message || message.chat_type !== 'p2p') {
-      return sendJson(res, 200, { ok: true, skipped: 'not-p2p' })
+    if (!message) {
+      ctx.logger.warn('[feishu-channel] 事件缺 message 字段: %s', eventId)
+      return sendJson(res, 200, { ok: true, skipped: 'no-message' })
     }
 
     const openId = sender?.sender_id?.open_id ?? ''
-    const base = { eventId, sessionId: openId, openId, messageId: message.message_id ?? '' }
+    const chatId = message.chat_id ?? ''
+    const chatType = message.chat_type ?? '(空)'
+    // 事件到达即记录（含群聊），便于排查"群消息没反应"（D-AGENT-15 工位路由）
+    ctx.logger.info(
+      '[feishu-channel] 收到事件 chat=%s chatType=%s msgType=%s msgId=%s',
+      chatId,
+      chatType,
+      message.message_type ?? '(空)',
+      message.message_id ?? '(空)',
+    )
+    // D-AGENT-15：事件带 chat_id（群聊/单聊工位），上层按 chat_id → agent 绑定表路由
+    const base = {
+      eventId,
+      sessionId: openId,
+      openId,
+      messageId: message.message_id ?? '',
+      chatId,
+    }
 
     // 文本消息 → feishu/message（主 agent 走 R0 查档 + LLM 回复）
     if (message.message_type === 'text') {
@@ -115,6 +138,7 @@ export function feishuChannel(ctx: Context, config: OrcaConfig) {
         // 保留空文本
       }
       if (!text.trim()) {
+        ctx.logger.info('[feishu-channel] 空文本跳过: %s', eventId)
         return sendJson(res, 200, { ok: true, skipped: 'empty-text' })
       }
       sendJson(res, 200, { ok: true })
@@ -131,6 +155,7 @@ export function feishuChannel(ctx: Context, config: OrcaConfig) {
         // 保留空 key
       }
       if (!imageKey) {
+        ctx.logger.warn('[feishu-channel] image 消息缺 image_key: %s', eventId)
         return sendJson(res, 200, { ok: true, skipped: 'empty-image-key' })
       }
       sendJson(res, 200, { ok: true })
@@ -139,6 +164,7 @@ export function feishuChannel(ctx: Context, config: OrcaConfig) {
     }
 
     // 其他消息类型暂不处理
+    ctx.logger.info('[feishu-channel] 暂不处理的消息类型: %s', message.message_type ?? '(空)')
     return sendJson(res, 200, { ok: true, skipped: 'unsupported-type' })
   }
 

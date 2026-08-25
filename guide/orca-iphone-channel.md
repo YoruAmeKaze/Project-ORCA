@@ -41,12 +41,12 @@ iPhone（主力 = 快捷指令，零开发者账号）
 - 收文件：`message_type=file`，content 含 `file_key` → 下载接口同理
 - 机器人上传图片：`im/v1/images`（快捷指令"获取 URL 内容"多步也可发，但走分享面板更简单）
 
-**食物流程（用户已定）**：
-1. iPhone 拍照 → 快捷指令 → 分享到飞书（发给食物 agent 的账号/群）
-2. Orca 收到 image 消息 → 下载 → Qwen 视觉识别（`qwen3.7-plus`，DashScope）→ 写 `food-log` 档案
+**食物流程（用户已定，2026-08-25 更新：走工位）**：
+1. iPhone 拍照 → 快捷指令 → 分享到飞书「食物群」（工位，D-AGENT-15）
+2. Orca bot 收 image 消息 → 会话绑定路由（chat_id=食物群 → food-agent）→ 下载 → Qwen 视觉识别（`qwen3.7-plus`，DashScope）→ 写 `food-log` 档案
 3. 回复确认 + R0 查档复用（"我昨天吃了多少卡"直接查档案，零模型调用）
 
-**多账号路由**：若给食物 agent 单独开一个飞书应用（bot），其事件订阅 URL 指向 Orca 同一端点；飞书事件 header 含 `app_id`，可按 app_id 路由到不同 agent（本轮先统一走 food 管线，加 app_id 路由是后续小改）。
+**多账号路由 → 会话绑定路由（D-AGENT-15，2026-08-25 定稿）**：不开第二个飞书应用。**一个 bot、多个会话（群）= 工位**：食物群 → food-agent，主聊天 → Orca；事件按 `chat_id → agent` 绑定表路由，每事件只到一个 agent（不广播，杜绝多图片 agent 混图）。独立账号降级为远期（第三方对接/最小权限隔离时）；届时再按 header 的 `app_id` 路由。
 
 参考实现：[nanobot 的多媒体下载支持](https://github.com/HKUDS/nanobot/commit/98ef57e3704860c54b86f6e8ae0d742c646883aa)。
 
@@ -98,7 +98,7 @@ iPhone（主力 = 快捷指令，零开发者账号）
 | 2 | Qwen 视觉客户端（vision.ts）+ food agent（识别→food-log 档案） | 食物闭环 | **本轮** |
 | 3 | `/info/records` Push 端点 + Bearer 鉴权 | 健康/通用 | 下一轮 |
 | 4 | 健康数据接收（Health Auto Export 拉取器 或 /info/records） | 健康 | 待排 |
-| 5 | 第二个飞书 bot 的 app_id 路由（食物 agent 独立账号） | 食物 | 待用户开账号后 |
+| 5 | 会话绑定路由（chat_id → agent 工位分配，D-AGENT-15）；独立 bot 的 app_id 路由留远期 | 食物/多 agent | 待实现 |
 
 ---
 

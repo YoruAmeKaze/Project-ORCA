@@ -4,6 +4,7 @@
  * 覆盖：闭集注册表 / 档案室(JSONL+supersedes+ttl+软删+pending) / Pull 执行管线(校验/超时/审计)
  *      / R0 查档 / 外部上报通道(Bearer 鉴权) / food-agent 识别→写档全链路（视觉用 stub，不调真实 API）
  *      / 日志级别 quirk 回归（default:2 放行 warn）+ 事件派发（顶层与插件 fiber 监听器）
+ *      / 会话绑定路由（D-AGENT-15：chat_id → agent 工位分配，绑定/未绑定/未知 agent）
  */
 import { createServer } from 'node:http'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -17,6 +18,7 @@ import { route } from '../dist/agents/router.js'
 import { foodLogAgent } from '../dist/agents/builtins/food-log.js'
 import { createReceiverHandler } from '../dist/plugins/info-receiver.js'
 import { processFoodImage } from '../dist/plugins/food-image.js'
+import { resolveChatAgent, imageRouter } from '../dist/plugins/image-router.js'
 
 const results = []
 function check(name, cond, detail = '') {
@@ -223,8 +225,8 @@ const store = new JsonlInfoRecordStore(recordsDir)
   const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
 
   const out = await processFoodImage(pngBytes, { vision: stubVision, store: store5, logger, imagesDir })
-  check('food-image: 识别成功并生成回复文案', out.food === '牛肉面' && out.kcal === 540 && out.reply.includes('540 kcal'))
-  check('food-image: 回复带人设（老板）', out.reply.startsWith('老板'))
+  check('food-image: 识别成功并生成回复文案', out.food === '牛肉面' && out.kcal === 540 && out.reply.includes('540 千卡'))
+  check('food-image: 回复平级（无"老板"称呼）', !out.reply.includes('老板') && out.reply.includes('牛肉面'))
   check('food-image: 图片已落盘', (await import('node:fs/promises')).readdir(imagesDir).then((f) => f.length === 1))
   const logged = await store5.query({ namespaces: ['food-agent'], types: ['food-log'] })
   check('food-image: 识别后自动写 food-log 档案', logged.length === 1 && logged[0].payload.food === '牛肉面')
@@ -265,6 +267,57 @@ const store = new JsonlInfoRecordStore(recordsDir)
   ctxA.emit('feishu/image', {})
   await new Promise((r) => setTimeout(r, 50))
   check('events: ctx.emit 触发顶层与插件 fiber 监听器', topFired === 1 && pluginFired === 1)
+}
+
+// ---------- 8. 会话绑定路由（D-AGENT-15）：chat_id → agent 工位分配 ----------
+{
+  // 回归保护：imageRouter 必须声明 inject（真实环境 infoStore 由 infoAgents 兄弟 fiber 提供，
+  // 缺 inject 会触发 cordis 门控 "cannot get property X without inject" → 事件处理崩进程）
+  check('router: imageRouter 声明 inject(feishu/vision/infoStore)', ['feishu', 'vision', 'infoStore'].every((n) => imageRouter.inject?.includes(n)))
+
+  // 纯函数：绑定解析
+  check('router: 绑定命中', resolveChatAgent({ 'oc_food': 'food-agent' }, 'oc_food') === 'food-agent')
+  check('router: 未绑定 → undefined（默认主管线）', resolveChatAgent({ 'oc_food': 'food-agent' }, 'oc_main') === undefined)
+  check('router: 空 chatId → undefined', resolveChatAgent({ 'oc_food': 'food-agent' }, '') === undefined)
+
+  // 集成：image-router 插件按 chat_id 派发（fake feishu 下载/回复 + stub 视觉）
+  const ctxR = new Context()
+  const store8 = new JsonlInfoRecordStore(join(recordsDir, 'phase8'))
+  const replies = []
+  const fakeFeishu = {
+    downloadImage: async () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]),
+    sendToChat: async (chatId, text) => { replies.push({ chatId, text }) },
+  }
+  const stubVision8 = { describe: async () => '{"food":"牛肉面","kcal":540,"amount":"一碗","confidence":0.85}' }
+  ctxR.provide('feishu', fakeFeishu)
+  ctxR.provide('vision', stubVision8)
+  ctxR.provide('infoStore', store8)
+  const routerConfig = {
+    chatBindings: { 'oc_food_group': 'food-agent', 'oc_bad_binding': 'unknown-agent' },
+    imagesDir: join(tmpDir, 'images8'),
+    dryRun: false,
+  }
+  ctxR.plugin(imageRouter, routerConfig)
+  await new Promise((r) => setTimeout(r, 200)) // 等插件 fiber 启动
+
+  // 绑定食物群 → food 管线：识别 → 档案 → 回复确认
+  ctxR.emit('feishu/image', { eventId: 'r1', sessionId: 'ou', openId: 'ou', messageId: 'om_food', chatId: 'oc_food_group', imageKey: 'img_k1' })
+  await new Promise((r) => setTimeout(r, 400))
+  const foodRecs = await store8.query({ namespaces: ['food-agent'], types: ['food-log'] })
+  check('router: 绑定食物群 → 写 food-log 档案', foodRecs.length === 1 && foodRecs[0].payload.food === '牛肉面')
+  check('router: 绑定食物群 → 回复确认', replies.length === 1 && replies[0].chatId === 'oc_food_group' && replies[0].text.includes('540 千卡'))
+
+  // 未绑定会话 → 默认主管线（忽略图片，不写档不回复）
+  ctxR.emit('feishu/image', { eventId: 'r2', sessionId: 'ou', openId: 'ou', messageId: 'om_main', chatId: 'oc_main', imageKey: 'img_k2' })
+  await new Promise((r) => setTimeout(r, 200))
+  const afterUnbound = await store8.query({})
+  check('router: 未绑定会话 → 忽略（不写档）', afterUnbound.length === 1 && replies.length === 1)
+
+  // 绑定未知 agent → warn + 忽略
+  ctxR.emit('feishu/image', { eventId: 'r3', sessionId: 'ou', openId: 'ou', messageId: 'om_bad', chatId: 'oc_bad_binding', imageKey: 'img_k3' })
+  await new Promise((r) => setTimeout(r, 200))
+  const afterBad = await store8.query({})
+  check('router: 绑定未知 agent → 忽略（不写档不回复）', afterBad.length === 1 && replies.length === 1)
 }
 
 // ---------- 清理 ----------

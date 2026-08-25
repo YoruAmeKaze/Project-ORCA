@@ -91,7 +91,8 @@ export const foodLogAgent: InfoAgent<FoodLogInput, FoodLogOutput> = {
     modes: ['pull', 'push'],
     recordTypes: ['food-log'],
     kind: 'llm',
-    timeoutMs: 30_000,
+    // Qwen 视觉实测 ~18s（热）/ 首次冷调用可 >30s，留 60s 余量（2026-08-25 L1 实测）
+    timeoutMs: 60_000,
     isConcurrencySafe: false,
     costHint: 'paid',
   },
@@ -118,7 +119,12 @@ export const foodLogAgent: InfoAgent<FoodLogInput, FoodLogOutput> = {
         dataUrl = `data:${mime};base64,${buf.toString('base64')}`
         photoRef = `local://${input.imagePath}`
       }
-      const raw = await vision.describe({ dataUrl, url: input.imageUrl }, buildPrompt(input.note), { maxTokens: 400 })
+      const raw = await vision.describe({ dataUrl, url: input.imageUrl }, buildPrompt(input.note), {
+        // qwen3-vl 等 reasoning 模型：长 prompt 会输出大量 thinking，max_tokens 太小会被吃光 → content 被截断为空。
+        // 实测 400 必空、3000 正常（本地 ~15-20s；executor 超时 60s 足够）
+        maxTokens: 3000,
+        signal: deps.signal, // 执行器超时中止时，真正取消视觉请求
+      })
       const parsed = parseRecognition(raw)
       const result: FoodLogOutput = {
         food: parsed.food,

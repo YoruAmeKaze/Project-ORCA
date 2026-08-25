@@ -91,7 +91,7 @@ guide/
 app-cordis/                    # ★ Cordis/TypeScript 版（Phase 1 最小闭环 + Phase 2 信息获取框架，见 §9.3）
 │   ├── src/agents/            # 信息获取框架：types（InfoAgent/InfoRecord）registry（闭集）store（档案室 JSONL）executor（Pull 执行）router（R0/R1）builtins/food-log.ts（food-agent）
 │   ├── src/services/          # feishu / llm（DeepSeek）/ vision（Qwen VL）
-│   ├── src/plugins/           # feishu-channel / agent（CEO：R0 查档 + 待汇报）/ info-agents / info-receiver（POST /info/records）/ food-image（飞书图片→识别→档案→回复）
+│   ├── src/plugins/           # feishu-channel（p2p/群聊，事件带 chat_id）/ agent（CEO：R0 查档 + 待汇报）/ info-agents / info-receiver（POST /info/records）/ image-router（D-AGENT-15 工位路由）/ food-image（food 管线处理器）
 │   └── src/data/              # records/ 档案室 JSONL + images/ 图片落盘（均 gitignore）
 ```
 
@@ -232,16 +232,19 @@ FastAPI + Uvicorn（reload）；DeepSeek API（规划/润色）；Qwen API（视
   - Agent 插件：`feishu/message` 事件 → persona+历史 → LLM → reply；`ORCA_DRY_RUN=1` 本地调试不发飞书
   - 端口 `CORDIS_PORT` 默认 8100（避开 Python 版 8000）；配置复用仓库根 `.env`（DEEPSEEK_API_URL 兼容完整端点归一化）
   - 验证：/health、challenge 回显、消息接收、重复事件去重、LLM 回复（dry-run）全部通过
-- **Phase 2 信息获取框架已落地（app-cordis v0.2.0，2026-08-25）**：按 `guide/orca-info-agent-framework.md` §3/§10/§13 实现 CEO-员工-档案室模型
+- **Phase 2 信息获取框架已落地（app-cordis v0.2.0 → v0.3.0，2026-08-25）**：按 `guide/orca-info-agent-framework.md` §3/§10/§13 实现 CEO-员工-档案室模型
   - `src/agents/`：types（InfoAgent/InfoRequest/InfoResult/InfoRecord/RecordQuery，§3 原样）+ registry（闭集，D-AGENT-02）+ store（档案室：每 namespace 一 JSONL、append-only + supersedes 更正、软删/整夹清空 + ttl 清理、pending 待汇报队列，D-AGENT-09/11/12）+ executor（Pull 管线：参数校验/串行/超时/输出校验/归一/审计，D-AGENT-03/07）+ router（R0 查档优先 + R1 关键词，D-AGENT-04/10）
-  - `src/agents/builtins/food-log.ts`：food-agent（首批 Push 源，pull+push 双模式，推理型内部 Qwen 视觉）；识别结果自动写 food-log 档案（urgency=0 静默、ttlDays=7、payload 只存 photoRef 本地路径——L1 不落明文日志）
+  - `src/agents/builtins/food-log.ts`：food-agent（首批 Push 源，pull+push 双模式，推理型内部视觉）；识别结果自动写 food-log 档案（urgency=0 静默、ttlDays=7、payload 只存 photoRef 本地路径——L1 不落明文日志）
   - `src/plugins/info-agents.ts` 装配（provide infoAgents/infoExecutor/infoStore + 注册内置 + 'info/record' 事件写档）+ `src/plugins/info-receiver.ts` 外部上报通道（POST /info/records，Bearer 鉴权 + namespace 白名单，默认端口 8101，未配 token 不启动）——即 D-AGENT-13 iPhone 三通道的通道②
-  - `src/plugins/agent.ts` CEO 集成（D-AGENT-10/11）：饮食类问题 R0 查档案注入上下文（命中即复用，零视觉调用）+ urgency=1 待汇报队列（peek 注入下条消息、回复成功后 ack）
-  - `src/plugins/food-image.ts` + feishu-channel image 分支 + `downloadImage`：飞书图片闭环（D-AGENT-13 通道①）——image 消息 → 下载 → Qwen 识别 → 写 food-log 档案 → 回复确认；失败兜底错误回复；dry-run 不真发飞书
-  - 配置键：`QWEN_API_KEY/URL/MODEL`（视觉）、`INFO_RECORDS_DIR`（档案目录，默认 app-cordis/data/records）、`IMAGES_DIR`（图片落盘，默认 app-cordis/data/images）、`INFO_RECEIVER_PORT`（默认 8101）、`INFO_RECEIVER_TOKENS`（JSON `{"token":["namespace"]}`）
-  - 验证：typecheck/build ✅；冒烟 `node scripts/smoke-info-agent.mjs` 45/45 ✅；真实 E2E（dry-run）✅ —— Push 入库 → 问"我昨天中午吃了多少卡？" → R0 命中回复"8/25 13:46 一份红烧肉盖饭，约 680 kcal"（零视觉调用）；urgency=1 记录下条消息自然带一句后 ack；POST image 事件 → 日志可见 `[food-image] 处理失败: feishu image download http 400`
-  - 合规修复（2026-08-25）：①控制台 exporter `levels.default: 1 → 2`（fork 语义：level ≤ 阈值才导出，default:1 会吞掉全部 WARN——food-image 失败日志曾被误判为事件派发问题）；②`downloadImage` 加 10s 超时；③`store.append` 校验 ts/urgency 信封
-- 下一步：迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull），refine 留主 agent；会话持久化（jsonl）；urgency=2 主动推送（按落地安排后置）；多飞书 bot 的 app_id 路由（D-AGENT-13，待用户开账号）
+  - `src/plugins/agent.ts` CEO 集成（D-AGENT-10/11）：饮食类问题 R0 查档案注入上下文（命中即复用，零视觉调用）+ urgency=1 待汇报队列（peek 注入下条消息、回复成功后 ack）；**回复用 `sendToChat(chatId)` 独立消息**（非引用回复，像微信聊天）
+  - `src/plugins/food-image.ts`（food 管线处理器，由 image-router 接收）+ feishu-channel image 分支 + `downloadImage`：飞书图片闭环（D-AGENT-13 通道①）——image 消息 → 下载（**消息资源接口** `messages/{id}/resources/{key}?type=image`）→ 识别 → 写 food-log 档案 → 独立消息回复
+  - `src/plugins/image-router.ts` 会话绑定路由（D-AGENT-15 工位分配）：feishu-channel 放开 chat_type（p2p/群聊）、事件带 chat_id；`ORCA_CHAT_BINDINGS`（JSON `{"<chat_id>":"<agent>"}`）绑定表，图片事件只派发给绑定 agent（不广播），未绑定会话 → 默认 Orca 主管线（当前无图片能力 → 忽略）
+  - **视觉后端可切换**：`ORCA_VISION_BACKEND=ollama`（本地 Ollama，`OLLAMA_VL_MODEL=qwen3-vl:4b`，免 apiKey，`max_tokens` 3000 防 reasoning 截断 + 空响应重试）| `dashscope`（默认，QWEN_API_*）
+  - **人设**（用户指定）：平级称呼（不喊"老板"）+ 语气"淡淡死感"（平静简短、可靠不煽情、不用 emoji）；识别回复模板 `这份X，约 Y 千卡。记下了。`
+  - 配置键：`ORCA_VISION_BACKEND`、`QWEN_API_KEY/URL/MODEL`、`OLLAMA_HOST/OLLAMA_VL_MODEL`、`INFO_RECORDS_DIR`（默认 app-cordis/data/records）、`IMAGES_DIR`（默认 app-cordis/data/images）、`INFO_RECEIVER_PORT`（默认 8101）、`INFO_RECEIVER_TOKENS`、`ORCA_CHAT_BINDINGS`
+  - 验证：typecheck/build ✅；冒烟 `node scripts/smoke-info-agent.mjs` **53/53** ✅（含 chat_id 绑定路由、inject 断言、平级模板断言）；真实 iPhone 闭环 ✅ —— 食物群发图 → 消息资源下载 → 本地 qwen3-vl 识别"荷兰豆炒鸡丁 ≈ 320kcal" → 写档 → 独立消息回复 → 问"吃了多少卡" R0 命中
+  - 合规修复（2026-08-25）：①控制台 exporter `levels.default: 1 → 2`（fork 语义：level ≤ 阈值才导出，default:1 吞 WARN）；②`downloadImage` 消息资源接口 + 10s 超时 + 错误带 code/msg；③`store.append` 校验 ts/urgency；④food-agent `timeoutMs` 60s + executor 超时 abort 底层请求；⑤image-router 补 `plugin.inject` + 监听器 try/catch（防 unhandledRejection 崩服务）
+- 下一步：迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull），refine 留主 agent；会话持久化（jsonl）；urgency=2 主动推送（按落地安排后置）；独立飞书 bot 的 app_id 路由（远期，D-AGENT-13）；群聊免 @ 替代方案（图片走 p2p）
 
 ---
 

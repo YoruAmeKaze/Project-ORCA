@@ -40,7 +40,8 @@ export function agent(ctx: Context, config: OrcaConfig) {
       if (config.dryRun) {
         ctx.logger.info('[dry-run] 不发送飞书，AI 回复: %s', reply)
       } else {
-        await feishu.replyText(msg.messageId, reply)
+        // 独立消息（非引用回复）：用发送接口 + chat_id，像普通聊天
+        await feishu.sendToChat(msg.chatId, reply)
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err)
@@ -49,7 +50,7 @@ export function agent(ctx: Context, config: OrcaConfig) {
         ctx.logger.info('[dry-run] 出错兜底回复: %s', detail.slice(0, 120))
       } else {
         const fallback = `出错了，稍等一下……（${detail.slice(0, 120)}）`
-        await feishu.replyText(msg.messageId, fallback).catch(() => {
+        await feishu.sendToChat(msg.chatId, fallback).catch(() => {
           // 兜底发送失败不再抛出，避免 unhandled rejection
         })
       }
@@ -84,7 +85,7 @@ async function buildArchiveContext(
   const pending = await store.peekPending()
   if (pending.length) {
     const lines = pending.map((r) => `- [${r.namespace}/${r.type}] ${summarizePayload(r.payload)}`)
-    parts.push(`【待汇报】以下事项发生在老板上一条消息之后，请在回复中自然带一句（不展开成专题）：\n${lines.join('\n')}`)
+    parts.push(`【待汇报】以下事项发生在用户上一条消息之后，请在回复里自然带一句（不展开成专题）：\n${lines.join('\n')}`)
     pendingIds.push(...pending.map((r) => r.id))
   }
 

@@ -346,3 +346,6 @@ Push 记录默认静默入库；urgency 0 静默 / 1 进待汇报队列（下条
 
 ### D-AGENT-13: iPhone 数据通道（手机 = 共享数据源，不是 agent）
 手机是多个 InfoAgent 共用的数据源，用三通道统一获取（详见 `guide/orca-iphone-channel.md`）：①飞书（图片/文件/文本，主通道，抗断连）；②HTTP webhook `POST /info/records`（结构化数据，Bearer 鉴权）；③本地文件同步（iCloud for Windows / Phone Link）+ 文件夹监听。手机端统一用 iOS 快捷指令（零开发者账号）；健康数据优先 Health Auto Export，免费替代为快捷指令定时"查找健康样本"。
+
+### D-AGENT-15: 会话绑定路由（工位分配）
+**一个飞书 bot 账号，多个会话（群/单聊）= 多个"工位"，每个会话固定绑定一个 InfoAgent**：图片/文件/文本事件按 `chat_id → agent` 绑定表路由，**每个事件只到一个 agent，不广播**。食物群 → food-agent；主聊天 → Orca（通用主管线）；未来新图片类 agent（如"拍照聊天"）= 新开一个群。意图由"发到哪个工位"声明（确定性、零 LLM 开销、不加第二个飞书应用/凭据）。独立账号方案降级为远期（第三方对接/最小权限隔离时才考虑）。处理层始终与账号无关：无论照片从哪个会话进来，都交给绑定表中对应的 agent 处理（用户 2026-08-25 确认采纳）。

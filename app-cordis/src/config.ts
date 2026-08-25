@@ -40,6 +40,8 @@ export interface OrcaConfig {
   infoRecordsDir: string
   imagesDir: string
   infoReceiver: InfoReceiverConfig
+  /** 会话绑定路由（D-AGENT-15）：chat_id → agent 名，未绑定会话 → 默认 Orca 主管线 */
+  chatBindings: Record<string, string>
 }
 
 const here = dirname(fileURLToPath(import.meta.url)) // app-cordis/src
@@ -85,6 +87,19 @@ export function getConfig(): OrcaConfig {
       console.warn('[orca-cordis] INFO_RECEIVER_TOKENS 不是合法 JSON，外部 Push 通道不启用')
     }
   }
+  // ORCA_CHAT_BINDINGS：会话绑定路由（D-AGENT-15）JSON 对象 {"<chat_id>": "<agent>"}；未绑定会话 → 默认 Orca 主管线
+  let chatBindings: Record<string, string> = {}
+  const rawBindings = process.env.ORCA_CHAT_BINDINGS
+  if (rawBindings) {
+    try {
+      const parsed = JSON.parse(rawBindings) as Record<string, unknown>
+      chatBindings = Object.fromEntries(
+        Object.entries(parsed).filter(([, v]) => typeof v === 'string').map(([chatId, v]) => [chatId, v as string]),
+      )
+    } catch {
+      console.warn('[orca-cordis] ORCA_CHAT_BINDINGS 不是合法 JSON，会话绑定路由不启用（全部走默认主管线）')
+    }
+  }
   return {
     host: process.env.CORDIS_HOST ?? '0.0.0.0',
     port: Number(process.env.CORDIS_PORT ?? 8100),
@@ -100,11 +115,7 @@ export function getConfig(): OrcaConfig {
       temperature: Number(process.env.ORCA_TEMPERATURE ?? 0.3),
       maxTokens: Number(process.env.ORCA_MAX_TOKENS ?? 2000),
     },
-    qwen: {
-      apiKey: process.env.QWEN_API_KEY ?? '',
-      baseUrl: (process.env.QWEN_API_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions').replace(/\/$/, ''),
-      model: process.env.QWEN_VL_MODEL ?? 'qwen3.7-plus',
-    },
+    qwen: buildVisionConfig(),
     dryRun: process.env.ORCA_DRY_RUN === '1',
     historyTurns: Number(process.env.ORCA_HISTORY_TURNS ?? 10),
     infoRecordsDir: process.env.INFO_RECORDS_DIR || resolve(appRoot, 'data', 'records'),
@@ -113,5 +124,27 @@ export function getConfig(): OrcaConfig {
       port: Number(process.env.INFO_RECEIVER_PORT ?? 8101),
       tokens: receiverTokens,
     },
+    chatBindings,
+  }
+}
+
+/**
+ * 视觉识别配置：ORCA_VISION_BACKEND=ollama 走本地 Ollama（OLLAMA_HOST + OLLAMA_VL_MODEL，免 apiKey）；
+ * 默认 dashscope（阿里百炼，QWEN_API_*）。本地视觉模型需支持图片输入（如 qwen2.5vl，纯文本 qwen2.5 不行）。
+ */
+function buildVisionConfig(): QwenConfig {
+  const backend = process.env.ORCA_VISION_BACKEND ?? 'dashscope'
+  if (backend === 'ollama') {
+    const ollamaBase = (process.env.OLLAMA_HOST ?? 'http://localhost:11434').replace(/\/$/, '')
+    return {
+      apiKey: '',
+      baseUrl: `${ollamaBase}/v1/chat/completions`,
+      model: process.env.OLLAMA_VL_MODEL ?? 'qwen2.5vl:3b',
+    }
+  }
+  return {
+    apiKey: process.env.QWEN_API_KEY ?? '',
+    baseUrl: (process.env.QWEN_API_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions').replace(/\/$/, ''),
+    model: process.env.QWEN_VL_MODEL ?? 'qwen3.7-plus',
   }
 }

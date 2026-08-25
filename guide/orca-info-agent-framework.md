@@ -213,6 +213,23 @@ export function infoAgents(ctx: Context, config: OrcaConfig) {
 
 **新增：查档案优先（R0）** —— Orca 决策时**先查记录库**，档案命中则直接用（零成本、复用已有产出），未命中才走 R1-R3 派活。食物例子：问"我昨天中午吃了多少卡" → R0 查 food-agent 档案命中 → 直接回复，不重复调视觉模型。
 
+### 5.1 会话绑定路由（工位分配，Push 方向，D-AGENT-15）
+
+§5 以上是 **Pull 方向**（Orca 选 agent 干活）；**Push 方向**（飞书收件箱的图片/文件/文本该交给谁）用**会话绑定路由**：
+
+```
+一个 bot，多个会话 = 多个工位：
+  食物群（chat_id=A） ──→ food-agent
+  主聊天（chat_id=B） ──→ Orca 主管线
+  （未来）拍照聊天群 ──→ 对应图片 agent
+路由：chat_id → agent 绑定表 → 事件只派发给绑定 agent（不广播）
+未绑定的会话 → 默认 Orca 主管线
+```
+
+- 意图由"发到哪个工位"声明：用户把照片发到食物群 = 明说这是食物（确定性、零 LLM 开销、不加第二个飞书应用/凭据）
+- 每个事件**只到一个 agent**：杜绝未来多个图片类 agent 同时收到同一张图（"混图"问题）
+- 处理层与账号无关：无论照片从哪个会话进来，识别都走绑定 agent 自己的管线（如 food-agent + Qwen 视觉），主模型不碰图片
+
 ---
 
 ## 6. 执行管线（Executor，Pull 路径）
@@ -357,19 +374,20 @@ src/
 
 ---
 
-## 13. 走查：食物拍照（用户设想的例子）
+## 13. 走查：食物拍照（用户设想的例子，2026-08-25 更新：走飞书工位通道）
 
-1. **用户用食物识别 App**（= food-agent，推理型，内部 Qwen 视觉，运行在手机/PC）
-   - 拍照 → 识别"红烧肉盖饭 ≈ 680 kcal" → App 通过 `POST /info/records`（Bearer 鉴权）写入：
+1. **用户拍照发到「食物群」（工位，D-AGENT-15）** —— 快捷指令把照片分享到食物群，Orca bot 收 `image` 消息 → 会话绑定路由：chat_id=食物群 → food-agent
+   - 备选：食物识别 App 经 `POST /info/records`（Bearer 鉴权）直接推记录：
      `{ namespace:'food-agent', type:'food-log', ts, source:'food-app', confidence:0.87, urgency:0, payload:{ photoRef:'local://...', food:'红烧肉盖饭', kcal:680 } }`
-2. **门控**：urgency=0 → 静默入库（`data/records/food-agent.jsonl`），Orca 不打扰用户
-3. **用户问 Orca**："我昨天中午吃了多少卡？"
+2. **food-agent 接手**：下载图片 → Qwen 视觉识别"红烧肉盖饭 ≈ 680 kcal" → **写 food-log 档案**（`data/records/food-agent.jsonl`，ttl 7 天）→ 回复确认；主模型（DeepSeek）不碰图片
+3. **门控**：记录默认 urgency=0 → 静默入库，Orca 不打扰用户（"告诉 Orca 一声"= 写档通知事件，待定稿 D-AGENT-14）
+4. **用户问 Orca**："我昨天中午吃了多少卡？"
    - R0 查档案：namespace=food-agent，类型 food-log，时间窗=昨天中午 → 命中
    - Orca 回复："昨天中午是红烧肉盖饭，约 680 kcal"（零模型调用，纯查档）
-4. **（可选）主动建议**：若 food-agent 连续两天检测到摄入超标，写 urgency=1 记录 → Orca 下条消息时带一句："老板，这两天摄入有点超标，注意一下"
-5. **隐私**：照片只存本地路径，ttl 7 天，用户可一键清空 food-agent 档案
+5. **（可选）主动建议**：若 food-agent 连续两天检测到摄入超标，写 urgency=1 记录 → Orca 下条消息时带一句："老板，这两天摄入有点超标，注意一下"
+6. **隐私**：照片只存本地路径，ttl 7 天，用户可一键清空 food-agent 档案
 
-**这个例子验证了 v0.2 三个核心价值：解耦（App 独立工作）、复用（R0 查档省钱）、可控（门控不打扰）。**
+**这个例子验证了三个核心价值：解耦（处理层与账号无关）、复用（R0 查档省钱）、可控（工位路由不混图 + 门控不打扰）。**
 
 ---
 

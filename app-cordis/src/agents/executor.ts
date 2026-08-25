@@ -38,8 +38,9 @@ export class InfoExecutor {
       return { ok: false, error: { code: 'BAD_INPUT', message: invalid, retryable: false } }
     }
 
-    // 2. 并发控制：非并发安全 agent 串行执行
-    const exec = (): Promise<InfoResult<Out>> => agent.execute(req, deps)
+    // 2. 并发控制：非并发安全 agent 串行执行；deps.signal 注入超时/取消信号（agent 内 fetch 可真正中止）
+    const controller = new AbortController()
+    const exec = (): Promise<InfoResult<Out>> => agent.execute(req, { ...deps, signal: controller.signal })
     const task = meta.isConcurrencySafe === false ? this.serialize(meta.name, exec) : exec()
 
     // 3. 超时
@@ -49,6 +50,7 @@ export class InfoExecutor {
       result = await withTimeout(task, timeoutMs)
     } catch (err) {
       const timedOut = err instanceof Error && err.name === 'TimeoutError'
+      if (timedOut) controller.abort() // 中止底层请求，避免孤儿 fetch 继续烧 API/占连接
       const message = timedOut ? `执行超时（>${timeoutMs}ms）` : err instanceof Error ? err.message : String(err)
       this.audit(meta.name, timedOut ? 'TIMEOUT' : 'EXEC_ERROR', message, started)
       return { ok: false, error: { code: timedOut ? 'TIMEOUT' : 'EXEC_ERROR', message, retryable: timedOut } }

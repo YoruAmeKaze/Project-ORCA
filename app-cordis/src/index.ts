@@ -6,10 +6,10 @@ import { LlmClient } from './services/llm.js'
 import { VisionClient } from './services/vision.js'
 import { SessionStore } from './session.js'
 import { feishuChannel } from './plugins/feishu-channel.js'
-import { foodImage } from './plugins/food-image.js'
 import { agent } from './plugins/agent.js'
 import { infoAgents } from './plugins/info-agents.js'
 import { infoReceiver } from './plugins/info-receiver.js'
+import { imageRouter } from './plugins/image-router.js'
 
 loadOrcaEnv()
 const config = getConfig()
@@ -43,7 +43,7 @@ ctx.provide('sessions', new SessionStore(config.historyTurns))
 ctx.plugin(feishuChannel, config)
 ctx.plugin(infoAgents, config) // 信息获取框架（InfoAgent 注册表 + 档案室）
 ctx.plugin(infoReceiver, config) // 外部 App Push 通道（POST /info/records）
-ctx.plugin(foodImage, config) // 飞书图片 → food-agent 识别 → food-log 档案 → 回复
+ctx.plugin(imageRouter, config) // 图片事件路由层（D-AGENT-15：chat_id → agent 工位分配；food 管线由路由接收）
 ctx.plugin(agent, config)
 
 ctx.logger.info(
