@@ -343,3 +343,6 @@ Push 记录默认静默入库；urgency 0 静默 / 1 进待汇报队列（下条
 
 ### D-AGENT-12: 记录生命周期与隐私
 记录支持 ttl + 软删/硬清理；L1 私有数据（食物照片等）不落明文日志、可一键清空 namespace；外部 Push 通道每 App 独立 Bearer token + namespace 白名单。
+
+### D-AGENT-13: iPhone 数据通道（手机 = 共享数据源，不是 agent）
+手机是多个 InfoAgent 共用的数据源，用三通道统一获取（详见 `guide/orca-iphone-channel.md`）：①飞书（图片/文件/文本，主通道，抗断连）；②HTTP webhook `POST /info/records`（结构化数据，Bearer 鉴权）；③本地文件同步（iCloud for Windows / Phone Link）+ 文件夹监听。手机端统一用 iOS 快捷指令（零开发者账号）；健康数据优先 Health Auto Export，免费替代为快捷指令定时"查找健康样本"。

@@ -86,8 +86,13 @@ guide/
 ├── memory-pack.md             # 设计规范（5 层架构、设计原则、5 阶段演进）
 ├── decisions.md               # 架构决议 D-*（DSL/Skill/Validator/Orchestrator/Planner/Runtime/版本 + D-AGENT-*）
 ├── orca-cordis-migration-plan.md  # ★ Cordis 迁移方案（v1.0 定稿，见 §9.3）
-└── orca-info-agent-framework.md   # ★ 小型信息 Agent 框架设计（v0.2 设计稿，未实现；CEO-员工-档案室模型）
-app-cordis/                    # ★ Cordis/TypeScript 版（Phase 1 已开工：飞书→AI 最小闭环，见 §9.3）
+├── orca-info-agent-framework.md   # ★ 小型信息 Agent 框架设计（v0.2 设计稿，Phase 2 部分落地：food-agent Pull+Push/档案室/R0 查档）
+└── orca-iphone-channel.md         # ★ iPhone 数据通道调研（三通道：飞书/webhook/文件同步，D-AGENT-13）
+app-cordis/                    # ★ Cordis/TypeScript 版（Phase 1 最小闭环 + Phase 2 信息获取框架，见 §9.3）
+│   ├── src/agents/            # 信息获取框架：types（InfoAgent/InfoRecord）registry（闭集）store（档案室 JSONL）executor（Pull 执行）router（R0/R1）builtins/food-log.ts（food-agent）
+│   ├── src/services/          # feishu / llm（DeepSeek）/ vision（Qwen VL）
+│   ├── src/plugins/           # feishu-channel / agent（CEO：R0 查档 + 待汇报）/ info-agents / info-receiver（POST /info/records）/ food-image（飞书图片→识别→档案→回复）
+│   └── src/data/              # records/ 档案室 JSONL + images/ 图片落盘（均 gitignore）
 ```
 
 ---
@@ -218,7 +223,7 @@ FastAPI + Uvicorn（reload）；DeepSeek API（规划/润色）；Qwen API（视
 - [ ] 飞书事件订阅**加密模式**支持（技术债）
 - [ ] 远期：摄像头视觉、语音唤醒+ASR、TTS（P2）
 
-### 9.3 Cordis 迁移进行中（Phase 1 完成）
+### 9.3 Cordis 迁移进行中（Phase 1 完成 + Phase 2 信息获取框架落地）
 - 方案文档：`guide/orca-cordis-migration-plan.md`（v1.0 定稿）——学 DeepSeek Harness 用 Cordis 重建，TypeScript 全量重写，代码放 `app-cordis/`
 - 已定：纯 Cordis 自写飞书通道（B 方案）；桌面层决策矩阵待实测（默认 A1 Python 子进程桥 + V1 Qwen API）
 - **Phase 1 已完成（2026-08-24）**：`app-cordis/` 工程（@deepseek-ai/cordis + TS + tsx；npm 安装，编译产物 `dist/` 用 node 直跑，沙箱下 esbuild/tsx 子进程被拦故 dev 用 tsc build + node start）
@@ -227,7 +232,16 @@ FastAPI + Uvicorn（reload）；DeepSeek API（规划/润色）；Qwen API（视
   - Agent 插件：`feishu/message` 事件 → persona+历史 → LLM → reply；`ORCA_DRY_RUN=1` 本地调试不发飞书
   - 端口 `CORDIS_PORT` 默认 8100（避开 Python 版 8000）；配置复用仓库根 `.env`（DEEPSEEK_API_URL 兼容完整端点归一化）
   - 验证：/health、challenge 回显、消息接收、重复事件去重、LLM 回复（dry-run）全部通过
-- 下一步：Phase 2 工具迁移按 `guide/orca-info-agent-framework.md`（v0.2 设计稿，CEO-员工-档案室模型：Pull 问询 + Push 上报 + 记录库）组织 —— search_web/capture_screenshot/analyze_image 迁移为 InfoAgent，refine 留在主 agent；会话持久化（jsonl）
+- **Phase 2 信息获取框架已落地（app-cordis v0.2.0，2026-08-25）**：按 `guide/orca-info-agent-framework.md` §3/§10/§13 实现 CEO-员工-档案室模型
+  - `src/agents/`：types（InfoAgent/InfoRequest/InfoResult/InfoRecord/RecordQuery，§3 原样）+ registry（闭集，D-AGENT-02）+ store（档案室：每 namespace 一 JSONL、append-only + supersedes 更正、软删/整夹清空 + ttl 清理、pending 待汇报队列，D-AGENT-09/11/12）+ executor（Pull 管线：参数校验/串行/超时/输出校验/归一/审计，D-AGENT-03/07）+ router（R0 查档优先 + R1 关键词，D-AGENT-04/10）
+  - `src/agents/builtins/food-log.ts`：food-agent（首批 Push 源，pull+push 双模式，推理型内部 Qwen 视觉）；识别结果自动写 food-log 档案（urgency=0 静默、ttlDays=7、payload 只存 photoRef 本地路径——L1 不落明文日志）
+  - `src/plugins/info-agents.ts` 装配（provide infoAgents/infoExecutor/infoStore + 注册内置 + 'info/record' 事件写档）+ `src/plugins/info-receiver.ts` 外部上报通道（POST /info/records，Bearer 鉴权 + namespace 白名单，默认端口 8101，未配 token 不启动）——即 D-AGENT-13 iPhone 三通道的通道②
+  - `src/plugins/agent.ts` CEO 集成（D-AGENT-10/11）：饮食类问题 R0 查档案注入上下文（命中即复用，零视觉调用）+ urgency=1 待汇报队列（peek 注入下条消息、回复成功后 ack）
+  - `src/plugins/food-image.ts` + feishu-channel image 分支 + `downloadImage`：飞书图片闭环（D-AGENT-13 通道①）——image 消息 → 下载 → Qwen 识别 → 写 food-log 档案 → 回复确认；失败兜底错误回复；dry-run 不真发飞书
+  - 配置键：`QWEN_API_KEY/URL/MODEL`（视觉）、`INFO_RECORDS_DIR`（档案目录，默认 app-cordis/data/records）、`IMAGES_DIR`（图片落盘，默认 app-cordis/data/images）、`INFO_RECEIVER_PORT`（默认 8101）、`INFO_RECEIVER_TOKENS`（JSON `{"token":["namespace"]}`）
+  - 验证：typecheck/build ✅；冒烟 `node scripts/smoke-info-agent.mjs` 45/45 ✅；真实 E2E（dry-run）✅ —— Push 入库 → 问"我昨天中午吃了多少卡？" → R0 命中回复"8/25 13:46 一份红烧肉盖饭，约 680 kcal"（零视觉调用）；urgency=1 记录下条消息自然带一句后 ack；POST image 事件 → 日志可见 `[food-image] 处理失败: feishu image download http 400`
+  - 合规修复（2026-08-25）：①控制台 exporter `levels.default: 1 → 2`（fork 语义：level ≤ 阈值才导出，default:1 会吞掉全部 WARN——food-image 失败日志曾被误判为事件派发问题）；②`downloadImage` 加 10s 超时；③`store.append` 校验 ts/urgency 信封
+- 下一步：迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull），refine 留主 agent；会话持久化（jsonl）；urgency=2 主动推送（按落地安排后置）；多飞书 bot 的 app_id 路由（D-AGENT-13，待用户开账号）
 
 ---
 
@@ -239,7 +253,8 @@ FastAPI + Uvicorn（reload）；DeepSeek API（规划/润色）；Qwen API（视
 | `guide/memory-pack.md` | 设计哲学（LLM=规划器等） | 理解设计动机时 |
 | `guide/decisions.md` | 40+ 条 D-* 架构决议 | 改架构/加机制前必读 |
 | `guide/orca-cordis-migration-plan.md` | Cordis 迁移方案 | 做迁移工作时 |
-| `guide/orca-info-agent-framework.md` | 小型信息 Agent 框架设计（v0.2，Pull+Push/记录库/D-AGENT-01~12） | 做 Phase 2 工具迁移/接信息源时 |
+| `guide/orca-info-agent-framework.md` | 小型信息 Agent 框架设计（v0.2，Pull+Push/记录库/D-AGENT-01~12；Phase 2 部分落地见 §9.3） | 做 Phase 2 工具迁移/接信息源时 |
+| `guide/orca-iphone-channel.md` | iPhone 数据通道调研（三通道/D-AGENT-13） | 接手机数据（照片/健康/文件）时 |
 | `dev-log.md` | 版本历史 v1.0→v2.3.0 | 查"为什么这么改"时 |
 | `README.md` | 对外简介（**部分过期**：版本号、目录结构、USE_NEW_ARCH） | 对外介绍时，改前先对照代码 |
 | `project-orca-overview.md` | 早期愿景（微信 ClawBot/语音/硬件，**已过时**） | 参考远期方向时 |

@@ -11,6 +11,15 @@ export interface FeishuMessageEvent {
   text: string
 }
 
+/** 飞书图片消息事件（food-image 插件订阅，D-AGENT-13 通道①） */
+export interface FeishuImageEvent {
+  eventId: string
+  sessionId: string
+  openId: string
+  messageId: string
+  imageKey: string
+}
+
 interface FeishuPayload {
   type?: string
   challenge?: string
@@ -28,7 +37,8 @@ interface FeishuPayload {
 
 /**
  * 飞书 webhook 通道插件（纯 Cordis 自写，对应 Python 版 router/feishu.py）。
- * 职责：challenge 验证、event_id 60s 去重、仅 p2p 文本、fire-and-forget 立即回 200。
+ * 职责：challenge 验证、event_id 60s 去重、仅 p2p（text 与 image）、fire-and-forget 立即回 200。
+ * image 消息 → 派发 'feishu/image' 事件（D-AGENT-13 通道①：手机快捷指令发图到飞书）。
  */
 export function feishuChannel(ctx: Context, config: OrcaConfig) {
   const recentEvents = new Map<string, number>()
@@ -89,30 +99,47 @@ export function feishuChannel(ctx: Context, config: OrcaConfig) {
 
     const sender = payload.event?.sender
     const message = payload.event?.message
-    if (!message || message.chat_type !== 'p2p' || message.message_type !== 'text') {
-      return sendJson(res, 200, { ok: true, skipped: 'not-p2p-text' })
-    }
-
-    let text = ''
-    try {
-      text = (JSON.parse(message.content ?? '{}') as { text?: string }).text ?? ''
-    } catch {
-      // 保留空文本
-    }
-    if (!text.trim()) {
-      return sendJson(res, 200, { ok: true, skipped: 'empty-text' })
+    if (!message || message.chat_type !== 'p2p') {
+      return sendJson(res, 200, { ok: true, skipped: 'not-p2p' })
     }
 
     const openId = sender?.sender_id?.open_id ?? ''
-    // fire-and-forget：先回 200，再异步派发处理
-    sendJson(res, 200, { ok: true })
-    ctx.emit('feishu/message', {
-      eventId,
-      sessionId: openId,
-      openId,
-      messageId: message.message_id ?? '',
-      text: text.trim(),
-    } satisfies FeishuMessageEvent)
+    const base = { eventId, sessionId: openId, openId, messageId: message.message_id ?? '' }
+
+    // 文本消息 → feishu/message（主 agent 走 R0 查档 + LLM 回复）
+    if (message.message_type === 'text') {
+      let text = ''
+      try {
+        text = (JSON.parse(message.content ?? '{}') as { text?: string }).text ?? ''
+      } catch {
+        // 保留空文本
+      }
+      if (!text.trim()) {
+        return sendJson(res, 200, { ok: true, skipped: 'empty-text' })
+      }
+      sendJson(res, 200, { ok: true })
+      ctx.emit('feishu/message', { ...base, text: text.trim() } satisfies FeishuMessageEvent)
+      return
+    }
+
+    // 图片消息 → feishu/image（food 识别闭环）
+    if (message.message_type === 'image') {
+      let imageKey = ''
+      try {
+        imageKey = (JSON.parse(message.content ?? '{}') as { image_key?: string }).image_key ?? ''
+      } catch {
+        // 保留空 key
+      }
+      if (!imageKey) {
+        return sendJson(res, 200, { ok: true, skipped: 'empty-image-key' })
+      }
+      sendJson(res, 200, { ok: true })
+      ctx.emit('feishu/image', { ...base, imageKey } satisfies FeishuImageEvent)
+      return
+    }
+
+    // 其他消息类型暂不处理
+    return sendJson(res, 200, { ok: true, skipped: 'unsupported-type' })
   }
 
   server.listen(config.port, config.host, () => {

@@ -77,4 +77,18 @@ export class FeishuClient {
       throw new Error(`feishu send failed: http ${res.status} code ${data?.code} ${data?.msg ?? ''}`)
     }
   }
+
+  /** 下载图片消息的二进制（im.message.receive_v1 image 的 image_key → 图片字节） */
+  async downloadImage(imageKey: string): Promise<Buffer> {
+    const token = await this.getTenantAccessToken()
+    // 10s 超时：防止网络挂起时 food-image 监听器永久 pending（坏 key 正常 ~1s 抛 400）
+    const res = await fetch(`${this.config.baseUrl}/open-apis/im/v1/images/${encodeURIComponent(imageKey)}`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) throw new Error(`feishu image download http ${res.status}`)
+    const buf = Buffer.from(await res.arrayBuffer())
+    if (!buf.length) throw new Error('feishu image empty')
+    return buf
+  }
 }

@@ -1,9 +1,9 @@
 {
   "name": "app-cordis",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Project Orca — Cordis(TypeScript) 版，迁移 Phase 1：飞书 → AI 回复最小闭环",
+  "description": "Project Orca — Cordis(TypeScript) 版：Phase 1 飞书→AI 最小闭环 + Phase 2 信息获取框架（InfoAgent：Pull+Push、档案室 JSONL、food-agent）",
   "engines": {
     "node": ">=20"
   },
@@ -11,7 +11,8 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "npm run build && node scripts/smoke-info-agent.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1"

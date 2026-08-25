@@ -16,13 +16,30 @@ export interface LlmConfig {
   maxTokens: number
 }
 
+export interface QwenConfig {
+  apiKey: string
+  /** 可能是完整端点（含 /chat/completions），归一化处理 */
+  baseUrl: string
+  model: string
+}
+
+export interface InfoReceiverConfig {
+  port: number
+  /** token → 允许写入的 namespaces 白名单（D-AGENT-12） */
+  tokens: Record<string, string[]>
+}
+
 export interface OrcaConfig {
   host: string
   port: number
   feishu: FeishuConfig
   llm: LlmConfig
+  qwen: QwenConfig
   dryRun: boolean
   historyTurns: number
+  infoRecordsDir: string
+  imagesDir: string
+  infoReceiver: InfoReceiverConfig
 }
 
 const here = dirname(fileURLToPath(import.meta.url)) // app-cordis/src
@@ -52,6 +69,22 @@ export function loadOrcaEnv(): void {
 export function getConfig(): OrcaConfig {
   // DEEPSEEK_API_URL 可能是基础地址（https://api.deepseek.com）或完整端点（.../v1/chat/completions），统一归一为基础地址
   const rawApiUrl = (process.env.DEEPSEEK_API_URL ?? 'https://api.deepseek.com').replace(/\/$/, '')
+  // INFO_RECEIVER_TOKENS：JSON 对象 {"<token>": ["namespace", ...]}；解析失败/未配置 → 空（通道不启动）
+  let receiverTokens: Record<string, string[]> = {}
+  const rawTokens = process.env.INFO_RECEIVER_TOKENS
+  if (rawTokens) {
+    try {
+      const parsed = JSON.parse(rawTokens) as Record<string, unknown>
+      receiverTokens = Object.fromEntries(
+        Object.entries(parsed).map(([token, v]) => [
+          token,
+          Array.isArray(v) ? v.map(String) : typeof v === 'string' ? [v] : [],
+        ]),
+      )
+    } catch {
+      console.warn('[orca-cordis] INFO_RECEIVER_TOKENS 不是合法 JSON，外部 Push 通道不启用')
+    }
+  }
   return {
     host: process.env.CORDIS_HOST ?? '0.0.0.0',
     port: Number(process.env.CORDIS_PORT ?? 8100),
@@ -67,7 +100,18 @@ export function getConfig(): OrcaConfig {
       temperature: Number(process.env.ORCA_TEMPERATURE ?? 0.3),
       maxTokens: Number(process.env.ORCA_MAX_TOKENS ?? 2000),
     },
+    qwen: {
+      apiKey: process.env.QWEN_API_KEY ?? '',
+      baseUrl: (process.env.QWEN_API_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions').replace(/\/$/, ''),
+      model: process.env.QWEN_VL_MODEL ?? 'qwen3.7-plus',
+    },
     dryRun: process.env.ORCA_DRY_RUN === '1',
     historyTurns: Number(process.env.ORCA_HISTORY_TURNS ?? 10),
+    infoRecordsDir: process.env.INFO_RECORDS_DIR || resolve(appRoot, 'data', 'records'),
+    imagesDir: process.env.IMAGES_DIR || resolve(appRoot, 'data', 'images'),
+    infoReceiver: {
+      port: Number(process.env.INFO_RECEIVER_PORT ?? 8101),
+      tokens: receiverTokens,
+    },
   }
 }
