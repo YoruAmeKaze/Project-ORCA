@@ -84,8 +84,9 @@ scripts/
 └── cleanup_tunnel.py          # SSH 隧道旧端口清理（paramiko）
 guide/
 ├── memory-pack.md             # 设计规范（5 层架构、设计原则、5 阶段演进）
-├── decisions.md               # 架构决议 D-*（DSL/Skill/Validator/Orchestrator/Planner/Runtime/版本）
-└── orca-cordis-migration-plan.md  # ★ Cordis 迁移方案（v1.0 定稿，见 §9.3）
+├── decisions.md               # 架构决议 D-*（DSL/Skill/Validator/Orchestrator/Planner/Runtime/版本 + D-AGENT-*）
+├── orca-cordis-migration-plan.md  # ★ Cordis 迁移方案（v1.0 定稿，见 §9.3）
+└── orca-info-agent-framework.md   # ★ 小型信息 Agent 框架设计（v0.2 设计稿，未实现；CEO-员工-档案室模型）
 app-cordis/                    # ★ Cordis/TypeScript 版（Phase 1 已开工：飞书→AI 最小闭环，见 §9.3）
 ```
 
@@ -226,7 +227,7 @@ FastAPI + Uvicorn（reload）；DeepSeek API（规划/润色）；Qwen API（视
   - Agent 插件：`feishu/message` 事件 → persona+历史 → LLM → reply；`ORCA_DRY_RUN=1` 本地调试不发飞书
   - 端口 `CORDIS_PORT` 默认 8100（避开 Python 版 8000）；配置复用仓库根 `.env`（DEEPSEEK_API_URL 兼容完整端点归一化）
   - 验证：/health、challenge 回显、消息接收、重复事件去重、LLM 回复（dry-run）全部通过
-- 下一步：Phase 2 低风险工具迁移（search_web/capture_screenshot/analyze_image/refine）+ 会话持久化（jsonl）
+- 下一步：Phase 2 工具迁移按 `guide/orca-info-agent-framework.md`（v0.2 设计稿，CEO-员工-档案室模型：Pull 问询 + Push 上报 + 记录库）组织 —— search_web/capture_screenshot/analyze_image 迁移为 InfoAgent，refine 留在主 agent；会话持久化（jsonl）
 
 ---
 
@@ -238,6 +239,7 @@ FastAPI + Uvicorn（reload）；DeepSeek API（规划/润色）；Qwen API（视
 | `guide/memory-pack.md` | 设计哲学（LLM=规划器等） | 理解设计动机时 |
 | `guide/decisions.md` | 40+ 条 D-* 架构决议 | 改架构/加机制前必读 |
 | `guide/orca-cordis-migration-plan.md` | Cordis 迁移方案 | 做迁移工作时 |
+| `guide/orca-info-agent-framework.md` | 小型信息 Agent 框架设计（v0.2，Pull+Push/记录库/D-AGENT-01~12） | 做 Phase 2 工具迁移/接信息源时 |
 | `dev-log.md` | 版本历史 v1.0→v2.3.0 | 查"为什么这么改"时 |
 | `README.md` | 对外简介（**部分过期**：版本号、目录结构、USE_NEW_ARCH） | 对外介绍时，改前先对照代码 |
 | `project-orca-overview.md` | 早期愿景（微信 ClawBot/语音/硬件，**已过时**） | 参考远期方向时 |

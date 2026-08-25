@@ -293,3 +293,53 @@ class RuntimeContext:
 
 ### D-VER-03: 混合改动处理
 如果一次 commit 同时包含 bug 修复和新功能，按新功能升 MINOR，但 dev-log 条目里分别说明两类改动，不笼统带过。
+
+### D-VER-04: 提交前必须同步 AGENT.md
+`AGENT.md` 是新会话/新代理的启动上下文，代码变更后必须保持同步。每次 commit 前：
+1. 判断改动是否触及 AGENT.md 内容（目录结构、skill 清单、机制、配置键、版本号、待办）
+2. 触及则更新 AGENT.md 对应板块（架构/技能/机制变更必改；纯注释、日志、文档措辞可跳过）
+3. dev-log 条目末尾标注"AGENT.md 已同步"
+
+禁止"代码改了但 AGENT.md 还停留在旧状态"的提交。AGENT.md 头部维护规则与本节互为引用。
+
+---
+
+## 信息获取框架（InfoAgent）
+
+> 详细设计见 `guide/orca-info-agent-framework.md`（v0.2 设计稿）。2026-08-24 提出：Orca 未来需接入小 agent 获取各种信息；2026-08-25 扩展 CEO-员工-档案室模型（待机接收 / Push 上报 / 记录库）。
+
+### D-AGENT-01: 信息获取统一抽象为 InfoAgent
+每个信息源 = 一份能力描述（meta：name/description/inputSchema/outputSchema/超时/并发声明）+ 一个唯一执行入口（execute）。主 agent 只做决策与汇总，不感知具体信息源。新增信息源 = 注册一个 InfoAgent，主循环零改动。
+
+### D-AGENT-02: 注册表闭集
+InfoAgentRegistry 是闭集注册表，LLM 只能从 list() 中选择，不能发明 agent（与 D-SKILL 闭集原则一致）。
+
+### D-AGENT-03: 结果必须结构化 canonical
+InfoAgent 返回 `{ok, data|error, tookMs, source}`，数据按 outputSchema 校验。禁止自由文本直出；主 agent 负责汇总润色。
+
+### D-AGENT-04: 路由三阶段演进
+R1 关键词匹配（Phase 2 起步，对齐 planner 思路）→ R2 LLM 工具选择 / function calling（信息源 > 8 个时，对齐迁移终局）→ R3 多源并行聚合（有聚合需求时）。
+
+### D-AGENT-05: 执行后端可插拔
+四种后端：in-process（默认）、subprocess-bridge（Python worker，对齐桌面层 A1）、MCP（外部信息源，自动包装为 InfoAgent，公开名 `mcp__<server>__<tool>`）、remote-http（预留）。统一由 InfoAgent 实现隐藏。
+
+### D-AGENT-06: 安全分级 + 最小权限
+L0 公开信息直接执行；L1 用户私有数据执行但不落明文日志 + 参数级白名单；L2 外部副作用走审批（一次性 grant）。AgentDeps 只注入 llm/session/logger/signal，不注入发送与写能力。
+
+### D-AGENT-07: 委托可审计
+每次委托记录路由回执（选了谁/为什么/参数/耗时/结果摘要），写入会话历史的结构化标记 `[info:<agent> <摘要>]`。
+
+### D-AGENT-08: 双向模式（Pull + Push）
+InfoAgent 支持两种协作模式：Pull（Orca 问询，v0.1）与 Push（InfoAgent 自主写档案，v0.2 新增）。`modes: ['pull'] | ['pull','push']` 声明，可同时具备。Push 是"员工档案"的写入通道，外部 App 通过 HTTP webhook（Bearer 鉴权）或 MCP 上报。
+
+### D-AGENT-09: 记录库（员工档案室）
+每 namespace 一个档案夹，统一信封 `InfoRecord{id, namespace, type, ts, source, confidence?, urgency?, payload, ttlDays?}`；append-only + `supersedes` 更正（对齐事件溯源）。检索与门控只依赖信封字段，不解析 payload。Phase A 用 JSONL（每 namespace 一文件，内存索引），SQLite 视查询量再迁。
+
+### D-AGENT-10: Orca = CEO，查档案优先（R0）
+Orca 只做理解/查档/派活/汇总/回复，具体事项由 InfoAgent 执行。决策时先查记录库（R0），档案命中直接用（零成本复用），未命中才派活（R1-R3）。
+
+### D-AGENT-11: 待机行为门控
+Push 记录默认静默入库；urgency 0 静默 / 1 进待汇报队列（下条消息带一句）/ 2 紧急推送（默认关闭，需用户开启 + 审批放行）。对齐 memory-pack 自主度模型（Level 1 通知 / Level 2 建议，Level 2 以上默认关闭）。
+
+### D-AGENT-12: 记录生命周期与隐私
+记录支持 ttl + 软删/硬清理；L1 私有数据（食物照片等）不落明文日志、可一键清空 namespace；外部 Push 通道每 App 独立 Bearer token + namespace 白名单。
