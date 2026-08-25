@@ -1,4 +1,6 @@
-# Project Orca — v2.1.1
+# Project Orca — v2.3.0
+
+> **给 AI 代理/新会话的启动上下文请读 [`AGENT.md`](AGENT.md)**（本文档部分内容已过期，以 AGENT.md + 源码为准）。
 
 通过飞书聊天的本地 AI 桌面助手。发消息给 Orca，它帮你操作电脑。
 
