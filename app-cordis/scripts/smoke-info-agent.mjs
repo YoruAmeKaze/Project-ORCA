@@ -19,6 +19,7 @@ import { foodLogAgent } from '../dist/agents/builtins/food-log.js'
 import { createReceiverHandler, createImageUploadHandler } from '../dist/plugins/info-receiver.js'
 import { processFoodImage } from '../dist/plugins/food-image.js'
 import { resolveChatAgent, imageRouter } from '../dist/plugins/image-router.js'
+import { handleDeleteIntent } from '../dist/plugins/agent.js'
 
 const results = []
 function check(name, cond, detail = '') {
@@ -345,7 +346,7 @@ const store = new JsonlInfoRecordStore(recordsDir)
   }
 
   const ok = await post({ imageBase64: pngB64 }, 'food-token-1')
-  check('info-images: 合法上传 → 200 + 识别结果', ok.status === 200 && ok.json.ok && ok.json.food === '麻辣烫' && ok.json.kcal === 720 && ok.json.reply.includes('720 千卡'))
+  check('info-images: 合法上传 → 200 + 识别结果', ok.status === 200 && ok.json.ok && ok.json.food === '麻辣烫' && ok.json.kcal === '720 kcal' && ok.json.reply.includes('720 千卡'))
   const rec = await store9.query({ namespaces: ['food-agent'], types: ['food-log'] })
   check('info-images: 识别后写 food-log 档案', rec.length === 1 && rec[0].payload.food === '麻辣烫', `len=${rec.length} rec=${JSON.stringify(rec)}`)
 
@@ -365,6 +366,35 @@ const store = new JsonlInfoRecordStore(recordsDir)
 
   await new Promise((r) => server.close(r))
   server.closeAllConnections()
+}
+
+// ---------- 9. 删除命令（handleDeleteIntent，确定性，不经过 LLM） ----------
+{
+  const storeD = new JsonlInfoRecordStore(join(recordsDir, 'phase10'))
+  await storeD.append({ namespace: 'food-agent', type: 'food-log', ts: Date.now(), source: 'food-agent', confidence: 0.9, urgency: 0, payload: { food: '火鸡面', kcal: 680 } })
+  await storeD.append({ namespace: 'food-agent', type: 'food-log', ts: Date.now(), source: 'food-agent', confidence: 0.05, urgency: 0, payload: { food: 'unknown', kcal: 0 } })
+  await storeD.append({ namespace: 'food-agent', type: 'food-log', ts: Date.now(), source: 'food-agent', confidence: 0.85, urgency: 0, payload: { food: '炸鸡块', kcal: 300 } })
+
+  const noIntent = await handleDeleteIntent('今天天气怎么样', storeD)
+  check('delete: 非删除意图 → null', noIntent === null)
+
+  const byName = await handleDeleteIntent('删掉火鸡面', storeD)
+  check('delete: 按食物名删除', byName !== null && byName.includes('删了 1 条') && byName.includes('火鸡面'), JSON.stringify(byName))
+  const afterName = await storeD.query({ namespaces: ['food-agent'] })
+  check('delete: 火鸡面已删（剩 2 条）', afterName.length === 2 && !afterName.some((r) => r.payload.food === '火鸡面'), `len=${afterName.length} ${JSON.stringify(afterName.map((r) => r.payload.food))}`)
+
+  const byNoise = await handleDeleteIntent('把测试记录删掉', storeD)
+  check('delete: 噪音（低置信/unknown）删除', byNoise !== null && byNoise.includes('删了 1 条'), JSON.stringify(byNoise))
+  const afterNoise = await storeD.query({ namespaces: ['food-agent'] })
+  check('delete: 噪音已删（剩 1 条炸鸡块）', afterNoise.length === 1 && afterNoise[0].payload.food === '炸鸡块', `len=${afterNoise.length} ${JSON.stringify(afterNoise.map((r) => r.payload.food))}`)
+
+  const byAll = await handleDeleteIntent('清空记录', storeD)
+  check('delete: 清空全部', byAll !== null && byAll.includes('删了 1 条'), JSON.stringify(byAll))
+  check('delete: 清空后为 0', (await storeD.query({ namespaces: ['food-agent'] })).length === 0)
+
+  await storeD.append({ namespace: 'food-agent', type: 'food-log', ts: Date.now(), source: 'food-agent', urgency: 0, payload: { food: '汉堡', kcal: 450 } })
+  const miss = await handleDeleteIntent('删掉寿司', storeD)
+  check('delete: 未找到 → 提示', miss !== null && miss.includes('没找到'))
 }
 
 // ---------- 清理 ----------

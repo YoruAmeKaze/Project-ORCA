@@ -10,15 +10,69 @@ import type { JsonlInfoRecordStore } from '../agents/store.js'
 /** 饮食类问题关键词（R0 查档触发，命中档案即复用，不重复调视觉模型） */
 const FOOD_QUERY_RE = /(卡路里|热量|千卡|kcal|吃了|摄入|饮食|早饭|午饭|晚饭|早餐|午餐|晚餐|吃)/i
 
+/** 删除命令意图（确定性执行，不经过 LLM）：删+对象，或 记录/食物+删词 */
+const DELETE_INTENT_RE =
+  /(?:删除|删掉|删了|清空|清理|去掉|不要).{0,14}|(?:记录|档案|饮食|食物|测试).{0,8}(?:删除|删掉|清空|清理|去掉)/i
+const DELETE_ALL_RE = /(全部|所有|清空|全删)/i
+const DELETE_NOISE_RE = /(测试|噪音|无效|unknown)/i
+const DELETE_FOOD_STOPWORDS = /(记录|档案|饮食|食物|测试|全部|所有|那条|这条)/
+
+/**
+ * 确定性删除命令（D-AGENT 补充，2026-08-25）：
+ * - "清空/全部删除记录" → 整个 food-agent 档案
+ * - "删掉测试记录/噪音" → 低置信度（<0.3）或 unknown 类噪音
+ * - "删掉火鸡面" → 按食物名匹配删除
+ * 返回回复文案；不是删除意图返回 null。
+ */
+export async function handleDeleteIntent(text: string, store: JsonlInfoRecordStore): Promise<string | null> {
+  if (!DELETE_INTENT_RE.test(text)) return null
+  const all = DELETE_ALL_RE.test(text)
+  const noise = DELETE_NOISE_RE.test(text)
+  const kwMatch = /删(?:掉|了|除)?\s*([\u4e00-\u9fa5A-Za-z0-9]{1,12})/.exec(text)
+  let keyword = kwMatch?.[1] ?? ''
+  if (DELETE_FOOD_STOPWORDS.test(keyword)) keyword = ''
+
+  const records = await store.query({ namespaces: ['food-agent'], types: ['food-log'], limit: 200 })
+  const targets: string[] = []
+  const names: string[] = []
+  const foodOf = (r: InfoRecord): string => String((r.payload as { food?: unknown })?.food ?? '')
+  const isNoise = (r: InfoRecord): boolean => {
+    const food = foodOf(r)
+    return (r.confidence ?? 0) < 0.3 || ['unknown', '未知', '无', ''].includes(food)
+  }
+
+  for (const r of records) {
+    const food = foodOf(r)
+    if (all || (noise && isNoise(r)) || (keyword && food.toLowerCase().includes(keyword.toLowerCase()))) {
+      targets.push(r.id)
+      names.push(food || '未知')
+    }
+  }
+  if (!targets.length) {
+    return keyword ? `没找到「${keyword}」的记录。` : '没有可删的记录。'
+  }
+  const deleted = await store.delete('food-agent', targets)
+  const uniq = [...new Set(names)].slice(0, 5).join('、')
+  return `删了 ${deleted} 条${uniq ? `（${uniq}${names.length > 5 ? ' 等' : ''}）` : ''}。`
+}
+
 /**
  * Agent 插件（Phase 2 升级版）：
- * 订阅 feishu/message → R0 查档案 + 待汇报队列注入 → persona + 历史 → DeepSeek → 回写历史 → reply。
+ * 订阅 feishu/message → 删除命令（确定性）→ R0 查档案 + 待汇报队列注入 → persona + 历史 → DeepSeek → 回写历史 → reply。
  * CEO 分工（D-AGENT-10）：Orca 只做理解/查档/汇总/回复，具体事项由 InfoAgent 执行。
  */
 export function agent(ctx: Context, config: OrcaConfig) {
   ctx.on('feishu/message', async (msg: FeishuMessageEvent) => {
     const { feishu, llm, sessions } = ctx
     try {
+      // CEO 前置 0：删除命令（确定性执行，不进 LLM、不进历史）
+      const deleteReply = await handleDeleteIntent(msg.text, ctx.infoStore)
+      if (deleteReply !== null) {
+        ctx.logger.info('[agent] 删除命令: %s -> %s', msg.text, deleteReply)
+        if (!config.dryRun) await feishu.sendToChat(msg.chatId, deleteReply)
+        return
+      }
+
       sessions.push(msg.sessionId, { role: 'user', content: msg.text })
 
       // CEO 前置：R0 查档案（D-AGENT-10）+ 待汇报队列（D-AGENT-11，urgency=1）
