@@ -16,9 +16,15 @@ interface VisionResponse {
   choices?: { message?: { content?: string } }[]
 }
 
+interface OllamaChatResponse {
+  message?: { content?: string }
+}
+
 /**
- * Qwen 视觉客户端（阿里百炼 compatible-mode，OpenAI 风格 chat completions）。
- * 对应 Python 版 analyze_image 的 QWEN 视觉能力，供推理型 InfoAgent（food-agent）内部调用。
+ * Qwen 视觉客户端，双后端：
+ * - Ollama 本地后端（无 apiKey，ORCA_VISION_BACKEND=ollama）：走原生 /api/chat（图片走 images 数组、
+ *   options.num_ctx 放大上下文——手机大图默认 4096 装不下会 400；OpenAI 兼容端点不认 num_ctx）
+ * - 云端（阿里百炼 compatible-mode，有 apiKey）：OpenAI 风格 /chat/completions
  */
 export class VisionClient {
   constructor(private config: VisionConfig) {}
@@ -28,18 +34,71 @@ export class VisionClient {
     return base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
   }
 
+  private ollamaRoot(): string {
+    return this.config.baseUrl
+      .replace(/\/$/, '')
+      .replace(/\/v1\/chat\/completions$/, '')
+      .replace(/\/chat\/completions$/, '')
+  }
+
   async describe(image: VisionImage, prompt: string, opts?: { maxTokens?: number; signal?: AbortSignal }): Promise<string> {
-    const headers: Record<string, string> = { 'content-type': 'application/json' }
-    // 本地后端（Ollama，ORCA_VISION_BACKEND=ollama）免 apiKey；云端必填
-    if (this.config.apiKey) headers.authorization = `Bearer ${this.config.apiKey}`
+    const maxTokens = opts?.maxTokens ?? 3000
+    if (!this.config.apiKey) {
+      return this.describeOllama(image, prompt, { maxTokens, signal: opts?.signal })
+    }
+    return this.describeCloud(image, prompt, { maxTokens, signal: opts?.signal })
+  }
+
+  /** Ollama 原生 /api/chat：options.num_ctx 真正生效（OpenAI 兼容端点会忽略） */
+  private async describeOllama(image: VisionImage, prompt: string, opts: { maxTokens: number; signal?: AbortSignal }): Promise<string> {
+    // 原生接口 images 要裸 base64（不带 data:...;base64, 前缀）
+    let imageBase64 = ''
+    if (image.dataUrl) {
+      imageBase64 = image.dataUrl.includes(',') ? image.dataUrl.slice(image.dataUrl.indexOf(',') + 1) : image.dataUrl
+    } else if (image.url) {
+      const res = await fetch(image.url, { signal: opts.signal })
+      if (!res.ok) throw new Error(`vision image url http ${res.status}`)
+      imageBase64 = Buffer.from(await res.arrayBuffer()).toString('base64')
+    }
+    if (!imageBase64) throw new Error('vision: 无图片数据')
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const res = await fetch(`${this.ollamaRoot()}/api/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: this.config.model,
+          messages: [{ role: 'user', content: prompt, images: [imageBase64] }],
+          stream: false,
+          options: {
+            temperature: 0.2,
+            num_predict: opts.maxTokens,
+            num_ctx: 16_384, // 手机大图图 token 多，默认 4096 装不下（曾实测 4125 tokens 400）
+          },
+        }),
+        signal: opts.signal,
+      })
+      if (!res.ok) {
+        const body = await res.text().catch(() => '')
+        throw new Error(`vision http ${res.status}: ${body.slice(0, 300)}`)
+      }
+      const data = (await res.json()) as OllamaChatResponse
+      const content = data.message?.content
+      if (content) return content
+      // 空 content（reasoning 模型偶发只出 thinking）：重试
+    }
+    throw new Error('vision empty response')
+  }
+
+  /** 云端（阿里百炼）OpenAI 风格 chat completions */
+  private async describeCloud(image: VisionImage, prompt: string, opts: { maxTokens: number; signal?: AbortSignal }): Promise<string> {
     const imageBlock = image.dataUrl
       ? { type: 'image_url', image_url: { url: image.dataUrl } }
       : { type: 'image_url', image_url: { url: image.url ?? '' } }
-    // reasoning 模型（如本地 qwen3-vl）冷启动/偶发只输出 thinking、content 为空 → 空响应重试
     for (let attempt = 1; attempt <= 3; attempt++) {
       const res = await fetch(this.endpoint(), {
         method: 'POST',
-        headers,
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${this.config.apiKey}` },
         body: JSON.stringify({
           model: this.config.model,
           messages: [
@@ -52,10 +111,9 @@ export class VisionClient {
             },
           ],
           temperature: 0.2,
-          // reasoning 模型（qwen3-vl 等）thinking 会吃大量配额，默认给足；调用方可按需覆盖
-          max_tokens: opts?.maxTokens ?? 3000,
+          max_tokens: opts.maxTokens,
         }),
-        signal: opts?.signal, // 执行器超时/取消时真正中止底层请求
+        signal: opts.signal,
       })
       if (!res.ok) {
         const body = await res.text().catch(() => '')
@@ -64,7 +122,6 @@ export class VisionClient {
       const data = (await res.json()) as VisionResponse
       const content = data.choices?.[0]?.message?.content
       if (content) return content
-      // 空 content：重试（最多 3 次），最后一次仍空则抛错
     }
     throw new Error('vision empty response')
   }
