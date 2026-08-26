@@ -12,6 +12,7 @@ import { infoReceiver } from './plugins/info-receiver.js'
 import { imageRouter } from './plugins/image-router.js'
 import { dashboard } from './plugins/dashboard.js'
 import { orcaRuntime } from './plugins/orca-runtime.js'
+import { worldStateUpdater } from './plugins/world-state-updater.js'
 
 loadOrcaEnv()
 const config = getConfig()
@@ -51,6 +52,13 @@ ctx.plugin(dashboard, config)    // Orca 仪表盘（状态监控 UI）
 if (config.runtime.enabled) {
   ctx.plugin(orcaRuntime, config)
   ctx.logger.info('[orca-cordis] Persistent Context Runtime 已启用（Phase 0+1）')
+  // Phase 2.A：WorldStateUpdater 必须在 orcaRuntime 之后（依赖 eventBus Service）
+  if (config.runtime.worldState.enabled) {
+    ctx.plugin(worldStateUpdater, config)
+    ctx.logger.info('[orca-cordis] WorldState 已启用（Phase 2.A）')
+  } else {
+    ctx.logger.info('[orca-cordis] WorldState 未启用（ORCA_WORLD_STATE_ENABLED=0 关闭）')
+  }
 } else {
   ctx.logger.info('[orca-cordis] Persistent Context Runtime 未启用（ORCA_RUNTIME_ENABLED=1 启用）')
 }

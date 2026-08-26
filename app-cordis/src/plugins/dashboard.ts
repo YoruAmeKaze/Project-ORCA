@@ -60,6 +60,8 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       void handleStatus(req, res)
     } else if (url.pathname === '/api/events') {
       void handleEvents(req, res)
+    } else if (url.pathname === '/api/world-state') {
+      void handleWorldState(req, res)
     } else if (url.pathname === '/dashboard' || url.pathname === '/') {
       void handleDashboard(req, res)
     } else {
@@ -107,6 +109,27 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       count: events.length,
       bufferSize: bus.size(),
       events,
+    })
+  }
+
+  /**
+   * Orca Runtime WorldState 端点（Phase 2.A）：
+   * - 返回当前 WorldState 快照（WorldStateUpdater 提供 getState()）
+   * - WorldState 未注入时返回 503（Orca Runtime 未启用 / WorldState 单独关闭）
+   */
+  async function handleWorldState(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const ws = ctx.get('worldState') as
+      | { getState(): unknown }
+      | undefined
+    if (!ws) {
+      sendJson(res, 503, { ok: false, error: 'WorldState 未启用（设置 ORCA_RUNTIME_ENABLED=1 启用 Persistent Context Runtime，且 ORCA_WORLD_STATE_ENABLED 不为 0）' })
+      return
+    }
+    const state = ws.getState()
+    sendJson(res, 200, {
+      ok: true,
+      ts: Date.now(),
+      state,
     })
   }
 

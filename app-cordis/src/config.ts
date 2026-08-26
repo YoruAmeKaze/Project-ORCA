@@ -38,6 +38,17 @@ export interface OrcaRuntimeConfig {
   enabled: boolean
   /** EventBus 滑动窗口大小（默认 200） */
   eventWindowSize: number
+  /** Phase 2.A WorldState 子配置 */
+  worldState: OrcaWorldStateConfig
+}
+
+/**
+ * WorldState 子配置（Phase 2.A 最小版）。
+ * 仅 enabled 字段。time tick / 间隔等参数留到 Phase 2.C。
+ */
+export interface OrcaWorldStateConfig {
+  /** 是否启用 WorldState 派生（默认 true；仅当 OrcaRuntime enabled 时才生效） */
+  enabled: boolean
 }
 
 export interface OrcaConfig {
@@ -141,6 +152,10 @@ export function getConfig(): OrcaConfig {
     runtime: {
       enabled: process.env.ORCA_RUNTIME_ENABLED === '1',
       eventWindowSize: Number(process.env.ORCA_RUNTIME_WINDOW ?? 200),
+      worldState: {
+        // 默认启用（按用户要求）；ORCA_WORLD_STATE_ENABLED=0 可单独关闭
+        enabled: process.env.ORCA_WORLD_STATE_ENABLED !== '0',
+      },
     },
   }
 }
