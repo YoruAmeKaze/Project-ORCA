@@ -10,6 +10,8 @@ import { agent } from './plugins/agent.js'
 import { infoAgents } from './plugins/info-agents.js'
 import { infoReceiver } from './plugins/info-receiver.js'
 import { imageRouter } from './plugins/image-router.js'
+import { dashboard } from './plugins/dashboard.js'
+import { orcaRuntime } from './plugins/orca-runtime.js'
 
 loadOrcaEnv()
 const config = getConfig()
@@ -44,6 +46,14 @@ ctx.plugin(feishuChannel, config)
 ctx.plugin(infoAgents, config) // 信息获取框架（InfoAgent 注册表 + 档案室）
 ctx.plugin(infoReceiver, config) // 外部 App Push 通道（POST /info/records）
 ctx.plugin(imageRouter, config) // 图片事件路由层（D-AGENT-15：chat_id → agent 工位分配；food 管线由路由接收）
+ctx.plugin(dashboard, config)    // Orca 仪表盘（状态监控 UI）
+// Orca Persistent Context Runtime（默认关闭；ORCA_RUNTIME_ENABLED=1 启用，挂载在 agent 之前以便订阅 feishu 事件）
+if (config.runtime.enabled) {
+  ctx.plugin(orcaRuntime, config)
+  ctx.logger.info('[orca-cordis] Persistent Context Runtime 已启用（Phase 0+1）')
+} else {
+  ctx.logger.info('[orca-cordis] Persistent Context Runtime 未启用（ORCA_RUNTIME_ENABLED=1 启用）')
+}
 ctx.plugin(agent, config)
 
 ctx.logger.info(

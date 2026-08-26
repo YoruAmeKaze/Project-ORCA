@@ -90,8 +90,9 @@ guide/
 └── orca-iphone-channel.md         # ★ iPhone 数据通道调研（三通道：飞书/webhook/文件同步，D-AGENT-13）
 app-cordis/                    # ★ Cordis/TypeScript 版（Phase 1 最小闭环 + Phase 2 信息获取框架，见 §9.3）
 │   ├── src/agents/            # 信息获取框架：types（InfoAgent/InfoRecord）registry（闭集）store（档案室 JSONL）executor（Pull 执行）router（R0/R1）builtins/food-log.ts（food-agent）
-│   ├── src/services/          # feishu / llm（DeepSeek）/ vision（Qwen VL）
-│   ├── src/plugins/           # feishu-channel（p2p/群聊，事件带 chat_id）/ agent（CEO：R0 查档 + 待汇报）/ info-agents / info-receiver（POST /info/records）/ image-router（D-AGENT-15 工位路由）/ food-image（food 管线处理器）
+│   ├── src/services/          # feishu / llm（DeepSeek）/ vision（Qwen VL）/ eventBus（v0.5.0 OrcaEvent 流）
+│   ├── src/plugins/           # feishu-channel（p2p/群聊，事件带 chat_id）/ agent（CEO：R0 查档 + 待汇报）/ info-agents / info-receiver（POST /info/records+POST /info/images）/ image-router（D-AGENT-15 工位路由）/ food-image（food 管线处理器）/ dashboard（HTTP 8200 + /api/events v0.5.0）/ orca-runtime（v0.5.0 Runtime 装配）/ input-adapters/feishu-adapter（v0.5.0 翻译层）
+│   ├── src/types/             # event.ts（v0.5.0 OrcaEvent / EventFilter / PublishEventInput）
 │   └── src/data/              # records/ 档案室 JSONL + images/ 图片落盘（均 gitignore）
 ```
 
@@ -202,6 +203,8 @@ app-cordis/                    # ★ Cordis/TypeScript 版（Phase 1 最小闭�
 | HOST / PORT | 服务监听（默认 0.0.0.0:8000） |
 | LOG_LEVEL | 日志级别 |
 
+> **app-cordis 另用**（Cordis 版 v0.4.0+）：`CORDIS_PORT`(8100) / `ORCA_DRY_RUN` / `ORCA_HISTORY_TURNS` / `INFO_RECORDS_DIR` / `IMAGES_DIR` / `INFO_RECEIVER_PORT`(8101) / `INFO_RECEIVER_TOKENS` / `ORCA_CHAT_BINDINGS`（D-AGENT-15）/ `ORCA_VISION_BACKEND`(ollama|dashscope) / `OLLAMA_HOST` / `OLLAMA_VL_MODEL`(qwen3-vl:4b) / **`ORCA_RUNTIME_ENABLED` / `ORCA_RUNTIME_WINDOW`（v0.5.0 Persistent Context Runtime）**
+
 ---
 
 ## 8. 技术栈
@@ -245,7 +248,8 @@ FastAPI + Uvicorn（reload）；DeepSeek API（规划/润色）；Qwen API（视
   - 验证：typecheck/build ✅；冒烟 `node scripts/smoke-info-agent.mjs` **61/61** ✅（含 chat_id 绑定路由、inject 断言、平级模板断言、直连图片上传用例）；真实 iPhone 闭环 ✅ —— 食物群发图 → 消息资源下载 → 本地 qwen3-vl 识别"荷兰豆炒鸡丁 ≈ 320kcal" → 写档 → 独立消息回复 → 问"吃了多少卡" R0 命中
   - 合规修复（2026-08-25）：①控制台 exporter `levels.default: 1 → 2`（fork 语义：level ≤ 阈值才导出，default:1 吞 WARN）；②`downloadImage` 消息资源接口 + 10s 超时 + 错误带 code/msg；③`store.append` 校验 ts/urgency；④food-agent `timeoutMs` 60s + executor 超时 abort 底层请求；⑤image-router 补 `plugin.inject` + 监听器 try/catch（防 unhandledRejection 崩服务）
   - **直连图片上传（app-cordis v0.4.0，2026-08-25）**：`POST /info/images`（info-receiver 新端点，Bearer 鉴权，token 白名单须含 food-agent）——iPhone 快捷指令 Base64 直传跳过飞书 → food 管线识别 → 写 food-log 档案 → **同步返回** `{food,kcal,confidence,recordId,reply}`（快捷指令可直接弹结果）；base64 往返校验防非法输入；`infoReceiver.inject=['infoStore','vision']`（cordis 服务访问必须声明 inject，漏则激活即崩）。验证：smoke 61/61 + 手动 401/200/400 全通
-- 下一步：迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull），refine 留主 agent；会话持久化（jsonl）；urgency=2 主动推送（按落地安排后置）；独立飞书 bot 的 app_id 路由（远期，D-AGENT-13）；群聊免 @ 替代方案（图片走 p2p）
+  - **Persistent Context Runtime Phase 0+1（app-cordis v0.5.0，2026-08-26）**：让 Orca 从"被动响应 Agent"演化为"持续接收信息的 Runtime"的第一步。EventBus（内存 pub/sub + 滑动窗口，默认 200 条，超出丢弃最老并 warn）与现有 `ctx.emit/on` **共存**（不替代——EventBus 是高层抽象带过滤与窗口；ctx.emit 是低层一次性通知）；feishu-adapter **旁路**订阅 `feishu/message` + `feishu/image`，翻译为 OrcaEvent publish（feishu-channel.ts 零修改，现有 agent/image-router/dashboard 订阅完全不受影响）；完全 **默认关闭**（`ORCA_RUNTIME_ENABLED=0`，严格 `==='1'` 才挂载 orcaRuntime plugin）；dashboard 新增 `/api/events` JSON 端点（`?limit=N` 上限500，`?source=xxx` 过滤）。**与 InfoAgent/infoStore 共存不冲突**——EventBus 是流（滑动窗口，自动丢弃），infoStore 是档案（append-only JSONL，按 ttl 清理）；两者职责互补。验证：typecheck/build ✅ + smoke 69/69 ✅（现有 9 阶段测试零回归）+ 真实飞书 E2E ✅（`start-cordis.bat` 启用后，飞书连发 10+ 条消息 → `/api/events` 返回 bufferSize=10 count=10）。**Phase 2~5 路线（不实现，仅规划）**：Phase 2 WorldState + Reducer（v0.6.0）/ Phase 3 AttentionEngine 规则引擎（v0.7.0）/ Phase 4 Decision Executor（v0.8.0）/ Phase 5 LLM 增强
+- 下一步：Phase 2 WorldState MVP（3 个示例 reducer：feishu:message → user.lastSeenAt、pc:app_focus → device.activeApp、phone:sleep → user.status）；迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull），refine 留主 agent；会话持久化（jsonl）；urgency=2 主动推送（按落地安排后置）；独立飞书 bot 的 app_id 路由（远期，D-AGENT-13）；群聊免 @ 替代方案（图片走 p2p）
 
 ---
 

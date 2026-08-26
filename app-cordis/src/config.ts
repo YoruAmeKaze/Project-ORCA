@@ -29,6 +29,17 @@ export interface InfoReceiverConfig {
   tokens: Record<string, string[]>
 }
 
+/**
+ * Orca Persistent Context Runtime 配置（Phase 0+1 最小版）。
+ * ORCA_RUNTIME_ENABLED=1 才会挂载 orcaRuntime plugin（默认 0 关闭，零侵入）。
+ */
+export interface OrcaRuntimeConfig {
+  /** 是否启用（默认 false） */
+  enabled: boolean
+  /** EventBus 滑动窗口大小（默认 200） */
+  eventWindowSize: number
+}
+
 export interface OrcaConfig {
   host: string
   port: number
@@ -42,6 +53,8 @@ export interface OrcaConfig {
   infoReceiver: InfoReceiverConfig
   /** 会话绑定路由（D-AGENT-15）：chat_id → agent 名，未绑定会话 → 默认 Orca 主管线 */
   chatBindings: Record<string, string>
+  /** Orca Persistent Context Runtime（Phase 0+1，默认关闭） */
+  runtime: OrcaRuntimeConfig
 }
 
 const here = dirname(fileURLToPath(import.meta.url)) // app-cordis/src
@@ -125,6 +138,10 @@ export function getConfig(): OrcaConfig {
       tokens: receiverTokens,
     },
     chatBindings,
+    runtime: {
+      enabled: process.env.ORCA_RUNTIME_ENABLED === '1',
+      eventWindowSize: Number(process.env.ORCA_RUNTIME_WINDOW ?? 200),
+    },
   }
 }
 
