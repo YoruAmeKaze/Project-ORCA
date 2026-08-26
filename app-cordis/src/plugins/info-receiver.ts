@@ -166,12 +166,13 @@ export function createImageUploadHandler(opts: ReceiverOptions, deps: ImageUploa
     }
 
     try {
-      const out = await processFoodImage(buf, { store: deps.store, vision: deps.vision, logger: deps.logger, imagesDir: deps.imagesDir })
+      const signal = AbortSignal.timeout(90_000) // 直连路径兜底超时：Ollama 卡死返回明确错误而非无限挂
+      const out = await processFoodImage(buf, { store: deps.store, vision: deps.vision, logger: deps.logger, imagesDir: deps.imagesDir, signal })
       deps.logger.info('[info-images] 识别: %s ≈ %dkcal（record=%s）', out.food, out.kcal, out.recordId ?? '-')
       return sendJson(res, 200, {
         ok: true,
         food: out.food,
-        kcal: out.kcal,
+        kcal: `${out.kcal} kcal`, // 用户要求：kcal 值后带单位（存储/内部保持数字）
         confidence: out.confidence ?? null,
         recordId: out.recordId ?? null,
         reply: out.reply,

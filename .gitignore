@@ -10,6 +10,7 @@ api.txt
 
 # Local config / startup script
 start.bat
+start-cordis.bat
 
 # Python cache
 __pycache__/

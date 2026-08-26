@@ -15,6 +15,8 @@ export interface FoodImageDeps {
   store: JsonlInfoRecordStore
   logger: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void }
   imagesDir: string
+  /** 调用方超时/取消信号（直连路径 90s），透传给视觉请求，卡死不再无限挂 */
+  signal?: AbortSignal
 }
 
 /**
@@ -29,7 +31,7 @@ export async function processFoodImage(
   const filePath = resolve(deps.imagesDir, `${Date.now()}-${randomUUID().slice(0, 8)}.jpg`)
   await writeFile(filePath, buf)
 
-  const agentDeps: AgentDeps = { vision: deps.vision, store: deps.store, logger: deps.logger }
+  const agentDeps: AgentDeps = { vision: deps.vision, store: deps.store, logger: deps.logger, signal: deps.signal }
   const result = await foodLogAgent.execute({ agent: 'food-agent', input: { imagePath: filePath }, sessionId: 'food-image' }, agentDeps)
   if (!result.ok) throw new Error(result.error.message)
 
