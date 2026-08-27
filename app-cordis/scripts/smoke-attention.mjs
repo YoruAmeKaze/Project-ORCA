@@ -33,7 +33,7 @@
  *                 - evaluate({event, state, prevState}) → away-arrival 触发
  *                 这是 Phase 3.A "prev state snapshot" 架构保证的核心验证
  */
-import { AttentionEngine, createAttentionEngine, createAttentionDedup, ruleRegistrySize } from '../dist/services/attention.js'
+import { AttentionEngine, createAttentionEngine, createAttentionDedup, createAttentionThrottle, ruleRegistrySize } from '../dist/services/attention.js'
 import { createWorldStateService, getInitialState } from '../dist/services/worldState.js'
 
 const results = []
@@ -337,6 +337,126 @@ function mkItem(ruleId, eventId, cols = {}) {
   dedup6.clear()
   check('R9.6.2: clear 后 size === 0', dedup6.size() === 0)
   check('R9.6.3: clear 后 shouldEmit=true（重新开始）', dedup6.shouldEmit(mkItem('r', 'e')) === true)
+}
+
+// ────────────────────────────────────────────────────────────
+// R10（Phase 3.B.throttle）：Attention Stream 节流层
+// ────────────────────────────────────────────────────────────
+// 设计：
+// - 仅 notify_immediately / act 受限；remember_only / ignore / wait_until_available 直通
+// - Source cooldown（默认 5000ms）：同 source 窗口内第二次 drop
+// - Hourly cap（默认 10/小时）：滚动窗口，超出 drop
+// - state-only 触发（source='state'）：不应用 source cooldown，也不消耗 hourly cap
+// - 用 fake clock 注入时间（避免 setTimeout 真实等待）
+
+// 测试辅助：fake clock（避免真实时间等待）
+function mkFakeClock(initial = 0) {
+  let now = initial
+  return {
+    now: () => now,
+    set: (t) => { now = t },
+    advance: (ms) => { now += ms },
+  }
+}
+
+{
+  // ── R10.1: 同 source + notify_immediately cooldown ──
+  const clock = mkFakeClock(1000)
+  const t1 = createAttentionThrottle({ cooldownMs: 5000, clock: clock.now })
+  const itemA1 = mkItem('r', 'a', { source: 'feishu', action: 'notify_immediately' })
+  check('R10.1.1: t=1000 第一次 shouldEmit=true', t1.shouldEmit(itemA1) === true)
+  clock.set(2000)  // 1000ms 后，仍在 5000ms cooldown 内
+  const itemA2 = mkItem('r', 'a', { source: 'feishu', action: 'notify_immediately' })
+  check('R10.1.2: t=2000 cooldown 内第二次 shouldEmit=false（drop）', t1.shouldEmit(itemA2) === false)
+  clock.set(7000)  // 5000ms 后 cooldown 到期
+  check('R10.1.3: t=7000 cooldown 到期后第二次 shouldEmit=true', t1.shouldEmit(itemA2) === true)
+
+  // ── R10.2: 不同 source + notify_immediately 独立 ──
+  const clock2 = mkFakeClock(0)
+  const t2 = createAttentionThrottle({ cooldownMs: 5000, clock: clock2.now })
+  clock2.set(100)
+  check('R10.2.1: source=feishu t=100 第一次 true', t2.shouldEmit(mkItem('r', 'a', { source: 'feishu', action: 'notify_immediately' })) === true)
+  // 同 100ms，source 不同 → 不被 cooldown 影响
+  check('R10.2.2: source=pc t=100 第一次 true（不同 source 独立）',
+    t2.shouldEmit(mkItem('r', 'a', { source: 'pc', action: 'notify_immediately' })) === true)
+
+  // ── R10.3: remember_only 不被 cooldown 阻止 ──
+  const clock3 = mkFakeClock(0)
+  const t3 = createAttentionThrottle({ cooldownMs: 5000, clock: clock3.now })
+  clock3.set(0)
+  const rem = mkItem('r', 'a', { source: 'feishu', action: 'remember_only' })
+  check('R10.3.1: remember_only 第一次 true', t3.shouldEmit(rem) === true)
+  clock3.set(100)
+  check('R10.3.2: remember_only 第二次仍 true（不被 cooldown 阻止）', t3.shouldEmit(rem) === true)
+  // 多次相同 item 都通过
+  for (let i = 0; i < 30; i++) {
+    clock3.set(100 + i * 50)
+    t3.shouldEmit(rem)
+  }
+  check('R10.3.3: remember_only 多次仍然全 true（不被 hourly cap 阻止）', t3.shouldEmit(rem) === true)
+
+  // ── R10.4: hourly cap（默认 10/小时）──
+  // 用不同 source 避免 source cooldown 干扰；每个 source 只发一次
+  const clock4 = mkFakeClock(0)
+  const t4 = createAttentionThrottle({ cooldownMs: 0, hourlyCap: 3, windowMs: 60_000, clock: clock4.now })
+  let passCount = 0
+  let dropCount = 0
+  for (let i = 1; i <= 5; i++) {
+    clock4.set(i * 100)  // 间隔 100ms（cooldown=0 无影响；只看 cap）
+    const item = mkItem('r', `a${i}`, { source: `src${i}`, action: 'notify_immediately' })
+    if (t4.shouldEmit(item)) passCount++; else dropCount++
+  }
+  check('R10.4.1: hourlyCap=3 → 前 3 个通过（passCount=3）', passCount === 3)
+  check('R10.4.2: hourlyCap=3 → 后 2 个 drop（dropCount=2）', dropCount === 2)
+
+  // ── R10.5: 不同 action 不互相消耗 quota ──
+  // 3 个 remember_only 不消耗 notify 配额
+  const clock5 = mkFakeClock(0)
+  const t5 = createAttentionThrottle({ cooldownMs: 0, hourlyCap: 3, windowMs: 60_000, clock: clock5.now })
+  clock5.set(0)
+  // 3 个 remember_only（不消耗配额）
+  for (let i = 1; i <= 3; i++) {
+    clock5.set(i * 50)
+    t5.shouldEmit(mkItem('r', `mem${i}`, { source: 'feishu', action: 'remember_only' }))
+  }
+  // 然后 3 个 notify_immediately 应该都通过（remember_only 没消耗配额）
+  for (let i = 1; i <= 3; i++) {
+    clock5.set(1000 + i * 50)
+    const item = mkItem('r', `not${i}`, { source: `nsrc${i}`, action: 'notify_immediately' })
+    check(`R10.5.${i}: notify #${i} 在 3 个 remember_only 后仍通过（不消耗）`,
+      t5.shouldEmit(item) === true)
+  }
+  // 第 4 个 notify 应该被 cap 阻止
+  clock5.set(2000)
+  check('R10.5.4: 第 4 个 notify 被 hourly cap 阻止（remember_only 不消耗 cap）',
+    t5.shouldEmit(mkItem('r', 'not4', { source: 'nsrc4', action: 'notify_immediately' })) === false)
+
+  // ── R10.6: state-only（source='state'）不受 source cooldown 与 hourly cap 限制 ──
+  const clock6 = mkFakeClock(0)
+  const t6 = createAttentionThrottle({ cooldownMs: 5000, hourlyCap: 1, windowMs: 60_000, clock: clock6.now })
+  clock6.set(0)
+  // 1 个真 source notify → 消耗 cap=1
+  const realNotify = mkItem('r', 'real', { source: 'feishu', action: 'notify_immediately' })
+  check('R10.6.1: 真 source notify 第一次 true（消耗 cap=1）', t6.shouldEmit(realNotify) === true)
+  // 现在 cap 满了，但 state-only 直通
+  for (let i = 0; i < 5; i++) {
+    clock6.set(100 + i * 100)
+    const stateOnly = mkItem('r', `state${i}`, { source: 'state', action: 'notify_immediately' })
+    check(`R10.6.${i + 2}: state-only notify #${i + 1} 仍 true（不消耗 cap）`,
+      t6.shouldEmit(stateOnly) === true)
+  }
+  // 真 source 第二次仍被 cap 阻止
+  clock6.set(2000)
+  check('R10.6.7: 真 source 第二次 notify 被 cap 阻止',
+    t6.shouldEmit(mkItem('r', 'real2', { source: 'feishu', action: 'notify_immediately' })) === false)
+
+  // ── R10.7: cooldown 到期后允许再次 emit（R10.1 已验证，此处补充 act action）──
+  const clock7 = mkFakeClock(1000)
+  const t7 = createAttentionThrottle({ cooldownMs: 5000, clock: clock7.now })
+  clock7.set(1000)
+  check('R10.7.1: act 第一次 true', t7.shouldEmit(mkItem('r', 'a', { source: 'feishu', action: 'act' })) === true)
+  clock7.set(6500)  // cooldown 到期
+  check('R10.7.2: act 第二次 true（cooldown 到期）', t7.shouldEmit(mkItem('r', 'a', { source: 'feishu', action: 'act' })) === true)
 }
 
 // ────────── 结果 ──────────

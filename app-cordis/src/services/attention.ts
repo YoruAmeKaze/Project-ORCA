@@ -19,6 +19,7 @@ import type {
   AttentionItem,
   AttentionInput,
   AttentionRule,
+  AttentionThrottleService,
 } from '../types/attention.js'
 
 // ── 注册表 ────────────────────────────────────────────────────────────
@@ -156,10 +157,13 @@ export class AttentionEngine implements AttentionEngineService {
     for (const rule of ruleRegistry.values()) {
       if (!rule.predicate(input)) continue
       const partial = rule.produce(input)
+      // Phase 3.B.throttle：source 用于 source cooldown；state-only 触发用 'state' 占位
+      const source = input.event?.source ?? 'state'
       out.push({
         ruleId: rule.id,
         stateSnapshot,
         evaluatedAt,
+        source,
         ...partial,
         // eventId 优先用 produce 返回的，否则用 input.event.id
         eventId: partial.eventId ?? eventId,
@@ -241,4 +245,123 @@ export class AttentionDedup implements AttentionDedupService {
 /** 工厂函数（Phase 3.B 第一版默认窗口 5000ms） */
 export function createAttentionDedup(opts: { windowMs?: number } = {}): AttentionDedupService {
   return new AttentionDedup(opts)
+}
+
+// ── Phase 3.B.throttle: AttentionThrottle ──────────────────────────────────
+
+/** 默认 source cooldown 间隔（毫秒） */
+export const DEFAULT_THROTTLE_COOLDOWN_MS = 5000
+/** 默认 hourly cap：1 小时内最多 notify 次数 */
+export const DEFAULT_THROTTLE_HOURLY_CAP = 10
+/** 默认 hourly window（毫秒 = 1 小时） */
+export const DEFAULT_THROTTLE_WINDOW_MS = 60 * 60 * 1000
+
+/**
+ * AttentionThrottle —— 防止短时间内反复打扰用户
+ *
+ * 两种机制（仅对会打扰用户的 action 生效：`notify_immediately` + `act`）：
+ *
+ * 1. **Source cooldown**（`cooldownMs`，默认 5000ms）：
+ *    - 同一 source（如 'feishu'、'pc'、'calendar'）在 cooldownMs 内的下一次 notify emit → drop
+ *    - 跨 source 独立计数（feishu cooldown 不影响 pc）
+ *    - state-only 触发（source='state'）**不应用** cooldown（避免 state_changed 被任意 source 限制）
+ *
+ * 2. **Hourly cap**（`hourlyCap`，默认 10 / `windowMs` 默认 1 小时）：
+ *    - 滑动窗口：滚动保留 [now - windowMs, now] 内的 notify emit 时间戳
+ *    - 超过 cap → drop
+ *    - 与 source cooldown 独立；可能同时被两者拦截
+ *
+ * 直通（不应用 throttle）：
+ * - `action ∈ {remember_only, ignore, wait_until_available}` → 直接通过
+ * - `source === 'state'` 或 `source === undefined` → 不应用 source cooldown（避免 state_changed 被任意限制）
+ *
+ * 不做（Phase 3.B 第二步）：
+ * - 不持久化
+ * - 不规则配置化（用户决策：先稳定再配置；窗口默认值硬编码）
+ * - 不暴露 throttle 配置（构造参数仅供测试用）
+ */
+export class AttentionThrottle implements AttentionThrottleService {
+  private readonly cooldownMs: number
+  private readonly hourlyCap: number
+  private readonly windowMs: number
+  private clock: () => number = () => Date.now()
+  /** source → 上一次 notify emit 时间戳 */
+  private readonly lastBySource = new Map<string, number>()
+  /** rolling window 内的 notify emit 时间戳数组 */
+  private readonly hourlyTimestamps: number[] = []
+
+  constructor(opts: {
+    cooldownMs?: number
+    hourlyCap?: number
+    windowMs?: number
+    clock?: () => number
+  } = {}) {
+    this.cooldownMs = opts.cooldownMs ?? DEFAULT_THROTTLE_COOLDOWN_MS
+    this.hourlyCap = opts.hourlyCap ?? DEFAULT_THROTTLE_HOURLY_CAP
+    this.windowMs = opts.windowMs ?? DEFAULT_THROTTLE_WINDOW_MS
+    if (opts.clock) this.clock = opts.clock
+  }
+
+  shouldEmit(item: AttentionItem): boolean {
+    // 1. 仅对会打扰用户的 action 生效；其他直通
+    if (item.action !== 'notify_immediately' && item.action !== 'act') {
+      return true
+    }
+
+    // 2. state-only 触发（source='state' 或 undefined）→ 不应用 source cooldown
+    //    （避免 state_changed 被任意 source 限制；如未来需要 cap state-only 通知可单独加 'state' cap）
+    const realSource = (item.source && item.source !== 'state') ? item.source : null
+
+    const now = this.clock()
+
+    if (realSource !== null) {
+      // 3a. Source cooldown
+      const last = this.lastBySource.get(realSource)
+      if (last !== undefined && now - last < this.cooldownMs) {
+        return false  // cooldown 内 → drop
+      }
+      // 3b. Hourly cap（滑动窗口）
+      this.pruneHourly(now)
+      if (this.hourlyTimestamps.length >= this.hourlyCap) {
+        return false  // 超出 cap → drop
+      }
+    }
+    // state-only：跳过 cooldown + cap（直通）
+
+    // 通过 → record
+    if (realSource !== null) {
+      this.lastBySource.set(realSource, now)
+      this.hourlyTimestamps.push(now)
+    }
+    return true
+  }
+
+  reset(): void {
+    this.lastBySource.clear()
+    this.hourlyTimestamps.length = 0
+  }
+
+  setClock(fn: () => number): void {
+    this.clock = fn
+  }
+
+  /** 清理 windowMs 之外的时间戳 */
+  private pruneHourly(now: number): void {
+    const cutoff = now - this.windowMs
+    while (this.hourlyTimestamps.length > 0) {
+      const head = this.hourlyTimestamps[0]
+      if (head === undefined || head >= cutoff) break
+      this.hourlyTimestamps.shift()
+    }
+  }
+}
+
+/** 工厂函数（Phase 3.B.throttle 第一版默认值） */
+export function createAttentionThrottle(opts: {
+  cooldownMs?: number
+  hourlyCap?: number
+  windowMs?: number
+  clock?: () => number
+} = {}): AttentionThrottleService {
+  return new AttentionThrottle(opts)
 }

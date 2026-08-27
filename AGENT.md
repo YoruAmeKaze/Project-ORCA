@@ -282,7 +282,16 @@ FastAPI + Uvicorn（reload）；DeepSeek API（规划/润色）；Qwen API（视
     3. **Rule 配置化（YAML/JSON）**：外部加载规则，覆盖/扩展内置
     4. **设计目标**：让 Attention Stream 先稳定再可配置，避免去重逻辑和配置逻辑交叉复杂度
 
-  - **下一步 Phase 3.B.throttle → Phase 3.B.rule-config → Phase 4 Decision Executor（订阅 'orca/attention'，按 priority 排序 + throttle + 执行 notify/act/remember）**。
+  - **Phase 3.B.throttle（app-cordis，2026-08-27）**：在 AttentionDedup 之后插入 AttentionThrottle。**职责分离（第三层）**：AttentionEngine（关注"是什么"）+ AttentionDedup（关注"是不是新刺激"）+ AttentionThrottle（关注"现在该不该打扰用户"）。**作用范围**：仅对 `notify_immediately` + `act` 生效；`remember_only` / `ignore` / `wait_until_available` **直通**（不被 throttle 影响）；state-only 触发（source='state'）**不应用 source cooldown、不消耗 hourly cap**（避免 state_changed 被任意 source 限制）。**两种机制**：
+    1. **Source cooldown**（默认 5000ms）：同 source 在窗口内第二次 notify drop；跨 source 独立
+    2. **Hourly cap**（默认 10/小时）：滑动窗口 [now - 1h, now] 内的 notify emit 时间戳；超出 cap drop
+    **AttentionItem.source 字段**（Phase 3.B.throttle 引入）：`source?: string` 标注触发来源（feishu/pc/calendar/phone/'state'/'internal'），用于 source cooldown 决策。AttentionEngine.evaluate 从 `input.event?.source ?? 'state'` 提取。**不修改 Rule**（保持 Phase 3.A 纯评估边界），**不修改 Dedup**（保持职责分离）。**R10 smoke-attention**：23 用例（R10.1 同 source cooldown / R10.2 不同 source 独立 / R10.3 remember_only 直通 / R10.4 hourly cap / R10.5 不同 action 不消耗 quota / R10.6 state-only 不受 cap / R10.7 act action 受限）。**零侵入**：Phase 3.A evaluate 行为不变；smoke:world-state 94/94 ✅。**验证**：smoke:attention 87/87 ✅（48 R8 + 16 R9 + 23 R10）+ smoke:world-state 94/94 ✅。
+  - **Phase 3.B 路线（已完成 dedup + throttle，下一步 rule config）**：
+    1. ✅ **Attention 去重（dedup）**——已完成
+    2. ✅ **Attention 节流（throttle/cooldown）**——已完成（source cooldown + hourly cap，仅对 notify/act 生效）
+    3. **Rule 配置化（YAML/JSON）**：外部加载规则，覆盖/扩展内置
+    4. **设计目标**：让 Attention Stream 先稳定再可配置，避免去重/节流/配置逻辑交叉复杂度
+  - **下一步 Phase 3.B.rule-config → Phase 4 Decision Executor（订阅 'orca/attention'，按 priority 排序 + throttle（已有） + 执行 notify/act/remember）**。
 
 ---
 

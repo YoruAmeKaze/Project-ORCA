@@ -63,6 +63,9 @@ export interface AttentionInput {
  * - ruleId: 触发规则的唯一 ID（用于追溯）
  * - priority / action / reason: 规则的语义产出
  * - eventId: 触发的具体事件（state-only 触发为 undefined）
+ * - source: 触发的 source（feishu / pc / calendar / phone / 'state' 等）；Phase 3.B.throttle 用作 source cooldown 决策
+ *   - 'state' 表示 state-only 触发（orca/state_changed），Throttle 不应用 source cooldown（避免 state_changed 被任意 source cooldown 限制）
+ *   - undefined 表示 evaluate 时无法识别 source（极少；Throttle 不应用 source cooldown）
  * - stateSnapshot: 评估时的 WorldState 快照（用于追溯，**深拷贝避免外部 mutation**）
  * - evaluatedAt: 评估时间戳
  */
@@ -72,6 +75,7 @@ export interface AttentionItem {
   reason: string
   action: AttentionAction
   eventId?: string
+  source?: string
   stateSnapshot: WorldState
   evaluatedAt: number
 }
@@ -138,4 +142,38 @@ export interface AttentionDedupService {
   size(): number
   /** 清空 map（测试 / dispose） */
   clear(): void
+}
+
+/**
+ * AttentionThrottle —— Attention Stream 节流层（Phase 3.B.throttle）
+ *
+ * 职责分离：
+ * - AttentionEngine：判断事件是否值得关注 + 产生 AttentionItem（**关注"是什么"**）
+ * - AttentionDedup：  控制同一 (ruleId, eventId) 是否在窗口期内重复 emit（**关注"是不是新刺激"**）
+ * - AttentionThrottle：**关注"现在该不该打扰用户"**——即使值得注意，也要避免短时间内反复打扰
+ *
+ * 限制范围（用户决策）：
+ * - **仅对会打扰用户的 action 生效**：`notify_immediately` + `act`
+ * - `remember_only` / `ignore` / `wait_until_available` **直通**（不被 throttle 影响）
+ * - state-only 触发的 item（source='state'）**直通**（不应用 source cooldown，避免 state_changed 被任意 source 限制）
+ *
+ * 不做（Phase 3.B 第二步）：
+ * - 不持久化
+ * - 不规则配置化（用户决策：先稳定再配置）
+ * - 不 LLM 增强
+ */
+export interface AttentionThrottleService {
+  /**
+   * 判断 item 是否应通过 throttle emit（true）或被节流（false）。
+   *
+   * - true：item 应 emit（首次 / cooldown 外 / cap 未满）
+   * - false：被 cooldown 或 hourly cap 拦截
+   *
+   * 注意：是否真正 emit 仍取决于 Dedup 决定（Throttle 在 Dedup 之后；只决定是否放行已经通过 Dedup 的 item）
+   */
+  shouldEmit(item: AttentionItem): boolean
+  /** 清空所有状态（dispose / 测试） */
+  reset(): void
+  /** 注入 clock（仅测试用，避免 setTimeout 真实等待） */
+  setClock(fn: () => number): void
 }
