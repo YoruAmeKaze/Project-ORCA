@@ -33,7 +33,7 @@
  *                 - evaluate({event, state, prevState}) → away-arrival 触发
  *                 这是 Phase 3.A "prev state snapshot" 架构保证的核心验证
  */
-import { AttentionEngine, createAttentionEngine, ruleRegistrySize } from '../dist/services/attention.js'
+import { AttentionEngine, createAttentionEngine, createAttentionDedup, ruleRegistrySize } from '../dist/services/attention.js'
 import { createWorldStateService, getInitialState } from '../dist/services/worldState.js'
 
 const results = []
@@ -266,6 +266,77 @@ function mkPcAppFocus(app) {
   check('R8.B1.7: away-arrival action=remember_only', items[0]?.action === 'remember_only')
   check('R8.B1.8: away-arrival priority=normal', items[0]?.priority === 'normal')
   check('R8.B1.9: eventId 来自 input.event', items[0]?.eventId === feishuMsg.id)
+}
+
+// ────────────────────────────────────────────────────────────
+// R9（Phase 3.B.dedup）：Attention Stream 去重层
+// ────────────────────────────────────────────────────────────
+// 设计：
+// - key = `${ruleId}:${eventId ?? '__state__'}`
+// - 窗口默认 5000ms（生产硬编码）；测试用 50ms 短窗口避免等待
+// - 第一次 shouldEmit=true；窗口内重复 → false；窗口外 → 再次 true
+
+// 测试辅助：构造 AttentionItem（仅 dedup 关心的字段）
+function mkItem(ruleId, eventId, cols = {}) {
+  return {
+    ruleId,
+    eventId,
+    priority: 'normal',
+    action: 'remember_only',
+    reason: 'test',
+    stateSnapshot: {},
+    evaluatedAt: 0,
+    ...cols,
+  }
+}
+
+{
+  // ── R9.1: 同 ruleId + 同 eventId 50ms 内 → 第二次 drop ──
+  const dedup1 = createAttentionDedup({ windowMs: 50 })
+  const item1a = mkItem('feishu-deadline', 'evt_1')
+  check('R9.1.1: 第一次 shouldEmit=true', dedup1.shouldEmit(item1a) === true)
+  check('R9.1.2: map.size === 1', dedup1.size() === 1)
+  const item1b = mkItem('feishu-deadline', 'evt_1')  // 同 ruleId+eventId
+  check('R9.1.3: 50ms 内第二次 shouldEmit=false（drop）', dedup1.shouldEmit(item1b) === false)
+
+  // ── R9.2: 不同 eventId → 两条都通过 ──
+  const dedup2 = createAttentionDedup({ windowMs: 50 })
+  const a = mkItem('feishu-deadline', 'evt_a')
+  const b = mkItem('feishu-deadline', 'evt_b')
+  check('R9.2.1: event A shouldEmit=true', dedup2.shouldEmit(a) === true)
+  check('R9.2.2: event B shouldEmit=true（不同 eventId 独立计数）', dedup2.shouldEmit(b) === true)
+  check('R9.2.3: map.size === 2', dedup2.size() === 2)
+
+  // ── R9.3: 不同 ruleId + 同 eventId → 两条都通过 ──
+  const dedup3 = createAttentionDedup({ windowMs: 50 })
+  const x = mkItem('feishu-deadline', 'evt_x')
+  const y = mkItem('away-arrival', 'evt_x')  // 同 eventId 不同 ruleId
+  check('R9.3.1: rule A shouldEmit=true', dedup3.shouldEmit(x) === true)
+  check('R9.3.2: rule B shouldEmit=true（不同 ruleId 独立计数）', dedup3.shouldEmit(y) === true)
+
+  // ── R9.4: 窗口过期 → 两条都通过 ──
+  const dedup4 = createAttentionDedup({ windowMs: 50 })
+  const z = mkItem('feishu-deadline', 'evt_z')
+  check('R9.4.1: 第一次 shouldEmit=true', dedup4.shouldEmit(z) === true)
+  await new Promise((r) => setTimeout(r, 80))  // 超过 50ms 窗口
+  check('R9.4.2: 窗口外第二次 shouldEmit=true（重新 emit）', dedup4.shouldEmit(z) === true)
+
+  // ── R9.5: state-only 触发（eventId=undefined）→ 用 '__state__' 兜底 ──
+  const dedup5 = createAttentionDedup({ windowMs: 50 })
+  const stateOnly = mkItem('sleeping-quiet', undefined)
+  check('R9.5.1: state-only 第一次 shouldEmit=true', dedup5.shouldEmit(stateOnly) === true)
+  check('R9.5.2: state-only 第二次 shouldEmit=false（去重）', dedup5.shouldEmit(stateOnly) === false)
+  // 不同 rule 的 state-only 仍独立
+  const stateOnly2 = mkItem('away-arrival', undefined)
+  check('R9.5.3: state-only 不同 ruleId → true（key 区分）', dedup5.shouldEmit(stateOnly2) === true)
+
+  // ── R9.6: clear() 后 → 重新开始计数 ──
+  const dedup6 = createAttentionDedup({ windowMs: 50 })
+  dedup6.shouldEmit(mkItem('r', 'e'))
+  check('R9.6.1: clear 前 size === 1', dedup6.size() === 1)
+  dedup6.clear()
+  check('R9.6.2: clear 后 size === 0', dedup6.size() === 0)
+  check('R9.6.3: clear 后 shouldEmit=true（重新开始）', dedup6.shouldEmit(mkItem('r', 'e')) === true)
 }
 
 // ────────── 结果 ──────────

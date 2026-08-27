@@ -99,10 +99,43 @@ export interface AttentionRule {
  * 设计原则：
  * - 纯评估：evaluate() 只返回 AttentionItem[]，不执行任何 action
  * - 不持久化（重启即失）
- * - 不去重 / 不节流（Phase 3 第一版；Phase 4+ 可加）
+ * - 不去重 / 不节流（Phase 3 第一版；Phase 3.B 增加去重；Phase 4+ 节流）
  */
 export interface AttentionEngineService {
   evaluate(input: AttentionInput): AttentionItem[]
   /** 已注册规则数（debug 用） */
   ruleCount(): number
+}
+
+/**
+ * AttentionDedup —— Attention Stream 去重层（Phase 3.B）
+ *
+ * 职责分离：
+ * - AttentionEngine：判断事件是否值得关注 + 产生 AttentionItem（**关注"是什么"**）
+ * - AttentionDedup：  控制同一 (ruleId, eventId) 是否在窗口期内重复 emit（**关注"多不多"**）
+ *
+ * 不做（Phase 3.B 第一版）：
+ * - 不做 priority 合并（多个 item 不合并，只决定 emit/drop）
+ * - 不做 throttle / cooldown（按 source 节流属 Phase 3.B 第二步）
+ * - 不做持久化
+ * - 不暴露配置（默认窗口 5000ms，构造参数仅供测试用）
+ *
+ * key 设计：`${ruleId}:${eventId ?? '__state__'}`
+ * - 同 ruleId + 同 eventId 在窗口期内 → 第二次 drop
+ * - state-only 触发（eventId=undefined，如 orca/state_changed）→ 用 '__state__' 兜底
+ *   （否则多个 state_changed 触发会因 key 全部相同而被 dedup，丢失信息）
+ */
+export interface AttentionDedupService {
+  /**
+   * 判断 item 是否应 emit（true）或 drop（false）。
+   * - true：从未 emit 过（或窗口已过期），且已记录本次 emit
+   * - false：窗口期内重复，drop
+   *
+   * 副作用：调用即更新内部 map（lastEmitTs = now）。
+   */
+  shouldEmit(item: AttentionItem): boolean
+  /** 当前 map 大小（debug 用） */
+  size(): number
+  /** 清空 map（测试 / dispose） */
+  clear(): void
 }

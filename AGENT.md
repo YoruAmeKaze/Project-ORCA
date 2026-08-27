@@ -269,13 +269,20 @@ FastAPI + Uvicorn（reload）；DeepSeek API（规划/润色）；Qwen API（视
 
   - **R8 smoke-attention（48 用例）**：覆盖 4 条规则 + 1 个 SKIP（urgent-keyword TODO Phase 3.B）+ 9 个 prevState 集成回归。脚本 `scripts/smoke-attention.mjs`，跑法 `npm run smoke:attention`。验证：smoke:world-state 94/94 ✅（零回归）+ smoke:attention 48/48 ✅。
 
-  - **Phase 3.B 路线（规划中）**：
-    1. **Attention 去重（dedup）**：相同 (ruleId, eventId) 在窗口期内合并，避免噪声
+  - **Phase 3.B.dedup（app-cordis，2026-08-27）**：在 AttentionEngine 与 emit 'orca/attention' 之间插入 AttentionDedup 层。**职责分离**：AttentionEngine（关注"是什么"，评估事件 → 产生 AttentionItem）vs AttentionDedup（关注"多不多"，窗口期内控制重复 emit）。**不修改 Rule**，不引入配置系统（窗口默认 5000ms 硬编码）。**key 设计**：`${ruleId}:${eventId ?? '__state__'}`（state-only 触发如 `orca/state_changed` 用 `'__state__'` 兜底）。**行为**：
+    - 同 ruleId + 同 eventId 在窗口期内 → 第二次 drop
+    - 不同 ruleId 或不同 eventId → 各自独立计数
+    - 窗口过期 → 重新 emit
+    - clear() 可重置（dispose 时自动调）
+    **集成位置**：`src/plugins/attention-engine.ts` 内，evaluate 后调 `dedup.shouldEmit(item)` → true 才 emit 'orca/attention'。dedup 是 plugin 闭包私有 state，不暴露 ctx 服务。**R9 smoke-attention**：16 用例（R9.1 同 ruleId+eventId 去重 / R9.2 不同 eventId 独立 / R9.3 不同 ruleId 独立 / R9.4 窗口过期 / R9.5 state-only 用 '__state__' / R9.6 clear 重置）。**零侵入**：Phase 3.A evaluate 行为不变；smoke:world-state 94/94 ✅。**验证**：smoke:attention 64/64 ✅（48 + 16）+ smoke:world-state 94/94 ✅。
+
+  - **Phase 3.B 路线（已完成 dedup，下一步 throttle / rule config）**：
+    1. ✅ **Attention 去重（dedup）**——已完成（v0.6.1+）
     2. **Attention 节流（throttle/cooldown）**：同一 source 在 N ms 内只 emit 一次 notify；hourly cap 防止过度提醒
     3. **Rule 配置化（YAML/JSON）**：外部加载规则，覆盖/扩展内置
     4. **设计目标**：让 Attention Stream 先稳定再可配置，避免去重逻辑和配置逻辑交叉复杂度
 
-  - **下一步 Phase 4 Decision Executor（订阅 'orca/attention'，按 priority 排序 + throttle + 执行 notify/act/remember）**：用户已确认 Phase 3.B 优先于 Phase 4。
+  - **下一步 Phase 3.B.throttle → Phase 3.B.rule-config → Phase 4 Decision Executor（订阅 'orca/attention'，按 priority 排序 + throttle + 执行 notify/act/remember）**。
 
 ---
 

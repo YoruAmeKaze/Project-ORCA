@@ -14,6 +14,7 @@
  */
 
 import type {
+  AttentionDedupService,
   AttentionEngineService,
   AttentionItem,
   AttentionInput,
@@ -175,4 +176,69 @@ export class AttentionEngine implements AttentionEngineService {
 /** 工厂函数 */
 export function createAttentionEngine(): AttentionEngineService {
   return new AttentionEngine()
+}
+
+// ── Phase 3.B: AttentionDedup ─────────────────────────────────────────
+
+/**
+ * 默认 dedup 窗口（毫秒）：5000ms。
+ * Phase 3.B 第一版硬编码；未来可作为 OrcaAttentionConfig 选项暴露。
+ */
+export const DEFAULT_DEDUP_WINDOW_MS = 5000
+
+interface DedupEntry {
+  /** 最近一次 emit 时间戳（ms） */
+  lastEmitTs: number
+}
+
+/**
+ * AttentionDedup —— (ruleId, eventId) 窗口期内去重
+ *
+ * 内部 key：`${ruleId}:${eventId ?? '__state__'}`
+ * - 同 ruleId + 同 eventId 在窗口期内 → 第二次 drop
+ * - 不同 ruleId 或不同 eventId → 个自独立计数
+ * - state-only 触发（eventId=undefined）→ 用 '__state__' 兜底
+ *
+ * 不做：
+ * - 不去重 map 容量限制（map 会无限增长；Phase 3.B+ 可加 LRU）
+ * - 不持久化
+ * - 不规则配置化（用户决策：先 dedup/throttle，再 rule config）
+ */
+export class AttentionDedup implements AttentionDedupService {
+  private readonly map = new Map<string, DedupEntry>()
+  private readonly windowMs: number
+
+  constructor(opts: { windowMs?: number } = {}) {
+    this.windowMs = opts.windowMs ?? DEFAULT_DEDUP_WINDOW_MS
+  }
+
+  shouldEmit(item: AttentionItem): boolean {
+    const key = this.keyOf(item)
+    const now = Date.now()
+    const existing = this.map.get(key)
+    if (existing && now - existing.lastEmitTs < this.windowMs) {
+      // 窗口期内重复 → drop
+      return false
+    }
+    // 首次或窗口已过期 → record + emit
+    this.map.set(key, { lastEmitTs: now })
+    return true
+  }
+
+  size(): number {
+    return this.map.size
+  }
+
+  clear(): void {
+    this.map.clear()
+  }
+
+  private keyOf(item: AttentionItem): string {
+    return `${item.ruleId}:${item.eventId ?? '__state__'}`
+  }
+}
+
+/** 工厂函数（Phase 3.B 第一版默认窗口 5000ms） */
+export function createAttentionDedup(opts: { windowMs?: number } = {}): AttentionDedupService {
+  return new AttentionDedup(opts)
 }
