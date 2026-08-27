@@ -1,9 +1,9 @@
 {
   "name": "app-cordis",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
-  "description": "Project Orca — Cordis(TypeScript) 版：Phase 1 飞书→AI 最小闭环 + Phase 2 信息获取框架（InfoAgent：Pull+Push、档案室 JSONL、food-agent、会话绑定路由、本地视觉、直连图片上传 /info/images）+ Phase 0+1 Persistent Context Runtime（OrcaEvent 流 + EventBus 滑动窗口 + feishu-adapter，默认关闭）",
+  "description": "Project Orca — Cordis(TypeScript) 版：Phase 1 飞书→AI 最小闭环 + Phase 2 信息获取框架（InfoAgent：Pull+Push、档案室 JSONL、food-agent、会话绑定路由、本地视觉、直连图片上传 /info/images）+ Phase 0+1 Persistent Context Runtime（OrcaEvent 流 + EventBus 滑动窗口 + feishu-adapter，默认关闭）+ Phase 2 WorldState Runtime（WorldStateService + Reducer 注册表 + WorldStateUpdater time tick + 3 个 mock 输入 adapter + debug publisher，Phase 2.A/2.C/2.D 完整闭环）",
   "engines": {
     "node": ">=20"
   },
