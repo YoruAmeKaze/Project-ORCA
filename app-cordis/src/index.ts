@@ -13,6 +13,9 @@ import { imageRouter } from './plugins/image-router.js'
 import { dashboard } from './plugins/dashboard.js'
 import { orcaRuntime } from './plugins/orca-runtime.js'
 import { worldStateUpdater } from './plugins/world-state-updater.js'
+import { pcAdapter } from './plugins/input-adapters/pc-adapter.js'
+import { calendarAdapter } from './plugins/input-adapters/calendar-adapter.js'
+import { phoneAdapter } from './plugins/input-adapters/phone-adapter.js'
 
 loadOrcaEnv()
 const config = getConfig()
@@ -58,6 +61,19 @@ if (config.runtime.enabled) {
     ctx.logger.info('[orca-cordis] WorldState 已启用（Phase 2.A）')
   } else {
     ctx.logger.info('[orca-cordis] WorldState 未启用（ORCA_WORLD_STATE_ENABLED=0 关闭）')
+  }
+  // Phase 2.D：mock 输入 adapter（pc/calendar/phone），全部默认 disabled
+  if (config.runtime.pc.enabled) {
+    pcAdapter(ctx, config)
+    ctx.logger.info('[orca-cordis] PC adapter 已启用（mock）')
+  }
+  if (config.runtime.calendar.enabled) {
+    calendarAdapter(ctx, config)
+    ctx.logger.info('[orca-cordis] Calendar adapter 已启用（mock）')
+  }
+  if (config.runtime.phone.enabled) {
+    phoneAdapter(ctx, config)
+    ctx.logger.info('[orca-cordis] Phone adapter 已启用（mock）')
   }
 } else {
   ctx.logger.info('[orca-cordis] Persistent Context Runtime 未启用（ORCA_RUNTIME_ENABLED=1 启用）')

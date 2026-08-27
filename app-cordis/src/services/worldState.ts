@@ -84,6 +84,34 @@ function feishuMessageReducer(state: WorldState, event: OrcaEvent): Partial<Worl
 // 注册：仅一次（模块加载时）。若需热重载可改为在 plugin apply 中注册并提供 dispose。
 registerReducer('feishu', 'message', feishuMessageReducer)
 
+// ── Phase 2.D：内置 reducers（pc/calendar/phone adapter 触发） ────────────
+
+/** pc:app_focus → device.activeApp = event.data.app */
+function pcAppFocusReducer(state: WorldState, event: OrcaEvent): Partial<WorldState> {
+  const app = typeof event.data.app === 'string' ? event.data.app : ''
+  return {
+    device: { ...state.device, activeApp: app },
+  }
+}
+registerReducer('pc', 'app_focus', pcAppFocusReducer)
+
+/** calendar:calendar_event → user.currentActivity = event.data.activity */
+function calendarEventReducer(state: WorldState, event: OrcaEvent): Partial<WorldState> {
+  const activity = typeof event.data.activity === 'string' ? event.data.activity : 'meeting'
+  return {
+    user: { ...state.user, currentActivity: activity },
+  }
+}
+registerReducer('calendar', 'calendar_event', calendarEventReducer)
+
+/** phone:sleep → user.status = 'sleeping' */
+function phoneSleepReducer(state: WorldState, event: OrcaEvent): Partial<WorldState> {
+  return {
+    user: { ...state.user, status: 'sleeping' },
+  }
+}
+registerReducer('phone', 'sleep', phoneSleepReducer)
+
 // ── applyReducers ───────────────────────────────────────────────────────
 
 /**

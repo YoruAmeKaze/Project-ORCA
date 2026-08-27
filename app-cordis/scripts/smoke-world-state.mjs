@@ -117,8 +117,8 @@ const logger = {
   check('R1.5: device 不被 reducer 触碰（保持原样）', JSON.stringify(next.device) === JSON.stringify(initial.device))
   check('R1.6: time 不被 reducer 触碰（保持原样）', JSON.stringify(next.time) === JSON.stringify(initial.time))
 
-  // 不匹配的 source：pc:app_focus（未注册 reducer）
-  const pcEv = { id: 'e2', source: 'pc', type: 'app_focus', timestamp: 3_000_000, data: { app: 'VSCode' }, priority: 1 }
+  // 不匹配的 source：使用完全未注册的 sensor:reading（Phase 2.D 也没注册这个 key）
+  const pcEv = { id: 'e2', source: 'sensor', type: 'reading', timestamp: 3_000_000, data: { value: 23 }, priority: 1 }
   const noChange = applyReducers(initial, pcEv)
   check('R1.7: 未注册 reducer → 返回原 state 引用（applyReducers 不创建空 partial）', noChange === initial)
 
@@ -176,10 +176,10 @@ const logger = {
     lastChanged?.lastEventId === after1.lastEventId &&
     lastChanged?.lastUpdated === after1.lastUpdated)
 
-  // publish pc:app_focus（无 reducer） → 不应触发 emit
-  bus.publish({ source: 'pc', type: 'app_focus', data: { app: 'VSCode' }, priority: 1 })
+  // publish sensor:reading（Phase 2.D 未注册 reducer） → 不应触发 emit
+  bus.publish({ source: 'sensor', type: 'reading', data: { value: 23 }, priority: 1 })
   await new Promise((r) => setTimeout(r, 100))
-  check('R2.11: pc:app_focus（无 reducer）不触发 state_changed', changedCount === 1)
+  check('R2.11: sensor:reading（无 reducer）不触发 state_changed', changedCount === 1)
 
   // publish feishu:message 同 timestamp 5000000（字段无变化）→ 不应 emit
   bus.publish({ source: 'feishu', type: 'message', data: { text: 'hi2' }, timestamp: 5_000_000, priority: 1 })

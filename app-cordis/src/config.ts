@@ -40,6 +40,12 @@ export interface OrcaRuntimeConfig {
   eventWindowSize: number
   /** Phase 2.A WorldState 子配置 */
   worldState: OrcaWorldStateConfig
+  /** Phase 2.D PC adapter 配置（默认 enabled=false） */
+  pc: OrcaInputAdapterConfig
+  /** Phase 2.D Calendar adapter 配置（默认 enabled=false） */
+  calendar: OrcaInputAdapterConfig
+  /** Phase 2.D Phone adapter 配置（默认 enabled=false） */
+  phone: OrcaInputAdapterConfig
 }
 
 /**
@@ -51,6 +57,16 @@ export interface OrcaWorldStateConfig {
   enabled: boolean
   /** Time tick 间隔（毫秒，默认 60000）；Phase 2.C 时 tick 用 */
   timeRefreshMs?: number
+}
+
+/**
+ * 输入 adapter 子配置（Phase 2.D，pc/calendar/phone 共用）。
+ */
+export interface OrcaInputAdapterConfig {
+  /** 是否启用（默认 false） */
+  enabled: boolean
+  /** 周期性 publish 间隔（毫秒）；adapter 默认值不同 */
+  refreshMs?: number
 }
 
 export interface OrcaConfig {
@@ -159,6 +175,19 @@ export function getConfig(): OrcaConfig {
         enabled: process.env.ORCA_WORLD_STATE_ENABLED !== '0',
         // Phase 2.C：time tick 间隔（默认 60000ms）
         timeRefreshMs: Number(process.env.ORCA_WORLD_STATE_REFRESH_MS ?? 60_000),
+      },
+      pc: {
+        // 默认 disabled（Phase 2.D 第一版 mock，需要显式启用）
+        enabled: process.env.ORCA_PC_ENABLED === '1',
+        refreshMs: Number(process.env.ORCA_PC_REFRESH_MS ?? 60_000),
+      },
+      calendar: {
+        enabled: process.env.ORCA_CALENDAR_ENABLED === '1',
+        refreshMs: Number(process.env.ORCA_CALENDAR_REFRESH_MS ?? 120_000),
+      },
+      phone: {
+        enabled: process.env.ORCA_PHONE_ENABLED === '1',
+        refreshMs: Number(process.env.ORCA_PHONE_REFRESH_MS ?? 300_000),
       },
     },
   }

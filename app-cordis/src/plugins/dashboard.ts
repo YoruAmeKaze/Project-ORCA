@@ -62,6 +62,8 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       void handleEvents(req, res)
     } else if (url.pathname === '/api/world-state') {
       void handleWorldState(req, res)
+    } else if (url.pathname === '/debug/publish-event' && req.method === 'POST') {
+      void handleDebugPublishEvent(req, res)
     } else if (url.pathname === '/dashboard' || url.pathname === '/') {
       void handleDashboard(req, res)
     } else {
@@ -130,6 +132,57 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       ok: true,
       ts: Date.now(),
       state,
+    })
+  }
+
+  /**
+   * 调试端点（Phase 2.D）：POST /debug/publish-event
+   * Body: { source, type, data?, priority? }
+   * 仅本地开发用：直接调用 ctx.eventBus.publish()，便于手动验证 reducer 链路。
+   * 生产环境应在反向代理（Nginx / Caddy）层禁用此端点。
+   */
+  async function handleDebugPublishEvent(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const bus = ctx.get('eventBus') as
+      | { publish: (input: { source: string; type: string; data?: Record<string, unknown>; priority?: number }) => void }
+      | undefined
+    if (!bus) {
+      sendJson(res, 503, { ok: false, error: 'EventBus 未启用（设置 ORCA_RUNTIME_ENABLED=1 启用 Persistent Context Runtime）' })
+      return
+    }
+    // 读取 body（限制 8KB；调试用不需要大 payload）
+    const chunks: Buffer[] = []
+    let size = 0
+    for await (const chunk of req) {
+      size += chunk.length
+      if (size > 8192) {
+        sendJson(res, 413, { ok: false, error: 'body too large（>8KB）' })
+        req.destroy()
+        return
+      }
+      chunks.push(chunk as Buffer)
+    }
+    const body = Buffer.concat(chunks).toString('utf8')
+    let payload: { source?: unknown; type?: unknown; data?: unknown; priority?: unknown }
+    try {
+      payload = JSON.parse(body) as typeof payload
+    } catch {
+      sendJson(res, 400, { ok: false, error: 'invalid json' })
+      return
+    }
+    if (typeof payload.source !== 'string' || typeof payload.type !== 'string') {
+      sendJson(res, 400, { ok: false, error: '需要 source + type（string）' })
+      return
+    }
+    bus.publish({
+      source: payload.source,
+      type: payload.type,
+      data: (typeof payload.data === 'object' && payload.data !== null) ? payload.data as Record<string, unknown> : {},
+      priority: typeof payload.priority === 'number' ? payload.priority : undefined,
+    })
+    sendJson(res, 200, {
+      ok: true,
+      ts: Date.now(),
+      published: { source: payload.source, type: payload.type },
     })
   }
 
