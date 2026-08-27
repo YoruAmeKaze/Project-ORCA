@@ -1,6 +1,6 @@
-# app-cordis — Project Orca Cordis 版（Phase 1 + Phase 2 信息获取框架）
+# app-cordis — Project Orca Cordis 版（当前主线，v0.6.0 + Phase 3 开发中）
 
-Project Orca 的 Cordis(TypeScript) 重写版，与 Python 版平行开发。
+Project Orca 的 Cordis(TypeScript) 版，**唯一主线**（Python 版已删除，2026-08-27）。
 迁移方案见仓库根 `guide/orca-cordis-migration-plan.md`，信息获取框架设计见 `guide/orca-info-agent-framework.md`（v0.2）。
 
 ## 已完成
@@ -31,7 +31,7 @@ Project Orca 的 Cordis(TypeScript) 重写版，与 Python 版平行开发。
 # 依赖（npm 缓存放在 app-cordis/.npm-cache，避免沙箱拦截系统缓存目录）
 npm install --cache .npm-cache
 
-# 构建 + 冒烟测试（52 项：注册表/档案室/执行管线/路由/上报通道/food-agent 全链路/日志级别回归/chat 绑定路由，视觉用 stub）
+# 构建 + 冒烟测试（InfoAgent 框架 69 项：注册表/档案室/执行管线/路由/上报通道/food-agent 全链路/日志级别回归/chat 绑定路由，视觉用 stub）
 npm run build && node scripts/smoke-info-agent.mjs
 
 # L1 真实视觉识别（需 .env 配 QWEN_API_KEY）：真实照片 → Qwen 识别 → 写 food-log 档案 → 档案回读
@@ -97,15 +97,11 @@ src/
     └── agent.ts             # feishu/message → R0 查档+待汇报 → persona+历史 → LLM → reply
 ```
 
-## 与 Python 版对照（已落地部分）
+## 当前状态（v0.6.0 + Phase 3 开发中）
 
-| Python 版 | Cordis 版 |
-|-----------|-----------|
-| `router/feishu.py` | `plugins/feishu-channel.ts` |
-| `feishu/client.py` | `services/feishu.ts` |
-| `core/persona.py` | `persona.ts` |
-| `core/history.py` | `session.ts`（内存，持久化后置） |
-| `core/orchestrator.py` 调度 | Cordis 事件总线（`feishu/message`）+ `plugins/agent.ts` |
-| `core/planner.py` + `dsl/` + `runtime/engine.py` | 待 Phase 2 后续（工具迁移为 InfoAgent） |
-| `skill/handlers/analyze.py`（Qwen 视觉） | `services/vision.ts` + `agents/builtins/food-log.ts` |
-| — | `agents/` 框架（InfoAgent 抽象，`guide/orca-info-agent-framework.md`） |
+- **v0.5.0（2026-08-27）**：Persistent Context Runtime Phase 0+1 —— EventBus + feishu-adapter + /api/events（默认关闭）
+- **v0.6.0（2026-08-27）**：Phase 2 WorldState Runtime 完整闭环 —— WorldStateService + reducer 注册表 + time tick + 3 个 mock adapters + debug publisher（`git tag v0.6.0`）
+- **Phase 3（开发中）**：Attention Engine 纯规则注意力系统（引擎 + dedup + throttle + rule-registry）
+- **Python 版已删除（2026-08-27）**：app-cordis 为唯一主线；Python 版能力对照见 `dev-log.md` 历史记录
+
+> 完整架构与配置见仓库根 `README.md` / `AGENT.md`。
