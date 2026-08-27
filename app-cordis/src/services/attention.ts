@@ -19,28 +19,107 @@ import type {
   AttentionItem,
   AttentionInput,
   AttentionRule,
+  AttentionRuleRegistry,
   AttentionThrottleService,
 } from '../types/attention.js'
 
-// ── 注册表 ────────────────────────────────────────────────────────────
-
-const ruleRegistry = new Map<string, AttentionRule>()
+// ── 注册表（Phase 3.B.rule-registry）────────────────────────────────────
 
 /**
- * 注册规则。同 id 重复注册会覆盖（便于测试和热更新）。
+ * RuleRegistryImpl —— AttentionRuleRegistry 标准实现
+ *
+ * 内部用数组保序（Map.values() 虽也保插入序，但数组更显式 + 顺序在 unregister 后保持）。
+ * enabled 状态单独存 Set（不污染 Rule 对象本身）。
+ */
+class RuleRegistryImpl implements AttentionRuleRegistry {
+  private rules: AttentionRule[] = []
+  private disabled = new Set<string>()
+
+  register(rule: AttentionRule): void {
+    // 同 id 重复注册 → 覆盖并保留原位置（便于热更新）
+    const idx = this.rules.findIndex((r) => r.id === rule.id)
+    if (idx >= 0) {
+      this.rules[idx] = rule
+    } else {
+      this.rules.push(rule)
+    }
+    this.disabled.delete(rule.id)  // 重注册默认 enabled
+  }
+
+  unregister(ruleId: string): void {
+    this.rules = this.rules.filter((r) => r.id !== ruleId)
+    this.disabled.delete(ruleId)
+  }
+
+  getRules(): AttentionRule[] {
+    // 仅返回 enabled 规则（按注册顺序）
+    return this.rules.filter((r) => !this.disabled.has(r.id))
+  }
+
+  getAllRules(): AttentionRule[] {
+    return [...this.rules]
+  }
+
+  setEnabled(ruleId: string, enabled: boolean): void {
+    if (!this.rules.some((r) => r.id === ruleId)) {
+      throw new Error(`[rule-registry] setEnabled: rule '${ruleId}' 未注册`)
+    }
+    if (enabled) {
+      this.disabled.delete(ruleId)
+    } else {
+      this.disabled.add(ruleId)
+    }
+  }
+
+  isEnabled(ruleId: string): boolean {
+    if (!this.rules.some((r) => r.id === ruleId)) return false
+    return !this.disabled.has(ruleId)
+  }
+
+  size(): number {
+    return this.getRules().length
+  }
+
+  clear(): void {
+    this.rules = []
+    this.disabled.clear()
+  }
+}
+
+/** 工厂函数：创建独立的（空）Registry；用于 R11 测试和未来配置化场景 */
+export function createRuleRegistry(): AttentionRuleRegistry {
+  return new RuleRegistryImpl()
+}
+
+/**
+ * 默认 Registry（包含 5 条内置规则）。
+ * - 模块加载时自动注册 5 条规则
+ * - createAttentionEngine() 不传参时使用此 Registry（保持 Phase 3.A 行为）
+ * - 向后兼容：registerRule / clearRules / ruleRegistrySize 委托此 Registry
+ */
+const defaultRegistry: AttentionRuleRegistry = createRuleRegistry()
+
+/**
+ * 注册规则（同 id 重复注册会覆盖）。**向后兼容 Phase 3.A API**。
+ * 内部委托 defaultRegistry。
  */
 export function registerRule(rule: AttentionRule): void {
-  ruleRegistry.set(rule.id, rule)
+  defaultRegistry.register(rule)
 }
 
-/** 测试 / 内部用：清空注册表 */
+/** 测试 / 内部用：清空默认注册表 */
 export function clearRules(): void {
-  ruleRegistry.clear()
+  defaultRegistry.clear()
 }
 
-/** 当前已注册的规则数量 */
+/** 当前默认注册表中已启用的规则数（向后兼容 Phase 3.A API） */
 export function ruleRegistrySize(): number {
-  return ruleRegistry.size
+  return defaultRegistry.size()
+}
+
+/** 获取默认 Registry（包含 5 条内置规则）；Phase 3.B.rule-config 将扩展此 */
+export function getDefaultRegistry(): AttentionRuleRegistry {
+  return defaultRegistry
 }
 
 // ── 内置规则（Phase 3 第一版：5 条示例规则） ─────────────────────────────
@@ -139,22 +218,30 @@ registerRule(ruleFocusInterrupt)
 // ── AttentionEngine 服务 ────────────────────────────────────────────────
 
 /**
- * 纯评估引擎：遍历注册表，对每个规则调 predicate；命中则调 produce 生成 AttentionItem。
+ * 纯评估引擎：遍历 registry，对每个**启用**规则调 predicate；命中则调 produce 生成 AttentionItem。
  *
- * 关键：
+ * Phase 3.B.rule-registry：
+ * - Engine 接受外部注入的 AttentionRuleRegistry（不硬编码模块全局 Map）
+ * - registry.getRules() 只返回启用规则；禁用规则不参与 evaluate
+ * - 同 id 重复 register 覆盖并保留原位置；disable / unregister 后顺序保持
+ *
+ * 关键（向后兼容）：
  * - stateSnapshot 是 input.state 的深拷贝（避免后续 mutation 污染追溯）
- * - 不去重 / 不排序（按注册顺序；Phase 4 Decision 可按 priority 排序）
+ * - 不去重 / 不排序（按 registry.getRules() 顺序；Phase 4 Decision 可按 priority 排序）
  * - state-only 触发（event=null）的规则（如 R1 sleeping-quiet）会被 evaluate；
  *   但需要 event 的规则（R2/R3/R5）会因 predicate 中 event 检查而 false
+ * - source 字段（Phase 3.B.throttle 引入）：input.event?.source ?? 'state'
  */
 export class AttentionEngine implements AttentionEngineService {
+  constructor(private readonly registry: AttentionRuleRegistry) {}
+
   evaluate(input: AttentionInput): AttentionItem[] {
     const out: AttentionItem[] = []
     const evaluatedAt = Date.now()
     const stateSnapshot = JSON.parse(JSON.stringify(input.state)) as AttentionInput['state']
     const eventId = input.event?.id
 
-    for (const rule of ruleRegistry.values()) {
+    for (const rule of this.registry.getRules()) {
       if (!rule.predicate(input)) continue
       const partial = rule.produce(input)
       // Phase 3.B.throttle：source 用于 source cooldown；state-only 触发用 'state' 占位
@@ -173,13 +260,19 @@ export class AttentionEngine implements AttentionEngineService {
   }
 
   ruleCount(): number {
-    return ruleRegistry.size
+    return this.registry.size()
   }
 }
 
-/** 工厂函数 */
-export function createAttentionEngine(): AttentionEngineService {
-  return new AttentionEngine()
+/**
+ * 工厂函数（Phase 3.B.rule-registry）
+ * - 不传参：使用默认 Registry（包含 5 条内置规则；行为完全等同 Phase 3.A）
+ * - 传参：使用自定义 Registry（便于测试、未来配置化）
+ */
+export function createAttentionEngine(
+  registry: AttentionRuleRegistry = getDefaultRegistry(),
+): AttentionEngineService {
+  return new AttentionEngine(registry)
 }
 
 // ── Phase 3.B: AttentionDedup ─────────────────────────────────────────

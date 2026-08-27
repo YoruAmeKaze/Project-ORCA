@@ -33,7 +33,7 @@
  *                 - evaluate({event, state, prevState}) → away-arrival 触发
  *                 这是 Phase 3.A "prev state snapshot" 架构保证的核心验证
  */
-import { AttentionEngine, createAttentionEngine, createAttentionDedup, createAttentionThrottle, ruleRegistrySize } from '../dist/services/attention.js'
+import { AttentionEngine, createAttentionEngine, createAttentionDedup, createAttentionThrottle, createRuleRegistry, getDefaultRegistry, ruleRegistrySize } from '../dist/services/attention.js'
 import { createWorldStateService, getInitialState } from '../dist/services/worldState.js'
 
 const results = []
@@ -457,6 +457,127 @@ function mkFakeClock(initial = 0) {
   check('R10.7.1: act 第一次 true', t7.shouldEmit(mkItem('r', 'a', { source: 'feishu', action: 'act' })) === true)
   clock7.set(6500)  // cooldown 到期
   check('R10.7.2: act 第二次 true（cooldown 到期）', t7.shouldEmit(mkItem('r', 'a', { source: 'feishu', action: 'act' })) === true)
+}
+
+// ────────────────────────────────────────────────────────────
+// R11（Phase 3.B.rule-registry）：RuleRegistry 解耦
+// ────────────────────────────────────────────────────────────
+// 设计：
+// - AttentionRuleRegistry 接口：register / unregister / getRules / getAllRules / setEnabled / size / clear
+// - AttentionEngine 接受 registry 注入（不再硬编码模块全局 Map）
+// - createAttentionEngine() 不传参 → 使用默认 Registry（包含 5 条内置规则；保持 Phase 3.A 行为）
+// - createAttentionEngine(reg) → 使用自定义 Registry（便于测试 + 未来配置化）
+// - engine.ruleCount() = registry.size()（仅算启用）
+
+// 测试辅助：构造一个简单的测试 rule
+function mkTestRule(id, trigger = true, action = 'remember_only') {
+  return {
+    id,
+    description: `test rule ${id}`,
+    predicate: () => trigger,
+    produce: () => ({
+      priority: 'normal',
+      reason: `triggered by ${id}`,
+      action,
+    }),
+  }
+}
+
+{
+  // ── R11.1: register rule 后可以 evaluate ──
+  const reg1 = createRuleRegistry()
+  reg1.register(mkTestRule('test-r1'))
+  const engine1 = createAttentionEngine(reg1)
+  const items1 = engine1.evaluate({
+    event: mkFeishuMsg('hi'),
+    state: mkState(),
+    prevState: undefined,
+  })
+  check('R11.1.1: register 后 evaluate 触发', items1.length === 1 && items1[0]?.ruleId === 'test-r1')
+  check('R11.1.2: ruleCount === 1', engine1.ruleCount() === 1)
+
+  // ── R11.2: unregister 后 rule 不执行 ──
+  const reg2 = createRuleRegistry()
+  reg2.register(mkTestRule('r1'))
+  reg2.register(mkTestRule('r2'))
+  const engine2 = createAttentionEngine(reg2)
+  const before2 = engine2.evaluate({ event: mkFeishuMsg('hi'), state: mkState() })
+  check('R11.2.1: register r1+r2 后 → 2 items', before2.length === 2)
+  reg2.unregister('r1')
+  check('R11.2.2: unregister r1 后 → 1 item（剩 r2）', engine2.evaluate({ event: mkFeishuMsg('hi'), state: mkState() }).length === 1)
+  reg2.unregister('nonexistent')  // 不存在不报错
+  check('R11.2.3: unregister 不存在 id 不报错', engine2.evaluate({ event: mkFeishuMsg('hi'), state: mkState() }).length === 1)
+  reg2.unregister('r2')
+  check('R11.2.4: unregister r2 后 → 0 items', engine2.evaluate({ event: mkFeishuMsg('hi'), state: mkState() }).length === 0)
+
+  // ── R11.3: disabled rule 不执行 ──
+  const reg3 = createRuleRegistry()
+  reg3.register(mkTestRule('r1'))
+  reg3.register(mkTestRule('r2'))
+  reg3.setEnabled('r1', false)
+  const engine3 = createAttentionEngine(reg3)
+  const items3 = engine3.evaluate({ event: mkFeishuMsg('hi'), state: mkState() })
+  check('R11.3.1: r1 disabled 后 → 1 item（仅 r2）',
+    items3.length === 1 && items3[0]?.ruleId === 'r2')
+  check('R11.3.2: ruleCount 仅算启用（disabled 不计）', engine3.ruleCount() === 1)
+  reg3.setEnabled('r1', true)
+  const items3b = engine3.evaluate({ event: mkFeishuMsg('hi'), state: mkState() })
+  check('R11.3.3: setEnabled(true) 后 r1 重新触发', items3b.length === 2)
+  check('R11.3.4: setEnabled(true) 后 ruleCount === 2', engine3.ruleCount() === 2)
+  // isEnabled 查询
+  check('R11.3.5: isEnabled(\'r1\') === true', reg3.isEnabled('r1') === true)
+  check('R11.3.6: isEnabled(\'nonexistent\') === false', reg3.isEnabled('nonexistent') === false)
+  // setEnabled 未注册 id 抛错（必须包 try/catch，避免终止脚本）
+  let threw = false
+  try { reg3.setEnabled('nonexistent', true) } catch { threw = true }
+  check('R11.3.7: setEnabled 未注册 id 抛错', threw)
+  let threwFalse = false
+  try { reg3.setEnabled('nonexistent', false) } catch { threwFalse = true }
+  check('R11.3.8: setEnabled 未注册 id + enabled=false 也抛错', threwFalse)
+
+  // ── R11.4: 多个 rule 顺序稳定 ──
+  const reg4 = createRuleRegistry()
+  reg4.register(mkTestRule('a'))
+  reg4.register(mkTestRule('b'))
+  reg4.register(mkTestRule('c'))
+  const engine4 = createAttentionEngine(reg4)
+  const items4 = engine4.evaluate({ event: mkFeishuMsg('hi'), state: mkState() })
+  check('R11.4.1: 顺序 a→b→c',
+    items4.map((i) => i.ruleId).join(',') === 'a,b,c')
+  // unregister 中间一个，顺序保持
+  reg4.unregister('b')
+  const items4b = engine4.evaluate({ event: mkFeishuMsg('hi'), state: mkState() })
+  check('R11.4.2: unregister b 后 → a→c（保持原位置）',
+    items4b.map((i) => i.ruleId).join(',') === 'a,c')
+  // disable 中间一个，顺序保持（disable 的不在 getRules 中）
+  reg4.register(mkTestRule('b2'))
+  reg4.setEnabled('a', false)
+  const items4c = engine4.evaluate({ event: mkFeishuMsg('hi'), state: mkState() })
+  check('R11.4.3: disable a 后 → c,b2（a 不出现，b2 在末位）',
+    items4c.map((i) => i.ruleId).join(',') === 'c,b2')
+
+  // ── R11.5: 现有 5 条内置规则迁移后行为不变 ──
+  const defaultReg = getDefaultRegistry()
+  check('R11.5.1: defaultRegistry.size() === 5（5 条内置规则）', defaultReg.size() === 5)
+  check('R11.5.2: ruleRegistrySize() === 5（向后兼容）', ruleRegistrySize() === 5)
+  // 不传参 createAttentionEngine → 使用默认 Registry
+  const engine5 = createAttentionEngine()
+  check('R11.5.3: 默认 engine.ruleCount() === 5', engine5.ruleCount() === 5)
+  // 验证 R8 关键场景仍触发
+  const r8sleep = engine5.evaluate({ event: null, state: mkState({ status: 'sleeping' }), prevState: undefined })
+  check('R11.5.4: sleeping-quiet 仍触发（向后兼容）',
+    r8sleep.length === 1 && r8sleep[0]?.ruleId === 'sleeping-quiet')
+  const r8deadline = engine5.evaluate({ event: mkFeishuMsg('今晚前提交报告'), state: mkState() })
+  check('R11.5.5: feishu-deadline 仍触发（向后兼容）',
+    r8deadline.length === 1 && r8deadline[0]?.ruleId === 'feishu-deadline')
+
+  // 自定义 Registry 替换默认：5 条规则不参与 evaluate
+  const reg5b = createRuleRegistry()
+  reg5b.register(mkTestRule('only-rule'))
+  const engine5b = createAttentionEngine(reg5b)
+  const r5b = engine5b.evaluate({ event: mkFeishuMsg('今晚前提交报告'), state: mkState() })
+  check('R11.5.6: 自定义 Registry（只有 only-rule）→ 不触发默认 5 条',
+    r5b.length === 1 && r5b[0]?.ruleId === 'only-rule')
 }
 
 // ────────── 结果 ──────────

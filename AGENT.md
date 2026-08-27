@@ -167,7 +167,7 @@ dev-log.md / TODO.md / README.md
 - **Phase 0+1（v0.5.0，2026-08-27）**：Persistent Context Runtime（EventBus + feishu-adapter + /api/events）
 - **Phase 2 Runtime（v0.6.0，2026-08-27）**：WorldState（骨架 + time tick + 3 mock adapters + debug publisher）完整闭环，`git tag v0.6.0`
 - **Phase 3.A（2026-08-27）**：Attention Engine 纯规则评估（5 条内置规则 + prevState 快照）
-- **Phase 3.B（2026-08-27）**：dedup（去重）→ throttle（节流）→ rule-registry（规则注册表解耦）
+- **Phase 3.B（2026-08-27）**：dedup（去重）→ throttle（节流）→ rule-registry（规则注册表解耦，Engine 接受 AttentionRuleRegistry 注入）
 - **Python 版删除（2026-08-27）**：v2.3.0 全部源码移除，app-cordis 成为唯一主线
 
 ### 8.2 待办（TODO.md）
@@ -182,6 +182,7 @@ dev-log.md / TODO.md / README.md
 - 错误示范：`predicate: ({ state }) => state.user.status === 'away'`（reducer 改 awake 后永远不触发）；正确：`predicate: ({ prevState }) => prevState?.user.status === 'away'`。
 - `prevState` 在 state-only 触发时为 `undefined`；event 触发时由 `ws.getPrevState()` 提供。
 - 三层职责分离：Engine（是什么）→ Dedup（多不多）→ Throttle（该不该打扰）；throttle 仅限 notify_immediately + act，remember_only/ignore/wait_until_available 直通。
+- **AttentionRuleRegistry（Phase 3.B.rule-registry）**：Engine 与规则**解耦**。AttentionRuleRegistry 接口：`register / unregister / getRules / getAllRules / setEnabled / isEnabled / size / clear`。`getRules()` 仅返回启用规则（按注册顺序）；同 id 重复 register 覆盖并保留原位置（热更新）。`createAttentionEngine(registry?)` 不传参使用 `getDefaultRegistry()`（包含 5 条内置规则；行为等同 Phase 3.A）。向后兼容：`registerRule / clearRules / ruleRegistrySize` 委托 defaultRegistry（R8/R9/R10 测试零改动）。
 
 ---
 

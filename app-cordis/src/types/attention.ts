@@ -145,6 +145,50 @@ export interface AttentionDedupService {
 }
 
 /**
+ * AttentionRuleRegistry —— 规则注册表（Phase 3.B.rule-registry）
+ *
+ * 职责：
+ * - Engine 不直接持有规则列表（之前硬编码模块全局 ruleRegistry）
+ * - 通过 registry.getRules() 获取当前启用的规则（按注册顺序）
+ * - 支持动态 register / unregister / setEnabled（未来可对接配置系统）
+ *
+ * 设计原则：
+ * - 数组保序（Map.values() 顺序依赖插入序；改用数组更显式）
+ * - enabled 状态由 Registry 维护（不污染 Rule 本身——Rule 是纯数据 + 谓词）
+ * - 同 ruleId 重复 register 覆盖（保留原位置，便于热更新）
+ * - getRules() 只返回 enabled 的；getAllRules() 含 disabled（debug 用）
+ */
+export interface AttentionRuleRegistry {
+  /**
+   * 注册规则。同 id 重复注册会**覆盖并保留原位置**（便于热更新）。
+   * 注册后默认 enabled=true。
+   */
+  register(rule: AttentionRule): void
+  /** 注销规则（从列表移除）。不存在不报错。 */
+  unregister(ruleId: string): void
+  /**
+   * 获取当前启用的规则列表（按注册顺序）。
+   * Engine 调用此方法遍历 evaluate。
+   */
+  getRules(): AttentionRule[]
+  /**
+   * 获取所有规则（含 disabled），按注册顺序。debug / 监控用。
+   */
+  getAllRules(): AttentionRule[]
+  /**
+   * 启用 / 禁用规则。已注册才能禁用；未注册抛错。
+   * 禁用后规则仍在 registry 中（getAllRules 可见），但 getRules 不返回。
+   */
+  setEnabled(ruleId: string, enabled: boolean): void
+  /** 查询规则是否启用（未注册返回 false） */
+  isEnabled(ruleId: string): boolean
+  /** 当前启用规则数（getRules().length） */
+  size(): number
+  /** 清空所有规则（含 disabled）—— 测试 / dispose */
+  clear(): void
+}
+
+/**
  * AttentionThrottle —— Attention Stream 节流层（Phase 3.B.throttle）
  *
  * 职责分离：
