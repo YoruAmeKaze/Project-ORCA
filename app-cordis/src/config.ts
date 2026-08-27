@@ -43,12 +43,14 @@ export interface OrcaRuntimeConfig {
 }
 
 /**
- * WorldState 子配置（Phase 2.A 最小版）。
- * 仅 enabled 字段。time tick / 间隔等参数留到 Phase 2.C。
+ * WorldState 子配置（Phase 2.A 最小版 + Phase 2.C time tick）。
+ * timeRefreshMs 仅 Phase 2.C 用；不传时由 world-state-updater 默认 60000。
  */
 export interface OrcaWorldStateConfig {
   /** 是否启用 WorldState 派生（默认 true；仅当 OrcaRuntime enabled 时才生效） */
   enabled: boolean
+  /** Time tick 间隔（毫秒，默认 60000）；Phase 2.C 时 tick 用 */
+  timeRefreshMs?: number
 }
 
 export interface OrcaConfig {
@@ -155,6 +157,8 @@ export function getConfig(): OrcaConfig {
       worldState: {
         // 默认启用（按用户要求）；ORCA_WORLD_STATE_ENABLED=0 可单独关闭
         enabled: process.env.ORCA_WORLD_STATE_ENABLED !== '0',
+        // Phase 2.C：time tick 间隔（默认 60000ms）
+        timeRefreshMs: Number(process.env.ORCA_WORLD_STATE_REFRESH_MS ?? 60_000),
       },
     },
   }

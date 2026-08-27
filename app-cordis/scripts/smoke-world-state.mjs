@@ -1,5 +1,5 @@
 /**
- * WorldState 冒烟测试（Phase 2.A 最小骨架）
+ * WorldState 冒烟测试（Phase 2.A 最小骨架 + Phase 2.B 集成 + Phase 2.C time tick）
  * 运行：npm run build && node scripts/smoke-world-state.mjs
  *
  * 覆盖：
@@ -14,18 +14,32 @@
  *  R3：dashboard /api/world-state 端点逻辑（mock HTTP，复刻 dashboard handler 逻辑）
  *      - Runtime disabled → 503
  *      - Runtime enabled → 200 + state
+ *  R4（Phase 2.B）：feishu-adapter → EventBus → WorldStateUpdater 端到端集成
+ *      - 真实 ctx.emit('feishu/message', ...) 模拟 feishu-channel emit
+ *      - feishu-adapter 翻译 + bus.publish
+ *      - WorldStateUpdater 收到 EventBus 事件 + applyReducers
+ *      - user.lastSeenAt / user.status / lastEventId 正确更新
+ *      - 多订阅者共存（feishu-adapter + 新增 ctx.on 不互相影响）
+ *      - 用 polling 等异步派发（避免任意 sleep 掩盖竞态）
+ *  R5（Phase 2.C）：time tick + away 自动推导
+ *      R5.A：deriveUserStatus 纯函数（边界 + 单向推导 + 不覆盖 busy/sleeping/away）
+ *      R5.B：setInterval 集成（timeRefreshMs=50 加速；lastSeenAt=past → away）
+ *      R5.C：fresh state + lastSeenAt=recent → 多次 tick 后仍 awake + 无变化不 emit
  */
 import { createServer } from 'node:http'
 import { Context } from '@deepseek-ai/cordis'
 import { EventBus } from '../dist/services/eventBus.js'
 import {
   applyReducers,
+  AWAY_THRESHOLD_MS,
   computeTimeContext,
   createWorldStateService,
+  deriveUserStatus,
   getInitialState,
   reducerRegistrySize,
 } from '../dist/services/worldState.js'
 import { worldStateUpdater } from '../dist/plugins/world-state-updater.js'
+import { feishuAdapter } from '../dist/plugins/input-adapters/feishu-adapter.js'
 
 const results = []
 function check(name, cond, detail = '') {
@@ -179,6 +193,136 @@ const logger = {
   check('R2.14: lastEventId 反映最新事件', ws.getState().lastEventId !== after1.lastEventId)
 }
 
+// ---------- R4（Phase 2.B）：feishu-adapter → EventBus → WorldStateUpdater 端到端集成 ----------
+// 模拟真实 feishu-channel 通过 ctx.emit('feishu/message', ...) 推送消息。
+// 完整链路：ctx.emit → feishuAdapter (顶层 ctx.on) → bus.publish → setImmediate 派发 →
+// WorldStateUpdater handler → applyReducers → WorldState 更新 → emit 'orca/state_changed'
+//
+// 异步处理：用 polling（每 10ms 检查 state 变化，最多 1s）而非任意 sleep，
+// 减少"任意过大 sleep 掩盖竞态"风险（用户明确要求）。
+{
+  const ctx = new Context()
+  ctx.logger.exporter({ colors: 0, levels: { default: 2 }, export() {} })
+  const bus = new EventBus({ windowSize: 10 }, logger)
+  ctx.provide('eventBus', bus)
+
+  // feishuAdapter 不是 plugin（无 inject/fiber），直接调用即可，
+  // 内部 ctx.on(...) 立即注册到 Context 顶层
+  feishuAdapter(ctx, {})
+  // worldStateUpdater 是 plugin（inject=['eventBus']），需要 ctx.plugin + 等 fiber 启动
+  ctx.plugin(worldStateUpdater, { runtime: { worldState: { enabled: true } } })
+  await new Promise((r) => setTimeout(r, 200))
+
+  const ws = ctx.get('worldState')
+  check('R4.0: worldState Service 已 provide', !!ws)
+
+  // 记录当前 lastSeenAt 作 baseline
+  const baseline = ws.getState().user.lastSeenAt
+
+  // 模拟 feishu-channel emit('feishu/message', ...)
+  const feishuEventId = 'feishu_evt_p2b_001'
+  const tBeforeEmit = Date.now()
+  ctx.emit('feishu/message', {
+    eventId: feishuEventId,
+    sessionId: 'ou_test_session',
+    openId: 'ou_test_user',
+    messageId: 'om_test_msg_p2b_001',
+    chatId: 'oc_test_chat',
+    text: '测试 Phase 2.B 集成',
+  })
+  const tAfterEmit = Date.now()
+
+  // 异步派发 polling：等待 user.lastSeenAt 反映事件 timestamp
+  // 注意：feishuAdapter 调 bus.publish → setImmediate → dispatch → handler。
+  // handler 同步执行 applyReducers + 更新 state。
+  let dispatched = false
+  for (let i = 0; i < 100; i++) { // 最多 1000ms
+    await new Promise((r) => setTimeout(r, 10))
+    if (ws.getState().lastEventId === feishuEventId) { dispatched = true; break }
+  }
+  check('R4.1: 真实 ctx.emit 后 WorldState 在 1s 内更新（polling 检测）', dispatched)
+
+  // 验证 OrcaEvent 已 publish 到 EventBus
+  const events = bus.recent(10)
+  check('R4.2: EventBus 收到 1 条 OrcaEvent', events.length === 1)
+  const evt = events[0]
+  check('R4.3: OrcaEvent.source === "feishu"', evt?.source === 'feishu')
+  check('R4.4: OrcaEvent.type === "message"', evt?.type === 'message')
+  check('R4.5: OrcaEvent.priority === 1', evt?.priority === 1)
+  check('R4.6: OrcaEvent.data.text 透传', evt?.data.text === '测试 Phase 2.B 集成')
+  check('R4.7: OrcaEvent.data.chatId 透传', evt?.data.chatId === 'oc_test_chat')
+  check('R4.8: OrcaEvent.data.messageId 透传', evt?.data.messageId === 'om_test_msg_p2b_001')
+  check('R4.9: OrcaEvent.data.openId 透传', evt?.data.openId === 'ou_test_user')
+  check('R4.10: OrcaEvent.sessionId 透传', evt?.sessionId === 'ou_test_session')
+  check('R4.11: OrcaEvent.id === feishu eventId（adapter 透传作为幂等键）', evt?.id === feishuEventId)
+  // timestamp 用 Date.now()（adapter 显式设置，不从 eventId 推导）
+  check('R4.12: OrcaEvent.timestamp 在 [tBeforeEmit, tAfterEmit] 区间内',
+    typeof evt?.timestamp === 'number' && evt.timestamp >= tBeforeEmit && evt.timestamp <= tAfterEmit)
+
+  // 验证 WorldState 字段
+  const state = ws.getState()
+  check('R4.13: WorldState.user.lastSeenAt === OrcaEvent.timestamp', state.user.lastSeenAt === evt?.timestamp)
+  check('R4.14: WorldState.user.status === "awake"', state.user.status === 'awake')
+  check('R4.15: WorldState.lastEventId === OrcaEvent.id === feishuEventId',
+    state.lastEventId === evt?.id && state.lastEventId === feishuEventId)
+  check('R4.16: WorldState.lastSeenAt 较 baseline 更新', state.user.lastSeenAt > baseline)
+
+  // 多订阅者共存：feishu-adapter 之后注册 ctx.on('feishu/message', ...) 也应收到
+  // （image-router 等业务订阅者与此独立，本测试只验证"新增 ctx.on 不破坏 feishu-adapter 链路"）
+  let otherSubsReceived = 0
+  ctx.on('feishu/message', () => { otherSubsReceived++ })
+  ctx.emit('feishu/message', {
+    eventId: 'feishu_evt_p2b_002',
+    sessionId: 'ou_test_session',
+    openId: 'ou_test_user',
+    messageId: 'om_test_msg_p2b_002',
+    chatId: 'oc_test_chat',
+    text: '第二条消息（验证多订阅者）',
+  })
+  // polling 等 WorldState 反映第二条
+  let secondDispatched = false
+  for (let i = 0; i < 100; i++) {
+    await new Promise((r) => setTimeout(r, 10))
+    if (ws.getState().lastEventId === 'feishu_evt_p2b_002') { secondDispatched = true; break }
+  }
+  check('R4.17: 第二条 emit 后 WorldState 反映新 eventId', secondDispatched)
+  check('R4.18: EventBus 现持有 2 条 OrcaEvent', bus.recent(10).length === 2)
+  check('R4.19: 新订阅者收到第二条 emit（不影响既有订阅链）', otherSubsReceived === 1)
+  check('R4.20: WorldState.lastEventId 更新到第二条', ws.getState().lastEventId === 'feishu_evt_p2b_002')
+  check('R4.21: WorldState.lastSeenAt 严格大于第一条（先后顺序）',
+    ws.getState().user.lastSeenAt > state.user.lastSeenAt)
+
+  // feishu/image 也走同一链路 → 测试 image 翻译不影响 message reducer（不污染 WorldState）
+  // 注：feishu:image 转 OrcaEvent type='notification'，现有 feishuMessageReducer 只匹配 'message'，
+  // 所以 image 事件应被 EventBus 接收但 WorldState 不更新（字段无变化）
+  const stateBeforeImage = ws.getState()
+  const imageEvtId = 'feishu_evt_p2b_img_001'
+  ctx.emit('feishu/image', {
+    eventId: imageEvtId,
+    sessionId: 'ou_test_session',
+    openId: 'ou_test_user',
+    messageId: 'om_test_img_p2b_001',
+    chatId: 'oc_test_chat',
+    imageKey: 'img_key_test_001',
+  })
+  // 等 EventBus 收到 image 事件
+  let imageDispatched = false
+  for (let i = 0; i < 100; i++) {
+    await new Promise((r) => setTimeout(r, 10))
+    const all = bus.recent(10)
+    if (all.some((e) => e.id === imageEvtId)) { imageDispatched = true; break }
+  }
+  check('R4.22: feishu/image 也通过 adapter → EventBus', imageDispatched)
+  check('R4.23: feishu:image 事件 type=notification（不影响 reducer）',
+    bus.recent(10).find((e) => e.id === imageEvtId)?.type === 'notification')
+  // 关键断言：image 事件不应改变 WorldState.lastSeenAt / status（reducer 只匹配 feishu:message）
+  const stateAfterImage = ws.getState()
+  check('R4.24: feishu:image 不污染 WorldState.lastEventId（reducer 不匹配 type=notification）',
+    stateAfterImage.lastEventId !== imageEvtId)
+  check('R4.25: feishu:image 不污染 WorldState.user.lastSeenAt（reducer 不匹配）',
+    stateAfterImage.user.lastSeenAt === stateBeforeImage.user.lastSeenAt)
+}
+
 // ---------- R3：dashboard /api/world-state 端点（mock HTTP） ----------
 // 复刻 dashboard.ts 的 handleWorldState 逻辑（5 行）：ctx.get('worldState') 缺失 → 503；否则 200 + state
 {
@@ -228,6 +372,130 @@ const logger = {
 
   s200.close()
   s200.closeAllConnections()
+}
+
+// ---------- R5（Phase 2.C）：time tick + away 自动推导 ----------
+// 设计原则（与代码一致）：
+//   - 仅 awake → away 单向推导；busy/sleeping/away 不主动覆盖
+//   - lastSeenAt <= 0 兜底 → 不推导
+//   - now - lastSeenAt > AWAY_THRESHOLD_MS (30min 整不算，30min+1ms 算)
+//   - time tick 每 N ms 检查 time + status 任一字段变化才 emit（无变化零开销）
+//   - dispose 钩子 clearInterval + unsubscribe
+{
+  // ── R5.A：deriveUserStatus 纯函数（无 setInterval） ──
+  const t0 = 1_700_000_000_000 // 固定时间锚点（避免依赖 Date.now）
+  const makeState = (status, lastSeenAt) => ({
+    ...getInitialState(t0),
+    user: { ...getInitialState(t0).user, status, lastSeenAt },
+  })
+
+  check('R5.A1: AWAY_THRESHOLD_MS === 30 分钟', AWAY_THRESHOLD_MS === 30 * 60 * 1000)
+
+  // 边界：30:00 整不算，30:00.001 才算 away
+  check('R5.A2: awake + 29:59 → null（保持 awake）',
+    deriveUserStatus(makeState('awake', t0), t0 + 29 * 60 * 1000 + 59 * 1000) === null)
+  check('R5.A3: awake + 30:00 整 → null（边界，不到阈值）',
+    deriveUserStatus(makeState('awake', t0), t0 + 30 * 60 * 1000) === null)
+  check('R5.A4: awake + 30:00.001 → "away"',
+    deriveUserStatus(makeState('awake', t0), t0 + 30 * 60 * 1000 + 1) === 'away')
+  check('R5.A5: awake + 60:00 → "away"（长时间不活动）',
+    deriveUserStatus(makeState('awake', t0), t0 + 60 * 60 * 1000) === 'away')
+
+  // 不覆盖 busy / sleeping / away
+  check('R5.A6: busy + 31 分钟 → null（不覆盖 busy）',
+    deriveUserStatus(makeState('busy', t0), t0 + 31 * 60 * 1000) === null)
+  check('R5.A7: sleeping + 31 分钟 → null（不覆盖 sleeping）',
+    deriveUserStatus(makeState('sleeping', t0), t0 + 31 * 60 * 1000) === null)
+  // away 不自恢复：已经 away 状态，time tick 不会主动改回 awake
+  check('R5.A8: away + 31 分钟 → null（不反向，away 自维持）',
+    deriveUserStatus(makeState('away', t0), t0 + 31 * 60 * 1000) === null)
+  // 兜底：lastSeenAt <= 0（极不可能但容错）
+  check('R5.A9: awake + lastSeenAt=0 → null（兜底）',
+    deriveUserStatus(makeState('awake', 0), t0) === null)
+  check('R5.A10: awake + lastSeenAt=-1 → null（负数兜底）',
+    deriveUserStatus(makeState('awake', -1), t0) === null)
+
+  // ── R5.B：setInterval 集成（timeRefreshMs=50 加速）──
+  // 验证：emit feishu:message with timestamp=past → lastSeenAt=past → time tick 检测 → status='away'
+  {
+    const ctx = new Context()
+    ctx.logger.exporter({ colors: 0, levels: { default: 2 }, export() {} })
+    const bus = new EventBus({ windowSize: 10 }, logger)
+    ctx.provide('eventBus', bus)
+    ctx.plugin(worldStateUpdater, {
+      runtime: { worldState: { enabled: true, timeRefreshMs: 50 } },
+    })
+    await new Promise((r) => setTimeout(r, 200))
+
+    const ws = ctx.get('worldState')
+    let stateChangedCount = 0
+    ctx.on('orca/state_changed', () => stateChangedCount++)
+    await new Promise((r) => setTimeout(r, 50)) // 等 listener 注册
+
+    // R5.B1: emit feishu:message with timestamp=past（31 分钟前）
+    const past = Date.now() - 31 * 60 * 1000
+    bus.publish({ source: 'feishu', type: 'message', data: { text: 'past' }, timestamp: past })
+
+    // polling 等 status='away'（setInterval tick 时间）
+    let becameAway = false
+    for (let i = 0; i < 50; i++) { // 最多 500ms
+      await new Promise((r) => setTimeout(r, 10))
+      if (ws.getState().user.status === 'away') { becameAway = true; break }
+    }
+    check('R5.B1: lastSeenAt=31分钟前 → 500ms 内 status=away', becameAway)
+    check('R5.B2: state_changed 被 emit（bus.publish + timer tick 各至少1次）', stateChangedCount >= 2)
+    check('R5.B3: WorldState.lastSeenAt === past（reducer 生效）',
+      ws.getState().user.lastSeenAt === past)
+
+    // R5.B4: 多次 timer tick（无新事件）+ status 已 away → away 自维持（time tick 不主动反向）
+    // 用户语义：away 状态只能由 feishu:message（新事件）触发 feishuMessageReducer 设回 awake，
+    // time tick 不能自己把 away 改回 awake（必须靠用户实际活动）。
+    const awayStatus = ws.getState().user.status
+    const awayLastSeenAt = ws.getState().user.lastSeenAt
+    await new Promise((r) => setTimeout(r, 400)) // 8+ 次 tick
+    check('R5.B4: 多次 timer tick 后 status 仍 away（away 自维持，time tick 不反向）',
+      ws.getState().user.status === awayStatus && ws.getState().user.status === 'away')
+    check('R5.B5: lastSeenAt 不变（无新事件，无 reducer 触发）',
+      ws.getState().user.lastSeenAt === awayLastSeenAt)
+  }
+
+  // ── R5.C：fresh state + lastSeenAt=recent → 多次 tick 后保持 awake + 无变化不 emit ──
+  // 验证：R5.A 测了 deriveUserStatus 纯函数（lastSeenAt=10分钟前 → null → 不变）；
+  // 这里验证 setInterval tick 实际行为：user 不变 + time 短期不变 → 无 emit
+  {
+    const ctx = new Context()
+    ctx.logger.exporter({ colors: 0, levels: { default: 2 }, export() {} })
+    const bus = new EventBus({ windowSize: 10 }, logger)
+    ctx.provide('eventBus', bus)
+    ctx.plugin(worldStateUpdater, {
+      runtime: { worldState: { enabled: true, timeRefreshMs: 50 } },
+    })
+    await new Promise((r) => setTimeout(r, 200))
+
+    const ws = ctx.get('worldState')
+    let count = 0
+    ctx.on('orca/state_changed', () => count++)
+    await new Promise((r) => setTimeout(r, 50))
+
+    // emit lastSeenAt=10分钟前（不到 30 分钟阈值）→ reducer 改 lastSeenAt → emit 1 次
+    const recent = Date.now() - 10 * 60 * 1000
+    bus.publish({ source: 'feishu', type: 'message', data: { text: 'recent' }, timestamp: recent })
+    await new Promise((r) => setTimeout(r, 150)) // 等 bus handler（setImmediate）
+    const afterPublish = count
+    check('R5.C1: bus.publish 后 state_changed +1（reducer 改 lastSeenAt）', afterPublish === 1)
+    check('R5.C2: status 保持 awake（10 分钟 < 30 分钟阈值）',
+      ws.getState().user.status === 'awake')
+    check('R5.C3: lastSeenAt === recent（reducer 生效）',
+      ws.getState().user.lastSeenAt === recent)
+
+    // 等多次 timer tick（timeRefreshMs=50，300ms = 6 次 tick）
+    // 预期：user 不变（10 分钟 < 30 分钟）；time 短期不变（timeOfDay 按小时，dayOfWeek 按日）
+    await new Promise((r) => setTimeout(r, 300))
+    check('R5.C4: 6 次 timer tick 后 status 仍 awake',
+      ws.getState().user.status === 'awake')
+    check('R5.C5: 多次 tick 但状态无变化 → state_changed 不再增加',
+      count === afterPublish)
+  }
 }
 
 // ---------- 结果 ----------

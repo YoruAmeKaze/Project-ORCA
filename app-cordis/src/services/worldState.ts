@@ -21,6 +21,7 @@ import type {
   TimeContext,
   TimeOfDay,
   UserState,
+  UserStatus,
   DeviceState,
   WorldState,
 } from '../types/worldState.js'
@@ -178,6 +179,41 @@ export function computeTimeContext(timestamp: number = Date.now()): TimeContext 
   const isWorkday = !isWeekend
 
   return { timeOfDay, dayOfWeek, isWorkday, isWeekend }
+}
+
+// ── inactivity 推导（Phase 2.C）─────────────────────────────────────────
+
+/**
+ * 30 分钟无活动视为 away 的阈值（毫秒）。
+ * Phase 2.C 第一版硬编码；未来可作为配置项暴露。
+ */
+export const AWAY_THRESHOLD_MS = 30 * 60 * 1000
+
+/**
+ * 推算 user.status（基于 lastSeenAt 与 now 的时间差）。
+ *
+ * 设计原则（Phase 2.C 第一版）：
+ * - **仅 awake → away 单向推导**。其他状态（busy / sleeping / away）不主动覆盖。
+ * - busy / sleeping 是用户主动设置或由其他信号（如 calendar / phone sleep）触发；
+ *   time tick 不会"猜"这些状态。
+ * - away 状态不自恢复（用户需新事件触发 re-derive 或 Phase 3+ Attention 主动反向）。
+ * - lastSeenAt <= 0（兜底，无事件触发）→ 不推导。
+ *
+ * 返回：
+ * - null = 不修改 user.status（应跳过 emit）
+ * - UserStatus = 推导结果（当前只会返回 'away'）
+ */
+export function deriveUserStatus(state: WorldState, now: number = Date.now()): UserStatus | null {
+  // 1. 只对 awake 推导；其他状态（busy / sleeping / away）不主动覆盖
+  if (state.user.status !== 'awake') return null
+  // 2. 兜底：lastSeenAt <= 0 表示从未有过事件输入，不推导
+  if (state.user.lastSeenAt <= 0) return null
+  // 3. 超过 30 分钟无活动 → away
+  // 注：使用严格 >（即 30:00 整不算 away，30:00.001 才算）
+  if (now - state.user.lastSeenAt > AWAY_THRESHOLD_MS) {
+    return 'away'
+  }
+  return null
 }
 
 // ── WorldStateService 接口（ctx.worldState 暴露形态） ─────────────────────
