@@ -14,7 +14,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "smoke": "npm run build && node scripts/smoke-info-agent.mjs",
     "smoke:world-state": "npm run build && node scripts/smoke-world-state.mjs",
-    "smoke:all": "npm run smoke && npm run smoke:world-state"
+    "smoke:attention": "npm run build && node scripts/smoke-attention.mjs",
+    "smoke:all": "npm run smoke && npm run smoke:world-state && npm run smoke:attention"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1"

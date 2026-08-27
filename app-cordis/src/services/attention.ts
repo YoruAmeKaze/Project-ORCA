@@ -89,12 +89,21 @@ const ruleCalendarBusySoon: AttentionRule = {
   }),
 }
 
-/** R4: 用户 away 时收到事件 → 入档待用户回来 */
+/** R4: 用户 away 时收到事件 → 入档待用户回来
+ *
+ * 重要：必须用 prevState 而不是 state。
+ * feishuMessageReducer 会把 status 改回 'awake'，所以 current state.status='awake'，
+ * 但 prevState 仍是 'away'——这才是"用户 away 时收到事件"的语义。
+ * Phase 3.A 引入 prevState snapshot 的核心目的之一就是让这种规则能正确触发。
+ *
+ * prevState 可选（state-only 触发时为 undefined）：本规则要求 event !== null，
+ * 因此在 state-only 触发下永远不命中（prevState 为 undefined 时短路）。
+ */
 const ruleAwayArrival: AttentionRule = {
   id: 'away-arrival',
-  description: '用户当前 away，新事件累积（仅 event 触发，state-only 不算）',
-  predicate: ({ event, state }) =>
-    event !== null && state.user.status === 'away',
+  description: '用户 away 时收到新事件（用 prevState 而非 current state，避免 reducer 把 awake 覆盖 away）',
+  predicate: ({ event, prevState }) =>
+    event !== null && prevState?.user.status === 'away',
   produce: () => ({
     priority: 'normal',
     reason: '用户当前 away，新事件入档待用户回来',

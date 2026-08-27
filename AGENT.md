@@ -255,7 +255,27 @@ FastAPI + Uvicorn（reload）；DeepSeek API（规划/润色）；Qwen API（视
   - **v0.4.0 后期热修补（2026-08-26，4 commits 未单独升 PATCH）**：v0.4.0 → v0.5.0 之间 4 个增量 commit 未单独升版本号（违反 D-VER-02），详见 `dev-log.md` v0.4.0 hotfix 批段。涉及：`vision.ts` 切到 Ollama 原生 `/api/chat` + `num_ctx=16384` 修复大图 400（965c697）+ food-agent `handleDeleteIntent` 确定性删除命令按食物名/噪音/全部三条规则 + smoke 69/69（b53d508）+ info-receiver imageUrl 远程拉取兜底超时 90s + kcal 文案带"千卡"单位 + AbortSignal 透传（7870f4f）+ `scripts/list-food.mjs` 辅助 CLI 列出 food-log 档案（c33ad18）
 - 下一步：Phase 3 AttentionEngine 规则引擎（事件 + WorldState → ignore/remember/notify/act 决策）/ Phase 4 Decision Executor（执行 Attention 决策：act → agent / notify → feishu.sendToChat / remember → infoStore.append）；迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull），refine 留主 agent；会话持久化（jsonl）；urgency=2 主动推送（按落地安排后置）；独立飞书 bot 的 app_id 路由（远期，D-AGENT-13）；群聊免 @ 替代方案（图片走 p2p）
   - **v0.6.0 release（app-cordis，2026-08-27）**：Phase 2 WorldState Runtime 完整闭环（Phase 2.A + 2.C + 2.D，3 commits: 2cfbde8 + dcff0ed + 47b5fd9）。**事件流（EventBus）+ 世界状态（WorldState）+ Mock 输入适配器（pc/calendar/phone）+ Debug Publisher** 已就位，Orca 进入"持续接收信息的 Runtime"阶段。`git tag v0.6.0` 标记。下一步进入 Phase 3 Attention Engine（**先规则，不引入 LLM**）。
-  - **Phase 3 Attention Engine（app-cordis，2026-08-27，待 tag）**：纯规则注意力系统，**不引入 LLM**（用户决策：LLM 留给 Phase 5 做"理解/规划"，不替代基础层）。架构：`Event + WorldState (+ prevState) → Attention Rules → AttentionItem[] → emit 'orca/attention'`（Phase 4 Decision 订阅）。关键设计：WorldStateService 接口扩展 `getPrevState()` + `applyUpdate()`（让 Attention 能感知"事件发生前的 state"，避免"规则写了但触发不了"）；service 内部管理 state + prev capture（不再由 WorldStateUpdater 闭包持有）。5 条内置规则：sleeping-quiet（用户睡眠忽略）/ feishu-deadline（飞书消息含 deadline 关键词 → 高优先级 remember）/ calendar-busy-soon（用户忙时收到 ≤5 分钟会议 → wait_until_available）/ away-arrival（away 时事件入档）/ focus-interrupt（focus/meeting 时飞书消息仅入档）。emit `'orca/attention'` 单条 + 可选 `'orca/attention_batch'` 批量（Phase 4 扩展）。dashboard 新增 `/api/attention` GET（ruleCount）+ POST `/api/attention/evaluate`（手动触发评估，便于测试规则）。**零侵入**：Phase 0+1 / Phase 2 全部零修改（仅 WorldStateService 接口扩展，向后兼容）；ORCA_ATTENTION_ENABLED=0 关闭。**前置依赖**：Attention Engine 必须在 WorldStateUpdater 之后挂载（依赖 worldState service）。验证：typecheck/build ✅；smoke 待本地验证（Phase 3 是纯增量 + WorldState 接口向后兼容，预期 Phase 2 smoke 94/94 仍 PASS）。下一步 Phase 4 Decision Executor（订阅 'orca/attention'，按 priority + action 执行 notify/act/remember）。
+  - **Phase 3 Attention Engine（app-cordis，2026-08-27，待 tag）**：纯规则注意力系统，**不引入 LLM**（用户决策：LLM 留给 Phase 5 做"理解/规划"，不替代基础层）。架构：`Event + WorldState (+ prevState) → Attention Rules → AttentionItem[] → emit 'orca/attention'`（Phase 4 Decision 订阅）。关键设计：WorldStateService 接口扩展 `getPrevState()` + `applyUpdate()`（让 Attention 能感知"事件发生前的 state"，避免"规则写了但触发不了"）；service 内部管理 state + prev capture（不再由 WorldStateUpdater 闭包持有）。5 条内置规则：sleeping-quiet（用户睡眠忽略）/ feishu-deadline（飞书消息含 deadline 关键词 → 高优先级 remember）/ calendar-busy-soon（用户忙时收到 ≤5 分钟会议 → wait_until_available）/ away-arrival（away 时事件入档）/ focus-interrupt（focus/meeting 时飞书消息仅入档）。emit `'orca/attention'` 单条 + 可选 `'orca/attention_batch'` 批量（Phase 4 扩展）。dashboard 新增 `/api/attention` GET（ruleCount）+ POST `/api/attention/evaluate`（手动触发评估，便于测试规则）。**零侵入**：Phase 0+1 / Phase 2 全部零修改（仅 WorldStateService 接口扩展，向后兼容）；ORCA_ATTENTION_ENABLED=0 关闭。**前置依赖**：Attention Engine 必须在 WorldStateUpdater 之后挂载（依赖 worldState service）。
+
+  **🔒 关键架构约束（Phase 3.A 确定，未来 Attention/Decision 必读）**：
+  - Attention Rule predicate 中判断"事件发生前的环境状态"时，**必须使用 `prevState`**（事件处理前的 WorldState snapshot）。
+  - `state` 表示**事件处理后**的世界（reducer 已应用过），不可用于"事件前的判断"。
+  - 错误示范：away-arrival 原写 `predicate: ({ state }) => state.user.status === 'away'`——但 `feishuMessageReducer` 会把 status 改回 `awake`，导致规则永远不触发。正确写法：`predicate: ({ prevState }) => prevState?.user.status === 'away'`。
+  - **典型场景**（Phase 4 Decision 会高频遇到）：
+    - 用户原本 idle，收到任务后变 active → 需要 prev=idle 才能解释"刚被激活"
+    - 用户原本 offline，设备上线事件导致 online → 需要 prev=offline 才能触发"上线通知"
+    - 用户原本 focus，收到打断事件 → 需要 prev=focus 才能解释"刚被打断"
+  - **实现层面**：`prevState` 在 state-only 触发（如 `orca/state_changed`）时为 `undefined`；event 触发时由 `ws.getPrevState()` 提供（WorldStateService.applyUpdate 内部 capture）。
+
+  - **R8 smoke-attention（48 用例）**：覆盖 4 条规则 + 1 个 SKIP（urgent-keyword TODO Phase 3.B）+ 9 个 prevState 集成回归。脚本 `scripts/smoke-attention.mjs`，跑法 `npm run smoke:attention`。验证：smoke:world-state 94/94 ✅（零回归）+ smoke:attention 48/48 ✅。
+
+  - **Phase 3.B 路线（规划中）**：
+    1. **Attention 去重（dedup）**：相同 (ruleId, eventId) 在窗口期内合并，避免噪声
+    2. **Attention 节流（throttle/cooldown）**：同一 source 在 N ms 内只 emit 一次 notify；hourly cap 防止过度提醒
+    3. **Rule 配置化（YAML/JSON）**：外部加载规则，覆盖/扩展内置
+    4. **设计目标**：让 Attention Stream 先稳定再可配置，避免去重逻辑和配置逻辑交叉复杂度
+
+  - **下一步 Phase 4 Decision Executor（订阅 'orca/attention'，按 priority 排序 + throttle + 执行 notify/act/remember）**：用户已确认 Phase 3.B 优先于 Phase 4。
 
 ---
 
