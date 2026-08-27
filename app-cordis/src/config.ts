@@ -46,6 +46,16 @@ export interface OrcaRuntimeConfig {
   calendar: OrcaInputAdapterConfig
   /** Phase 2.D Phone adapter 配置（默认 enabled=false） */
   phone: OrcaInputAdapterConfig
+  /** Phase 3 Attention Engine 子配置 */
+  attention: OrcaAttentionConfig
+}
+
+/**
+ * Attention Engine 配置（Phase 3 第一版，纯规则，不引入 LLM）。
+ */
+export interface OrcaAttentionConfig {
+  /** 是否启用 Attention Engine（默认 true；仅当 OrcaRuntime enabled 时才生效） */
+  enabled: boolean
 }
 
 /**
@@ -188,6 +198,10 @@ export function getConfig(): OrcaConfig {
       phone: {
         enabled: process.env.ORCA_PHONE_ENABLED === '1',
         refreshMs: Number(process.env.ORCA_PHONE_REFRESH_MS ?? 300_000),
+      },
+      attention: {
+        // 默认启用（Phase 3 第一版：纯评估不执行任何 action，安全默认）
+        enabled: process.env.ORCA_ATTENTION_ENABLED !== '0',
       },
     },
   }

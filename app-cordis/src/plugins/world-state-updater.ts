@@ -1,23 +1,27 @@
 /**
- * Orca World State Updater —— Cordis plugin（Phase 2.A 最小骨架 + Phase 2.C time tick）
+ * Orca World State Updater —— Cordis plugin（Phase 2.A + Phase 2.C + Phase 3 接口扩展）
  *
  * 职责：
- * - 创建并持有内部 WorldState（闭包私有，外部不可直接访问）
+ * - 创建 WorldStateService 实例（state + prev capture 由 service 内部管理）
  * - 订阅 EventBus 所有事件（minPriority=0）
- * - 每个事件：applyReducers() → 检测字段变化 → 必要时 emit 'orca/state_changed'
+ * - 每个事件：applyReducers() → service.applyUpdate() → 字段级变化检测 → 必要时 emit 'orca/state_changed'
  * - **Phase 2.C**：setInterval time tick，每 N ms 重算 time 字段 + deriveUserStatus（awake → away）
- * - 通过 ctx.provide('worldState', service) 暴露只读 WorldStateService
+ * - 通过 ctx.provide('worldState', service) 暴露 WorldStateService（含 getState + getPrevState）
  * - 返回 dispose 钩子：clearInterval + unsubscribe
  *
- * 不做（Phase 2.C 范围外）：
+ * Phase 3 接口扩展（WorldStateService）：
+ * - service 内部 capture prev state（每次 applyUpdate 自动）
+ * - Attention Engine 通过 service.getPrevState() 拿到事件处理前的 state
+ * - service 自己管理 state（不再由本 plugin 闭包持有，避免分散）
+ *
+ * 不做（Phase 3 范围外）：
  * - 不持久化（重启即失）
- * - 不反向推导（away → awake；busy / sleeping 状态解除都属 Phase 3+）
- * - 不接入 PC / Phone / Calendar adapter（属 Phase 2.D+）
+ * - 不反向推导（away → awake；busy / sleeping 状态解除都属 Phase 4+）
  *
  * 变化检测策略（用户明确要求"不要简单依赖对象引用"）：
  * - 比较 reducer 输出前后的 WorldState JSON 序列化是否一致
- * - 一致 → 跳过 emit
- * - 不一致 → 顶层 spread 生成新 state + emit 'orca/state_changed'
+ * - 一致 → 跳过 emit（不调 applyUpdate，prev 不更新）
+ * - 不一致 → service.applyUpdate() 生成新 state + emit 'orca/state_changed'
  *
  * Cordis quirk 防护：
  * - inject = ['eventBus']（v0.3.0 教训：漏声明 inject 致 async reject → 崩进程）
@@ -36,7 +40,6 @@ import {
   computeTimeContext,
   createWorldStateService,
   deriveUserStatus,
-  getInitialState,
   type WorldStateService,
 } from '../services/worldState.js'
 
@@ -64,24 +67,25 @@ export function worldStateUpdater(ctx: Context, config: OrcaConfig) {
     return
   }
 
-  // 1. 创建并持有内部 WorldState（闭包私有）
-  let state: WorldState = getInitialState()
-  ctx.logger.info(
-    '[world-state-updater] 已启动（user.status=%s timeOfDay=%s）',
-    state.user.status,
-    state.time.timeOfDay,
-  )
-
-  // 2. 创建只读 Service（getter 闭包到 state，外部无法 mutate state）
-  const service: WorldStateService = createWorldStateService(() => state)
+  // 1. 创建 WorldStateService（service 自己管理 state + prev 闭包变量）
+  const service: WorldStateService = createWorldStateService()
   ctx.provide('worldState', service)
 
-  // 3. 订阅 EventBus（所有事件）
+  // 启动日志（getState 返回深拷贝）
+  const initialState = service.getState()
+  ctx.logger.info(
+    '[world-state-updater] 已启动（user.status=%s timeOfDay=%s）',
+    initialState.user.status,
+    initialState.time.timeOfDay,
+  )
+
+  // 2. 订阅 EventBus（所有事件）
   // 使用 minPriority=0 + 不指定 source/type，匹配所有事件。
   // handler 必须 try/catch（cordis quirk：async reject → unhandledRejection 崩进程）
   const unsubscribe = bus.subscribe({ minPriority: 0 }, (event: OrcaEvent) => {
     try {
-      const prev = state
+      // 1. 取当前 state（service 会 capture prev）
+      const prev = service.getState()
       const next = applyReducers(prev, event)
 
       // 字段级变化检测：JSON 序列化对比
@@ -90,13 +94,12 @@ export function worldStateUpdater(ctx: Context, config: OrcaConfig) {
         return
       }
 
-      // 有变化：更新 lastUpdated + lastEventId，生成新顶层引用
-      const updated: WorldState = {
+      // 有变化：调 service.applyUpdate（prev 已 capture）；生成新 state
+      const updated: WorldState = service.applyUpdate((current) => ({
         ...next,
         lastUpdated: event.timestamp,
         lastEventId: event.id,
-      }
-      state = updated
+      }))
 
       ctx.logger.info(
         '[world-state-updater] %s:%s 触发状态变化（lastEventId=%s）',
@@ -114,7 +117,7 @@ export function worldStateUpdater(ctx: Context, config: OrcaConfig) {
     }
   })
 
-  // 4. Time tick（Phase 2.C）：每 N ms 重算 time 字段 + deriveUserStatus
+  // 3. Time tick（Phase 2.C）：每 N ms 重算 time 字段 + deriveUserStatus
   // - 仅 awake → away 单向推导（不覆盖 busy/sleeping/away）
   // - 任一字段变化才更新 state + emit（无变化零开销）
   // - try/catch 包裹（timer 异常不崩进程）
@@ -122,24 +125,24 @@ export function worldStateUpdater(ctx: Context, config: OrcaConfig) {
   const timer = setInterval(() => {
     try {
       const now = Date.now()
+      const current = service.getState()
       const newTime = computeTimeContext(now)
-      const newStatus = deriveUserStatus(state, now)
+      const newStatus = deriveUserStatus(current, now)
 
-      const timeChanged = !statesEqualTime(newTime, state.time)
+      const timeChanged = !statesEqualTime(newTime, current.time)
       const userChanged = newStatus !== null
 
-      // 无变化：完全跳过（state 引用不变、emit 不触发）
+      // 无变化：完全跳过（state 引用不变、emit 不触发、prev 不更新）
       if (!timeChanged && !userChanged) return
 
-      const prev = state
-      const next: WorldState = {
-        ...prev,
-        time: timeChanged ? newTime : prev.time,
-        user: newStatus !== null ? { ...prev.user, status: newStatus } : prev.user,
+      // 有变化：调 applyUpdate（capture prev + 应用新 state）
+      const next: WorldState = service.applyUpdate((state) => ({
+        ...state,
+        time: timeChanged ? newTime : state.time,
+        user: newStatus !== null ? { ...state.user, status: newStatus } : state.user,
         lastUpdated: now,
         // 注意：lastEventId 在 timer tick 中不变（timer 不是事件）；仅在 EventBus 触发时更新
-      }
-      state = next
+      }))
 
       ctx.logger.info(
         '[world-state-updater] timer tick 触发（timeChanged=%s userChanged=%s → status=%s）',
@@ -156,7 +159,7 @@ export function worldStateUpdater(ctx: Context, config: OrcaConfig) {
     timeRefreshMs,
   )
 
-  // 5. dispose 钩子（cordis fiber 清理）
+  // 4. dispose 钩子（cordis fiber 清理）
   return () => {
     ctx.logger.info('[world-state-updater] 关闭（clearInterval + unsubscribe）')
     clearInterval(timer)

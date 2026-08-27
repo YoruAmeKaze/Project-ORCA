@@ -247,33 +247,90 @@ export function deriveUserStatus(state: WorldState, now: number = Date.now()): U
 // ── WorldStateService 接口（ctx.worldState 暴露形态） ─────────────────────
 
 /**
- * WorldStateService 是 Cordis Context 暴露给其他 plugin 的只读接口。
+ * WorldStateService 是 Cordis Context 暴露给其他 plugin 的服务接口。
  *
- * 设计原则：
- * - 仅暴露 getState()（返回 WorldState 快照的深拷贝，外部持有的是值不是引用）
- * - 不暴露任何 setter——状态变更只能由 WorldStateUpdater 内部完成
- * - 这是 Cordis Context service interface，按 @deepseek-ai/cordis 约定
- *   在 src/context.ts 的 declare module Context 中声明
+ * 设计原则（Phase 3 接口扩展后）：
+ * - getState() 返回当前 WorldState 的深拷贝快照（只读，外部 mutation 不污染内部）
+ * - getPrevState() 返回**最近一次 applyUpdate 之前的** WorldState 深拷贝快照（消费一次后清空）
+ *   - 用于 Attention Engine 在 event 触发时判断"事件发生前的状态"
+ *   - state-only 触发（如 orca/state_changed 监听器调用）→ 应传 null
+ * - applyUpdate() 由 WorldStateUpdater 调用：内部 capture prev + 应用 updater 函数
+ *   - updater 接收旧 state，返回新 state（必须返回新引用，不可 mutate）
+ *   - 两次 applyUpdate 之间，prev 会被覆盖（最近一次为准）
+ *
+ * 这是 Cordis Context service interface，按 @deepseek-ai/cordis 约定
+ * 在 src/context.ts 的 declare module Context 中声明。
  */
 export interface WorldStateService {
   /**
-   * 返回当前 WorldState 的深拷贝快照（不持有内部引用，避免外部 mutation 污染）。
+   * 返回当前 WorldState 的深拷贝快照。
    * 注意：返回的是新对象，频繁调用有 JSON 序列化级别性能成本；dashboard 端点按需调用。
    */
   getState(): WorldState
+
+  /**
+   * 返回最近一次 applyUpdate 调用**之前**的 WorldState 深拷贝快照。
+   * 仅消费一次（consume-once）：下一次 getPrevState 调用前必须先 applyUpdate。
+   * 返回 null 表示：从未调用过 applyUpdate（首次评估时）。
+   *
+   * Phase 3 用法：Attention Engine 在 bus.subscribe handler 内：
+   *   const prev = ws.getPrevState()  // event 处理前的 state
+   *   const items = engine.evaluate({ event, state: ws.getState(), prevState: prev })
+   */
+  getPrevState(): WorldState | null
+
+  /**
+   * 应用一个 updater 函数更新 state。
+   * 实现内部会自动 capture 当前 state 作为 prev（供后续 getPrevState() 读取）。
+   * updater 必须返回新 state 引用（不可 mutate 旧 state）。
+   *
+   * @returns 新 state 的深拷贝（与 getState() 等价）
+   */
+  applyUpdate(updater: (state: WorldState) => WorldState): WorldState
 }
 
 /**
- * 创建 WorldStateService 实例（仅供 WorldStateUpdater 内部使用）。
+ * 创建 WorldStateService 实例（Phase 3 重构：service 内部管理 state + prev capture）。
  *
- * 工厂函数而非类：state 完全是闭包私有，外部无法绕过 getState() 读取/修改。
+ * 工厂函数而非类：state 和 prev 都是闭包私有，外部无法绕过 service API 访问/修改。
+ * 这取代了 Phase 2.A 版本的 `createWorldStateService(getter)` 模式——state 不再由
+ * WorldStateUpdater 闭包持有，而是由 service 持有（避免闭包变量分散管理）。
+ *
+ * 不向后兼容 Phase 2.A 的 createWorldStateService(getter)——但所有调用方都改用
+ * 新签名（仅 WorldStateUpdater）。
  */
-export function createWorldStateService(getter: () => WorldState): WorldStateService {
+export function createWorldStateService(): WorldStateService {
+  // 内部闭包变量（service 自己持有，不再依赖外部 getter）
+  let state: WorldState = getInitialState()
+  let prevSnapshot: WorldState | null = null
+
+  // 深拷贝辅助：JSON-safe 字段足够
+  const deepCopy = (s: WorldState): WorldState => JSON.parse(JSON.stringify(s)) as WorldState
+
   return {
     getState(): WorldState {
-      // 深拷贝：JSON 序列化反序列化。WorldState 字段都是 plain JSON-safe，
-      // 性能足够 dashboard 端点使用（不在 hot path）。
-      return JSON.parse(JSON.stringify(getter())) as WorldState
+      return deepCopy(state)
+    },
+
+    getPrevState(): WorldState | null {
+      if (prevSnapshot === null) return null
+      const copy = prevSnapshot
+      // 不清空：attention 可能在同一周期多次读；清空交给下次 applyUpdate 覆盖
+      return deepCopy(copy)
+    },
+
+    applyUpdate(updater: (state: WorldState) => WorldState): WorldState {
+      // 1. capture 当前 state 为 prev
+      prevSnapshot = deepCopy(state)
+      // 2. 应用 updater 得到新 state
+      const newState = updater(state)
+      // 3. 防御：如果 updater 返回了旧引用（同对象），跳过（避免 prev 与 current 指向同一对象）
+      if (newState === state) {
+        // 但 prev 已被 capture，下次 getPrevState 仍能拿到旧 state
+        return deepCopy(state)
+      }
+      state = newState
+      return deepCopy(state)
     },
   }
 }

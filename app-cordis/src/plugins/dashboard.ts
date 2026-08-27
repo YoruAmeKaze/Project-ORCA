@@ -62,6 +62,8 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       void handleEvents(req, res)
     } else if (url.pathname === '/api/world-state') {
       void handleWorldState(req, res)
+    } else if (url.pathname === '/api/attention') {
+      void handleAttention(req, res)
     } else if (url.pathname === '/debug/publish-event' && req.method === 'POST') {
       void handleDebugPublishEvent(req, res)
     } else if (url.pathname === '/dashboard' || url.pathname === '/') {
@@ -133,6 +135,78 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       ts: Date.now(),
       state,
     })
+  }
+
+  /**
+   * Phase 3：Attention Engine 状态端点
+   * - GET /api/attention → 200 {ok, ts, ruleCount}（当前注册规则数）
+   * - POST /api/attention/evaluate  Body: {event?, state?} → 200 {items}
+   *   - 手动触发一次评估（用于测试 attention 规则）
+   * - Attention 未注入返回 503
+   */
+  async function handleAttention(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const att = ctx.get('attention') as
+      | { ruleCount(): number; evaluate(input: unknown): unknown[] }
+      | undefined
+    if (!att) {
+      sendJson(res, 503, { ok: false, error: 'Attention Engine 未启用（设置 ORCA_RUNTIME_ENABLED=1 启用 Persistent Context Runtime，且 ORCA_ATTENTION_ENABLED 不为 0）' })
+      return
+    }
+
+    if (req.method === 'GET') {
+      sendJson(res, 200, {
+        ok: true,
+        ts: Date.now(),
+        ruleCount: att.ruleCount(),
+      })
+      return
+    }
+
+    if (req.method === 'POST' && req.url?.endsWith('/evaluate')) {
+      const ws = ctx.get('worldState') as { getState(): unknown } | undefined
+      if (!ws) {
+        sendJson(res, 503, { ok: false, error: 'WorldState 未启用（evaluate 需要 worldState）' })
+        return
+      }
+      // 读取 body
+      const chunks: Buffer[] = []
+      let size = 0
+      for await (const chunk of req) {
+        size += chunk.length
+        if (size > 8192) {
+          sendJson(res, 413, { ok: false, error: 'body too large（>8KB）' })
+          req.destroy()
+          return
+        }
+        chunks.push(chunk as Buffer)
+      }
+      const body = Buffer.concat(chunks).toString('utf8')
+      let payload: { event?: unknown; state?: unknown }
+      try { payload = JSON.parse(body) } catch { sendJson(res, 400, { ok: false, error: 'invalid json' }); return }
+
+      // 类型守卫：简单判断 event/state 形态（dashboard 仅做最浅校验，不做 schema 验证）
+      const stateObj = (payload.state && typeof payload.state === 'object' && payload.state !== null)
+        ? payload.state as Record<string, unknown>
+        : ws.getState() as Record<string, unknown>
+      const eventObj = (payload.event && typeof payload.event === 'object' && payload.event !== null)
+        ? payload.event as Record<string, unknown>
+        : null
+
+      const items = att.evaluate({
+        event: eventObj as never,  // AttentionEngine.evaluate 内部会 narrow；dashboard 仅做转发
+        state: stateObj as never,
+        prevState: undefined,
+      })
+      sendJson(res, 200, {
+        ok: true,
+        ts: Date.now(),
+        count: items.length,
+        items,
+      })
+      return
+    }
+
+    sendJson(res, 405, { ok: false, error: 'method not allowed' })
   }
 
   /**

@@ -13,6 +13,7 @@ import { imageRouter } from './plugins/image-router.js'
 import { dashboard } from './plugins/dashboard.js'
 import { orcaRuntime } from './plugins/orca-runtime.js'
 import { worldStateUpdater } from './plugins/world-state-updater.js'
+import { attentionEngine } from './plugins/attention-engine.js'
 import { pcAdapter } from './plugins/input-adapters/pc-adapter.js'
 import { calendarAdapter } from './plugins/input-adapters/calendar-adapter.js'
 import { phoneAdapter } from './plugins/input-adapters/phone-adapter.js'
@@ -61,6 +62,13 @@ if (config.runtime.enabled) {
     ctx.logger.info('[orca-cordis] WorldState 已启用（Phase 2.A）')
   } else {
     ctx.logger.info('[orca-cordis] WorldState 未启用（ORCA_WORLD_STATE_ENABLED=0 关闭）')
+  }
+  // Phase 3：Attention Engine 必须在 WorldState 之后（依赖 worldState service）
+  if (config.runtime.attention.enabled) {
+    ctx.plugin(attentionEngine, config)
+    ctx.logger.info('[orca-cordis] Attention Engine 已启用（Phase 3）')
+  } else {
+    ctx.logger.info('[orca-cordis] Attention Engine 未启用（ORCA_ATTENTION_ENABLED=0 关闭）')
   }
   // Phase 2.D：mock 输入 adapter（pc/calendar/phone），全部默认 disabled
   if (config.runtime.pc.enabled) {
