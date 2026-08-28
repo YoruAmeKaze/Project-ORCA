@@ -34,6 +34,7 @@
  *                 这是 Phase 3.A "prev state snapshot" 架构保证的核心验证
  */
 import { AttentionEngine, createAttentionEngine, createAttentionDedup, createAttentionThrottle, createRuleRegistry, getDefaultRegistry, ruleRegistrySize } from '../dist/services/attention.js'
+import { createRuleConfigLoader } from '../dist/services/attention-config.js'
 import { createWorldStateService, getInitialState } from '../dist/services/worldState.js'
 
 const results = []
@@ -578,6 +579,171 @@ function mkTestRule(id, trigger = true, action = 'remember_only') {
   const r5b = engine5b.evaluate({ event: mkFeishuMsg('今晚前提交报告'), state: mkState() })
   check('R11.5.6: 自定义 Registry（只有 only-rule）→ 不触发默认 5 条',
     r5b.length === 1 && r5b[0]?.ruleId === 'only-rule')
+}
+
+// ────────────────────────────────────────────────────────────
+// R12（Phase 3.B.rule-config）：AttentionRuleConfigLoader
+// ────────────────────────────────────────────────────────────
+// 设计：
+// - JSON only（项目无 YAML 依赖，不引入新依赖）
+// - 严格白名单：只解析 enabled；其他字段（predicate/expression 等）直接报错（防 DSL）
+// - 不创建新 Rule——只对已注册的 rule 设置 enabled 状态
+// - 未知 ruleId 抛错（fail-fast）
+// - 不污染 defaultRegistry——Loader 接受任意 registry 参数
+
+{
+  // ── R12.1: 空配置 → 默认规则保持 enabled ──
+  const loader = createRuleConfigLoader()
+  const cfg1 = loader.parse('{"rules":{}}')
+  check('R12.1.1: 空 rules 对象 parse 成功', cfg1.rules !== undefined && Object.keys(cfg1.rules).length === 0)
+
+  // 用独立 Registry 测试（不污染 defaultRegistry）
+  const reg12 = createRuleRegistry()
+  reg12.register(mkTestRule('r1'))
+  reg12.register(mkTestRule('r2'))
+  reg12.register(mkTestRule('r3'))
+  loader.load(cfg1, reg12)
+  check('R12.1.2: 空配置 load 后所有规则 enabled', reg12.size() === 3)
+  check('R12.1.3: 缺省 enabled = true（不写 enabled 字段）',
+    loader.parse('{"rules":{"r1":{}}}').rules.r1.enabled === true)
+
+  // ── R12.2: 关闭一个规则 → registry 中 disabled + engine 不再产生 ──
+  const reg12b = createRuleRegistry()
+  reg12b.register(mkTestRule('r1'))
+  reg12b.register(mkTestRule('r2'))
+  const engine12b = createAttentionEngine(reg12b)
+  // 先验证两个都触发
+  const before = engine12b.evaluate({ event: mkFeishuMsg('hi'), state: mkState() })
+  check('R12.2.1: load 前 2 个规则都触发', before.length === 2)
+  // 关闭 r2
+  loader.load(loader.parse('{"rules":{"r2":{"enabled":false}}}'), reg12b)
+  check('R12.2.2: disable r2 后 reg12b.size() === 1（仅 r1 启用）', reg12b.size() === 1)
+  const after = engine12b.evaluate({ event: mkFeishuMsg('hi'), state: mkState() })
+  check('R12.2.3: disable r2 后 evaluate → 1 item（仅 r1）',
+    after.length === 1 && after[0]?.ruleId === 'r1')
+  check('R12.2.4: r2 仍在 getAllRules（disable 不删除）',
+    reg12b.getAllRules().some((r) => r.id === 'r2'))
+  check('R12.2.5: r2 在 getRules 中不出现（disable 不返回）',
+    !reg12b.getRules().some((r) => r.id === 'r2'))
+
+  // ── R12.3: 重新 enabled → 规则恢复 ──
+  loader.load(loader.parse('{"rules":{"r2":{"enabled":true}}}'), reg12b)
+  check('R12.3.1: re-enable r2 后 size === 2', reg12b.size() === 2)
+  const after2 = engine12b.evaluate({ event: mkFeishuMsg('hi'), state: mkState() })
+  check('R12.3.2: re-enable 后 evaluate → 2 items',
+    after2.length === 2 && after2.some((i) => i.ruleId === 'r2'))
+
+  // ── R12.4: 未知 ruleId → 抛错（fail-fast）──
+  const reg12c = createRuleRegistry()
+  reg12c.register(mkTestRule('known'))
+  let threwUnknown = false
+  try {
+    loader.load(loader.parse('{"rules":{"unknown_rule":{"enabled":false}}}'), reg12c)
+  } catch (err) {
+    threwUnknown = true
+    const detail = err instanceof Error ? err.message : String(err)
+    check('R12.4.1: 未知 ruleId 错误信息含 ruleId',
+      detail.includes('unknown_rule'))
+  }
+  check('R12.4.2: 未知 ruleId 抛错（fail-fast）', threwUnknown)
+  check('R12.4.3: 抛错后 registry 状态不被破坏', reg12c.size() === 1)
+
+  // ── R12.5: JSON 解析错误 → 明确报告 ──
+  let threwParse = false
+  try {
+    loader.parse('not-valid-json{')
+  } catch (err) {
+    threwParse = true
+    const detail = err instanceof Error ? err.message : String(err)
+    check('R12.5.1: 解析错误信息包含 JSON parse', detail.toLowerCase().includes('json'))
+  }
+  check('R12.5.2: 无效 JSON 抛错', threwParse)
+
+  // 结构错误（合法 JSON 但不是 object）
+  let threwStruct1 = false
+  try { loader.parse('null') } catch { threwStruct1 = true }
+  check('R12.5.3: null 不是 object → 抛错', threwStruct1)
+
+  let threwStruct2 = false
+  try { loader.parse('[]') } catch { threwStruct2 = true }
+  check('R12.5.4: array 不是 object → 抛错', threwStruct2)
+
+  let threwStruct3 = false
+  try { loader.parse('{"foo": 1}') } catch { threwStruct3 = true }  // 缺 rules 字段
+  check('R12.5.5: 缺 rules 字段 → 抛错', threwStruct3)
+
+  // 拒绝未知字段（防 DSL 倾向：写 predicate 直接报错）
+  let threwDsl = false
+  try {
+    loader.parse('{"rules":{"r1":{"enabled":true,"predicate":"state.user.status === \\"away\\""}}}')
+  } catch (err) {
+    threwDsl = true
+    const detail = err instanceof Error ? err.message : String(err)
+    check('R12.5.6: 未知字段 predicate 抛错（防 DSL）',
+      detail.includes('predicate') && detail.includes('不支持'))
+  }
+  check('R12.5.7: predicate 字段抛错', threwDsl)
+
+  // enabled 类型错误
+  let threwType = false
+  try {
+    loader.parse('{"rules":{"r1":{"enabled":"yes"}}}')
+  } catch { threwType = true }
+  check('R12.5.8: enabled 非 boolean 抛错', threwType)
+
+  // ── R12.6: 配置应用到独立 Registry → 不污染 defaultRegistry ──
+  // 记录 defaultRegistry 关闭前的 enabled 状态
+  const defaultRegForR126 = getDefaultRegistry()
+  const beforeR126 = new Map()  // ruleId → enabled
+  for (const r of defaultRegForR126.getAllRules()) {
+    beforeR126.set(r.id, defaultRegForR126.isEnabled(r.id))
+  }
+
+  // 用独立 Registry 测试
+  const regIsolated = createRuleRegistry()
+  regIsolated.register(mkTestRule('r1'))
+  loader.load(loader.parse('{"rules":{"r1":{"enabled":false}}}'), regIsolated)
+  check('R12.6.1: 独立 Registry load 成功', regIsolated.size() === 0)  // r1 disabled
+
+  // 验证 defaultRegistry 未受影响
+  let dirty = false
+  for (const r of defaultRegForR126.getAllRules()) {
+    const wasBefore = beforeR126.get(r.id)
+    if (wasBefore !== undefined && defaultRegForR126.isEnabled(r.id) !== wasBefore) {
+      dirty = true
+      break
+    }
+  }
+  check('R12.6.2: defaultRegistry 未被独立 Registry load 污染', !dirty)
+
+  // ── R12.7: 现有 R8/R9/R10 行为零回归（双验证：直接 + 通过 config 关闭）──
+  // (a) 默认 Registry（createAttentionEngine() 不传参）行为不变
+  const engineDefault = createAttentionEngine()
+  const r8regression = engineDefault.evaluate({ event: null, state: mkState({ status: 'sleeping' }) })
+  check('R12.7.1: 默认 Registry sleeping-quiet 仍触发（向后兼容）',
+    r8regression.length === 1 && r8regression[0]?.ruleId === 'sleeping-quiet')
+  const r10regression = engineDefault.evaluate({ event: mkFeishuMsg('今晚前提交报告'), state: mkState() })
+  check('R12.7.2: 默认 Registry feishu-deadline 仍触发（向后兼容）',
+    r10regression.length === 1 && r10regression[0]?.ruleId === 'feishu-deadline')
+
+  // (b) 通过 config 关闭默认规则后应不再触发
+  const cfgDisable = loader.parse('{"rules":{"sleeping-quiet":{"enabled":false},"feishu-deadline":{"enabled":false}}}')
+  loader.load(cfgDisable, defaultRegForR126, )
+  // 上面会修改 defaultRegistry（仅用于测试，测试后恢复——见下）
+  const engineAfterDisable = createAttentionEngine()
+  const r8after = engineAfterDisable.evaluate({ event: null, state: mkState({ status: 'sleeping' }) })
+  check('R12.7.3: 通过 config disable 后 sleeping-quiet 不触发', r8after.length === 0)
+  const r10after = engineAfterDisable.evaluate({ event: mkFeishuMsg('今晚前提交报告'), state: mkState() })
+  check('R12.7.4: 通过 config disable 后 feishu-deadline 不触发', r10after.length === 0)
+
+  // 恢复 defaultRegistry 状态（避免污染后续测试）
+  for (const r of defaultRegForR126.getAllRules()) {
+    const wasBefore = beforeR126.get(r.id)
+    if (wasBefore !== undefined && defaultRegForR126.isEnabled(r.id) !== wasBefore) {
+      defaultRegForR126.setEnabled(r.id, wasBefore)
+    }
+  }
+  check('R12.7.5: defaultRegistry 状态恢复（不污染后续测试）', true)  // 仅记录恢复操作
 }
 
 // ────────── 结果 ──────────

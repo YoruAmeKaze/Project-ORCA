@@ -183,6 +183,7 @@ dev-log.md / TODO.md / README.md
 - `prevState` 在 state-only 触发时为 `undefined`；event 触发时由 `ws.getPrevState()` 提供。
 - 三层职责分离：Engine（是什么）→ Dedup（多不多）→ Throttle（该不该打扰）；throttle 仅限 notify_immediately + act，remember_only/ignore/wait_until_available 直通。
 - **AttentionRuleRegistry（Phase 3.B.rule-registry）**：Engine 与规则**解耦**。AttentionRuleRegistry 接口：`register / unregister / getRules / getAllRules / setEnabled / isEnabled / size / clear`。`getRules()` 仅返回启用规则（按注册顺序）；同 id 重复 register 覆盖并保留原位置（热更新）。`createAttentionEngine(registry?)` 不传参使用 `getDefaultRegistry()`（包含 5 条内置规则；行为等同 Phase 3.A）。向后兼容：`registerRule / clearRules / ruleRegistrySize` 委托 defaultRegistry（R8/R9/R10 测试零改动）。
+- **AttentionRuleConfigLoader（Phase 3.B.rule-config）**：JSON 配置加载器，**只表达 enabled 状态**，不创建 predicate/expression（防 DSL 倾向）。`{rules: {ruleId: {enabled: bool}}}` 格式；**严格白名单**只解析 `enabled` 字段；未知字段（predicate / expression 等）直接报错（fail-fast）。`unknown ruleId` 抛错（防静默错误）。Loader 接受 registry 参数，**不污染** `getDefaultRegistry()`。**仅支持 JSON**（项目无 YAML 依赖；YAML 为后续扩展）。**禁止**：DSL / 表达式 / JavaScript 注入 / LLM rule generation / 持久化 / 加载内置 5 条规则（这些必须由 TypeScript 代码 register）。`createRuleConfigLoader()` 工厂返回 `{ parse(jsonText), load(config, registry) }`。R12 smoke 28 用例覆盖空配置 / disable / re-enable / 未知 id / JSON 错误 / 结构错误 / 拒绝未知字段 / 独立 Registry / 默认 Registry 兼容性。
 
 ---
 

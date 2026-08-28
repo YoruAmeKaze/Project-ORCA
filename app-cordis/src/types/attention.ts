@@ -189,6 +189,71 @@ export interface AttentionRuleRegistry {
 }
 
 /**
+ * AttentionRuleConfigEntry —— 单条规则的配置项（Phase 3.B.rule-config）
+ *
+ * **严格约束**：只允许表达"启用/禁用"和未来可调的简单参数。
+ * **禁止** predicate / expression / JavaScript 代码等 DSL 形态。
+ * 当前仅 `enabled`；未来扩展字段（如 priority、cooldownMs）只需在 loader 解析白名单。
+ */
+export interface AttentionRuleConfigEntry {
+  /** true / false；缺省 true（不写 = 启用） */
+  enabled: boolean
+}
+
+/**
+ * AttentionRuleConfig —— 配置文件根形态（Phase 3.B.rule-config）
+ *
+ * 严格 JSON 格式（Phase 3.B 第一版；YAML 为后续扩展）：
+ * ```json
+ * {
+ *   "rules": {
+ *     "sleeping-quiet": { "enabled": true },
+ *     "away-arrival": { "enabled": false }
+ *   }
+ * }
+ * ```
+ *
+ * **不**支持：
+ * - predicate / 表达式
+ * - 新建规则（Rule 必须先由 TypeScript 代码 register）
+ * - JavaScript 注入
+ */
+export interface AttentionRuleConfig {
+  rules: Record<string, AttentionRuleConfigEntry>
+}
+
+/**
+ * AttentionRuleConfigLoader —— 配置加载器（Phase 3.B.rule-config）
+ *
+ * 职责：
+ * 1. parse(jsonText)：JSON string → AttentionRuleConfig（纯函数，无副作用）
+ * 2. load(config, registry)：应用配置到 registry（副作用；仅设置 enabled 状态）
+ *
+ * 设计原则：
+ * - **不创建新 Rule**——Rule 必须先由 TypeScript 代码 register
+ * - **未知 ruleId 抛错**（fail-fast；不静默）
+ * - **拒绝未知字段**（防 DSL 倾向：写 `predicate: "..."` 直接报错）
+ * - Loader 接受 registry 参数（不假设用 default；测试可用独立 Registry）
+ *
+ * 不做：
+ * - YAML parser（项目无 YAML 依赖；后续可加）
+ * - DSL / 表达式 / JavaScript 注入
+ * - LLM rule generation（Phase 5+）
+ */
+export interface AttentionRuleConfigLoader {
+  /**
+   * Parse JSON string → AttentionRuleConfig（纯函数；失败抛错）
+   * @throws JSON parse error / 结构校验失败
+   */
+  parse(jsonText: string): AttentionRuleConfig
+  /**
+   * 应用配置到 registry（仅设置 enabled 状态，不创建新 Rule）
+   * @throws 未知 ruleId / 其他规则校验失败
+   */
+  load(config: AttentionRuleConfig, registry: AttentionRuleRegistry): void
+}
+
+/**
  * AttentionThrottle —— Attention Stream 节流层（Phase 3.B.throttle）
  *
  * 职责分离：
