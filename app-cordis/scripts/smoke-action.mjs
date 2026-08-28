@@ -448,6 +448,44 @@ function makeTmpStore() {
     results14c.length === 0)
 }
 
+// ── R14.10.2: dispose race（Phase 4.B Review 修复）──
+// 场景：emit(orca/decision) 让 handler 进入飞行中（store.append 延迟 50ms）；
+// 在飞行中调用 dispose；等待飞行结束后不应 emit orca/action-result。
+// 修复前：.then 仍会触发 ctx.emit（即使 dispose 已调用）→ 失败
+// 修复后：disposed 闸门短路 → 不 emit → 通过
+{
+  const ctx = new Context()
+  ctx.logger.exporter({ colors: 0, levels: { default: 3 }, export() {} })
+
+  // 慢 store：append() 50ms 才 resolve
+  const slowStore = {
+    append: () => new Promise((resolve) => setTimeout(resolve, 50)),
+  }
+  ctx.provide('infoStore', slowStore)
+
+  const lateResults = []
+  ctx.on('orca/action-result', (r) => { lateResults.push(r) })
+
+  const dispose2 = actionExecutor(ctx, { runtime: { action: { enabled: true } } })
+
+  // emit → handler.execute() 进入飞行中（等 50ms）
+  ctx.emit('orca/decision', mkDecision({
+    action: 'remember', decisionId: 'dec_dispose_race_001',
+  }))
+
+  // 等 10ms 让 execute() 进入飞行中（但 store.append 还在等待）
+  await new Promise((r) => setTimeout(r, 10))
+
+  // 现在 dispose
+  dispose2()
+
+  // 等 200ms 让原本的飞行中 execute 完成；修复后不应 emit
+  await new Promise((r) => setTimeout(r, 200))
+
+  check('R14.10.2: dispose 后 in-flight execute 不 emit orca/action-result',
+    lateResults.length === 0)
+}
+
 // ────────────────────────────────────────────────────────────
 // R14.D  ActionResult 字段完整性（decisionId / action / executedAt）
 // ────────────────────────────────────────────────────────────

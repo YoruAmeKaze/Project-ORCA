@@ -82,14 +82,19 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   // 3. 订阅 'orca/decision'：每个 Decision → execute → emit 'orca/action-result'
   // - listener try/catch 包裹（异常不崩其他 listener；cordis quirk 防护）
   // - handler.execute 是 async（Promise）；fire-and-forget 不阻塞 emit
+  // - disposed 闸门（Phase 4.B Review 修复）：dispose 后 in-flight execute 完成时
+  //   不再 emit / 不再 logger.warn（避免 disposed ctx 仍被回调）
+  let disposed = false
   const unsubscribe = ctx.on('orca/decision', (decision: Decision) => {
     try {
       // 异步执行；结果通过 emit 派发
       void executor.execute(decision)
         .then((result) => {
+          if (disposed) return
           ctx.emit('orca/action-result', result)
         })
         .catch((err: unknown) => {
+          if (disposed) return
           // executor.execute 内部已 try/catch，这里只是兜底；不应触发
           const detail = err instanceof Error ? err.message : String(err)
           ctx.logger.warn('[action-executor] 兜底捕获异常 (decisionId=%s): %s',
@@ -111,7 +116,8 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
 
   // 4. dispose 钩子
   return () => {
-    ctx.logger.info('[action-executor] 关闭（unsubscribe + registry.clear + deferredStore.clear）')
+    ctx.logger.info('[action-executor] 关闭（disposed=true + unsubscribe + registry.clear + deferredStore.clear）')
+    disposed = true  // 必须在 unsubscribe 之前置位（in-flight .then/.catch 才会短路）
     unsubscribe()
     executor.registry.clear()
     executor.deferredStore.clear()
