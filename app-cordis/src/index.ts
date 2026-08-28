@@ -15,6 +15,7 @@ import { orcaRuntime } from './plugins/orca-runtime.js'
 import { worldStateUpdater } from './plugins/world-state-updater.js'
 import { attentionEngine } from './plugins/attention-engine.js'
 import { decisionEngine } from './plugins/decision-engine.js'
+import { actionExecutor } from './plugins/action-executor.js'
 import { pcAdapter } from './plugins/input-adapters/pc-adapter.js'
 import { calendarAdapter } from './plugins/input-adapters/calendar-adapter.js'
 import { phoneAdapter } from './plugins/input-adapters/phone-adapter.js'
@@ -72,6 +73,13 @@ if (config.runtime.enabled) {
     if (config.runtime.decision.enabled) {
       ctx.plugin(decisionEngine, config)
       ctx.logger.info('[orca-cordis] Decision Engine 已启用（Phase 4.A）')
+      // Phase 4.B：Action Executor 必须在 Decision 之后（订阅 orca/decision emit）
+      if (config.runtime.action.enabled) {
+        ctx.plugin(actionExecutor, config)
+        ctx.logger.info('[orca-cordis] Action Executor 已启用（Phase 4.B）')
+      } else {
+        ctx.logger.info('[orca-cordis] Action Executor 未启用（ORCA_ACTION_ENABLED=0 关闭；默认安全）')
+      }
     } else {
       ctx.logger.info('[orca-cordis] Decision Engine 未启用（ORCA_DECISION_ENABLED=0 关闭）')
     }
@@ -97,7 +105,7 @@ if (config.runtime.enabled) {
 ctx.plugin(agent, config)
 
 ctx.logger.info(
-  '[orca-cordis] Phase 4.A 骨架已启动 host=%s port=%d model=%s dryRun=%s',
+  '[orca-cordis] Phase 4.B 骨架已启动 host=%s port=%d model=%s dryRun=%s',
   config.host,
   config.port,
   config.llm.model,

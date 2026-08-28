@@ -50,6 +50,8 @@ export interface OrcaRuntimeConfig {
   attention: OrcaAttentionConfig
   /** Phase 4.A Decision Engine 子配置 */
   decision: OrcaDecisionConfig
+  /** Phase 4.B Action Executor 子配置 */
+  action: OrcaActionConfig
 }
 
 /**
@@ -67,6 +69,22 @@ export interface OrcaAttentionConfig {
  */
 export interface OrcaDecisionConfig {
   /** 是否启用 Decision Engine（默认 true；仅当 OrcaRuntime + Attention enabled 时才生效） */
+  enabled: boolean
+}
+
+/**
+ * Action Executor 配置（Phase 4.B 第一版，执行层）。
+ *
+ * **默认禁用**（false）：用户决策——act handler 暂无显式注册时不应执行任何 shell / 任意 JS。
+ * 启用后挂载 actionExecutor plugin；默认注册的安全 handler 是：
+ * - noop（no_action）：成功无副作用
+ * - defer：入队 in-memory pending store（不消费）
+ * - notify-stub：success=false + "notification handler not configured"
+ * - act-stub：success=false + "action handler not configured"（**严禁任意 shell**）
+ * - remember：当 infoStore 已 provide 时挂载，否则跳过（success=false）
+ */
+export interface OrcaActionConfig {
+  /** 是否启用 Action Executor（默认 false；仅当 OrcaRuntime + Attention + Decision enabled 时才生效） */
   enabled: boolean
 }
 
@@ -218,6 +236,10 @@ export function getConfig(): OrcaConfig {
       decision: {
         // 默认启用（Phase 4.A 第一版：纯决策层不执行 action，安全默认）
         enabled: process.env.ORCA_DECISION_ENABLED !== '0',
+      },
+      action: {
+        // 默认禁用（Phase 4.B 用户决策：act/notify 默认是 stub，启用前应明确注册 handler）
+        enabled: process.env.ORCA_ACTION_ENABLED === '1',
       },
     },
   }

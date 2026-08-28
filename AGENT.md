@@ -1,6 +1,6 @@
 # Project Orca — Agent 启动上下文（AGENT.md）
 
-> **给新会话/新代理的启动引导**：开工前先通读本文档，再按需深读具体文件。本文档是当前代码（**app-cordis v0.6.0 + Phase 4.A 开发中**）的权威快照。
+> **给新会话/新代理的启动引导**：开工前先通读本文档，再按需深读具体文件。本文档是当前代码（**app-cordis v0.6.0 + Phase 4.B 开发中**）的权威快照。
 > 与 `README.md`（对外概述）、`dev-log.md`（历史日志）、`TODO.md`（待办）配合使用；冲突时**以本文档 + 源码为准**。
 > **维护规则（硬性，见 `guide/decisions.md` D-VER-04）**：每次代码有实质变更（新机制、版本升级），**提交前必须同步本文档**——改目录结构/机制/配置键/版本号/待办中任一项即必改对应板块；dev-log 条目末尾标注"AGENT.md 已同步"。代码改了但本文档停在旧状态 = 违规提交。
 
@@ -31,7 +31,7 @@ npm start                         # node dist/index.js；或 npm run dev（tsx w
 
 ---
 
-## 2. 当前架构（app-cordis v0.6.0 + Phase 4.A）
+## 2. 当前架构（app-cordis v0.6.0 + Phase 4.B）
 
 ```
 飞书 webhook → feishu-channel（ctx.emit feishu/message + feishu/image，p2p/群聊带 chat_id）
@@ -43,7 +43,7 @@ npm start                         # node dist/index.js；或 npm run dev（tsx w
         → pc/calendar/phone adapters（mock，默认 disabled）
         → AttentionEngine（Phase 3：规则评估 → dedup → throttle）→ emit 'orca/attention'
         → DecisionEngine（Phase 4.A：纯决策层，AttentionItem → Decision）→ emit 'orca/decision'
-        → [Phase 4.B 规划] Action Executor
+        → ActionExecutor（Phase 4.B：registry + builtin handlers + deferred store）→ emit 'orca/action-result'
 ```
 
 设计原则（详见 `guide/orca-cordis-migration-plan.md`）：**纯 Cordis 自写飞书通道（B 方案）**；信息获取用 CEO-员工-档案室模型（`guide/orca-info-agent-framework.md`）；Persistent Context Runtime 分阶段演进（EventBus → WorldState → Attention → Decision）。
@@ -68,11 +68,11 @@ app-cordis/                    # ★ Cordis/TypeScript 版（唯一主线）
 │   │   ├── context.ts         # Cordis Context 类型增强（feishu/llm/vision/sessions/info*/eventBus/worldState/attention/decision）
 │   │   ├── session.ts         # SessionStore：内存会话
 │   │   ├── agents/            # 信息获取框架：types/registry（闭集）/store（档案室 JSONL）/executor（Pull）/router（R0+R1）/builtins/food-log.ts（food-agent）
-│   │   ├── services/          # feishu / llm（DeepSeek）/ vision（Qwen VL）/ eventBus / worldState / attention / attention-config / decision
-│   │   ├── plugins/           # feishu-channel / agent / info-agents / info-receiver / image-router / food-image / dashboard / orca-runtime / world-state-updater / attention-engine / decision-engine / input-adapters/{feishu,pc,calendar,phone}-adapter
-│   │   ├── types/             # event.ts（OrcaEvent）/ worldState.ts / attention.ts / decision.ts
+│   │   ├── services/          # feishu / llm（DeepSeek）/ vision（Qwen VL）/ eventBus / worldState / attention / attention-config / decision / action
+│   │   ├── plugins/           # feishu-channel / agent / info-agents / info-receiver / image-router / food-image / dashboard / orca-runtime / world-state-updater / attention-engine / decision-engine / action-executor / input-adapters/{feishu,pc,calendar,phone}-adapter
+│   │   ├── types/             # event.ts（OrcaEvent）/ worldState.ts / attention.ts / decision.ts / action.ts
 │   │   └── data/              # records/ 档案室 JSONL + images/ 图片落盘（gitignore）
-│   └── scripts/               # smoke-info-agent / smoke-world-state / smoke-attention / smoke-decision / recognize-food / list-food
+│   └── scripts/               # smoke-info-agent / smoke-world-state / smoke-attention / smoke-decision / smoke-action / recognize-food / list-food
 guide/                         # 设计文档（memory-pack / decisions / orca-cordis-migration-plan / orca-info-agent-framework / orca-iphone-channel）
 AGENT.md                       # ★ 本文档
 dev-log.md / TODO.md / README.md
@@ -96,6 +96,7 @@ dev-log.md / TODO.md / README.md
 - **WorldState**（services/worldState.ts + plugins/world-state-updater.ts）：4 块（user/device/time/extensions）；reducer 注册表 key = `${source}:${type}`；字段级变化检测才 emit `'orca/state_changed'`；time tick 推导 away（仅 awake→away 单向，严格 30min）
 - **Attention**（services/attention.ts + plugins/attention-engine.ts，Phase 3）：纯规则评估（5 条内置规则）→ dedup（窗口去重）→ throttle（source cooldown + hourly cap）→ emit `'orca/attention'`；**rule-registry**：Engine 与规则解耦，支持热更新
 - **Decision**（services/decision.ts + plugins/decision-engine.ts，Phase 4.A）：**纯决策层**——AttentionItem → Decision 1:1 映射；不重新判断 priority / 不重新评估 Attention 规则 / 不执行 action / 不持久化；emit `'orca/decision'`。AttentionItem 新增 `id: string`（randomUUID，Decision back-trace 用）。
+- **Action**（services/action.ts + plugins/action-executor.ts，Phase 4.B）：**执行层**——Decision → ActionResult 1:1；ActionHandlerRegistry 索引 handler；内置 5 个 handler（noop/remember/defer/notify-stub/act-stub）+ DeferredActionStore（仅 in-memory）；emit `'orca/action-result'`。**关键安全约束**：act handler 默认 stub，禁止任意 shell / JS / 插件调用；ORCA_ACTION_ENABLED 默认 false。
 
 ### 4.4 关键事件（ctx.emit / ctx.on）
 | 事件 | 载荷 | 产生者 |
@@ -107,6 +108,7 @@ dev-log.md / TODO.md / README.md
 | `orca/state_changed` | WorldState | world-state-updater |
 | `orca/attention` | AttentionItem（含 `id`） | attention-engine |
 | `orca/decision` | Decision | decision-engine |
+| `orca/action-result` | ActionResult | action-executor |
 
 ---
 
@@ -122,6 +124,7 @@ dev-log.md / TODO.md / README.md
 | 世界状态 | `services/worldState.ts` | 用户/设备/时间实时视图 |
 | 注意力评估 | `services/attention.ts` | 纯规则 → dedup → throttle |
 | 决策层（Phase 4.A） | `services/decision.ts` + `plugins/decision-engine.ts` | 纯函数：AttentionItem → Decision（不执行 action） |
+| 执行层（Phase 4.B） | `services/action.ts` + `plugins/action-executor.ts` | Decision → ActionResult（registry + 5 builtin handlers + deferred store；act/notify 默认 stub） |
 | 调试 | `plugins/dashboard.ts` | /dashboard HTML + /api/status + /api/events + /api/world-state + /api/attention + /debug/publish-event |
 
 > Python 版能力（桌面控制、瑞幸点单、联网搜索、截图）已在 Python 版删除时一并移除；如需迁移为 InfoAgent，见 `guide/orca-cordis-migration-plan.md`。
@@ -153,6 +156,7 @@ dev-log.md / TODO.md / README.md
 | ORCA_PHONE_ENABLED / ORCA_PHONE_REFRESH_MS | 0 / 300000 | Phone adapter（mock） |
 | ORCA_ATTENTION_ENABLED | 1 | Attention Engine（纯评估，安全默认） |
 | ORCA_DECISION_ENABLED | 1 | Decision Engine（Phase 4.A 纯决策层，安全默认） |
+| ORCA_ACTION_ENABLED | 0 | Action Executor（Phase 4.B 执行层；默认禁用，启用前需明确注册 handler） |
 
 > 注意：`ORCA_*_ENABLED` 类必须严格写 `1`（`true`/`yes`/`on` 不生效）；.env 中行首 `#` 视为注释（曾有用户复制 .env.example 带 `#` 导致不生效的坑）。
 
@@ -175,15 +179,16 @@ dev-log.md / TODO.md / README.md
 - **Phase 3.B（2026-08-27）**：dedup（去重）→ throttle（节流）→ rule-registry（规则注册表解耦，Engine 接受 AttentionRuleRegistry 注入）
 - **Phase 3.B.rule-config（2026-08-27）**：AttentionRuleConfigLoader（JSON 严格白名单 `enabled`，未知 ruleId 抛错）
 - **Phase 4.A（2026-08-27）**：Decision Engine 纯决策层（AttentionItem → Decision 1:1 映射；AttentionItem 新增 `id`；不执行 action）；R13 smoke 覆盖 5 条 action 映射 + priority/reason/eventId 透传 + 无副作用 + EventBus 集成
+- **Phase 4.B（2026-08-27）**：Action Executor 执行层——ActionHandlerRegistry + 5 个 builtin handler（noop/remember/defer/notify-stub/act-stub）+ DeferredActionStore（仅 in-memory）+ orca/action-result 事件；ORCA_ACTION_ENABLED 默认 false（**安全默认**）。R14 smoke 85 用例覆盖 5 个 action 行为 + registry 生命周期 + 真实 infoStore 写入 + pending store + EventBus 集成 + dispose + act 安全边界（禁止任意 shell）。
 - **Python 版删除（2026-08-27）**：v2.3.0 全部源码移除，app-cordis 成为唯一主线
 
 ### 8.2 待办（TODO.md）
-- **Phase 4.B Action Executor**：订阅 'orca/decision'，按 priority 排序 + 复用 throttle + 实际执行 notify/remember/act（飞书 / infoStore / InfoAgent）
+- **Phase 4.C**：ActionPlan 拆分（payload / channel / target）；真实 notify handler（复用 FeishuClient.sendToChat）；真实 act handler（最小权限 + 白名单校验）；DeferredActionStore scheduler（消费 pending，按 user.status 合并通知）；urgency=2 主动推送
 - 迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull）
-- 会话持久化（jsonl）；urgency=2 主动推送；独立飞书 bot 的 app_id 路由（远期）
+- 会话持久化（jsonl）；独立飞书 bot 的 app_id 路由（远期）
 - 飞书事件订阅加密模式支持（技术债）
 
-### 8.3 关键架构约束（Phase 3.A + Phase 4.A 确定，Attention/Decision 必读）
+### 8.3 关键架构约束（Phase 3.A + Phase 4.A + Phase 4.B 确定，Attention/Decision/Action 必读）
 - **Attention Rule predicate 判断"事件发生前状态"必须用 `prevState`**；`state` 是事件处理后（reducer 已应用）的世界。
 - 错误示范：`predicate: ({ state }) => state.user.status === 'away'`（reducer 改 awake 后永远不触发）；正确：`predicate: ({ prevState }) => prevState?.user.status === 'away'`。
 - `prevState` 在 state-only 触发时为 `undefined`；event 触发时由 `ws.getPrevState()` 提供。
@@ -193,6 +198,9 @@ dev-log.md / TODO.md / README.md
 - **AttentionItem.id（Phase 4.A 引入）**：每个 AttentionItem 生成时分配 `randomUUID()`；用于 Decision `attentionId` back-trace；不影响 Phase 3 测试（R8/R9/R10/R11/R12 零改动）。
 - **DecisionEngine（Phase 4.A 纯决策层）**：严格分层不重新判断 Attention 规则；输入 AttentionItem → 输出 Decision（1:1 映射）；`decide()` / `decideMany()` 是**纯函数**，无 IO / 无 service 调用 / 无副作用 / 不发飞书 / 不写 infoStore / 不调 LLM / 不执行 shell。Action 映射：`notify_immediately→notify`、`remember_only→remember`、`wait_until_available→defer`、`act→act`、`ignore→no_action`；未知 AttentionAction 透传原值（fail-soft）。透传字段：priority / reason / eventId / source / ruleId。不重排 priority / 不排序 / 不持久化。`createDecisionEngine()` 工厂返回 `{ decide, decideMany }`。
 - **DecisionEnginePlugin（Phase 4.A Cordis integration）**：订阅 `ctx.on('orca/attention')` → `engine.decide(item)` → `ctx.emit('orca/decision')`。**不阻塞**原始 Attention publisher（ctx.on 是 listener；不影响 emit）；listener try/catch（handler 异常不崩其他 listener）；无 inject 依赖（DecisionEngine 是纯函数）。挂载顺序：**必须在 AttentionEngine 之后**（依赖 `orca/attention` emit；index.ts 已按顺序装配）。
+- **ActionExecutor（Phase 4.B 执行层）**：严格分层不重新评估 Decision / Attention / WorldState；输入 Decision → 输出 ActionResult（1:1）。`execute(decision)` 是异步（Promise）但**严格不抛异常给 caller**：handler 异常被内部 catch 转化为 success=false ActionResult。ActionHandlerRegistry 接口：`register / unregister / get / list / size / clear`；同 action 重复 register 覆盖（Last-Write-Wins）。**关键安全约束**：act / notify handler 默认是 stub（`act-stub` / `notify-stub`），禁止任意 shell / JS / 插件调用；未配置 handler 时 success=false + 明确 error；不提供 fake shell executor。`createActionExecutor({ registry?, deferredStore? })` 工厂返回 `{ execute, registry, deferredStore }`。DeferredActionStore 接口：`enqueue / get / list / size / clear`；Phase 4.B 第一版**不调度**（仅 in-memory 记录 + 查询接口；Phase 4.C+ scheduler 消费）。
+- **ActionExecutorPlugin（Phase 4.B Cordis integration）**：订阅 `ctx.on('orca/decision')` → `executor.execute(decision)` → `ctx.emit('orca/action-result')`。**不阻塞**原始 Decision publisher（ctx.on 是 listener；不影响 emit）；listener try/catch + Promise.catch 双重兜底（即使 handler 抛错也不崩服务）。`ctx.actionExecutor` service 暴露 executor。remember handler 通过 `ctx.get('infoStore')` 软注入（infoAgents plugin 未挂载时跳过 remember handler 注册，其他 handler 不受影响）。挂载顺序：**必须在 DecisionEngine 之后**（依赖 `orca/decision` emit；index.ts 已按顺序装配）。
+- **ORCA_ACTION_ENABLED 默认 false**（用户决策：act handler 暂无显式注册时不应执行任何副作用；启用前应明确注册 handler）。
 
 ---
 
@@ -229,4 +237,4 @@ dev-log.md / TODO.md / README.md
 
 ---
 
-*维护者：ka。本文档与代码同步于 **app-cordis v0.6.0 + Phase 4.A（2026-08-27，Python 版已删除）**。*
+*维护者：ka。本文档与代码同步于 **app-cordis v0.6.0 + Phase 4.B（2026-08-27，Python 版已删除）**。*

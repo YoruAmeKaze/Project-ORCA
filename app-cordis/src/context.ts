@@ -5,6 +5,7 @@ import type { EventBus } from './services/eventBus.js'
 import type { WorldStateService } from './services/worldState.js'
 import type { AttentionEngineService } from './types/attention.js'
 import type { DecisionEngineService } from './types/decision.js'
+import type { ActionExecutorService } from './types/action.js'
 import type { SessionStore } from './session.js'
 import type { FeishuMessageEvent, FeishuImageEvent } from './plugins/feishu-channel.js'
 import type { InfoAgentRegistry } from './agents/registry.js'
@@ -15,6 +16,7 @@ import type { OrcaEvent } from './types/event.js'
 import type { WorldState } from './types/worldState.js'
 import type { AttentionItem } from './types/attention.js'
 import type { Decision } from './types/decision.js'
+import type { ActionResult } from './types/action.js'
 
 /**
  * 向 Cordis Context 声明本项目提供的服务与用到的混合方法。
@@ -34,6 +36,7 @@ declare module '@deepseek-ai/cordis' {
     worldState: WorldStateService
     attention: AttentionEngineService
     decision: DecisionEngineService
+    actionExecutor: ActionExecutorService
     on(name: string, listener: (...args: any[]) => any, options?: unknown): () => boolean
     emit(name: string, ...args: any[]): void
     plugin(plugin: unknown, config?: unknown): unknown
@@ -47,5 +50,6 @@ declare module '@deepseek-ai/cordis' {
     'orca/state_changed'(state: WorldState): void
     'orca/attention'(item: AttentionItem): void
     'orca/decision'(decision: Decision): void
+    'orca/action-result'(result: ActionResult): void
   }
 }
