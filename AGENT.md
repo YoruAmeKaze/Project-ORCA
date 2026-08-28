@@ -1,6 +1,6 @@
 # Project Orca — Agent 启动上下文（AGENT.md）
 
-> **给新会话/新代理的启动引导**：开工前先通读本文档，再按需深读具体文件。本文档是当前代码（**app-cordis v0.6.0 + Phase 4.B 开发中**）的权威快照。
+> **给新会话/新代理的启动引导**：开工前先通读本文档，再按需深读具体文件。本文档是当前代码（**app-cordis v0.6.0 + Phase 4.C 开发中**）的权威快照。
 > 与 `README.md`（对外概述）、`dev-log.md`（历史日志）、`TODO.md`（待办）配合使用；冲突时**以本文档 + 源码为准**。
 > **维护规则（硬性，见 `guide/decisions.md` D-VER-04）**：每次代码有实质变更（新机制、版本升级），**提交前必须同步本文档**——改目录结构/机制/配置键/版本号/待办中任一项即必改对应板块；dev-log 条目末尾标注"AGENT.md 已同步"。代码改了但本文档停在旧状态 = 违规提交。
 
@@ -31,7 +31,7 @@ npm start                         # node dist/index.js；或 npm run dev（tsx w
 
 ---
 
-## 2. 当前架构（app-cordis v0.6.0 + Phase 4.B）
+## 2. 当前架构（app-cordis v0.6.0 + Phase 4.C）
 
 ```
 飞书 webhook → feishu-channel（ctx.emit feishu/message + feishu/image，p2p/群聊带 chat_id）
@@ -44,6 +44,7 @@ npm start                         # node dist/index.js；或 npm run dev（tsx w
         → AttentionEngine（Phase 3：规则评估 → dedup → throttle）→ emit 'orca/attention'
         → DecisionEngine（Phase 4.A：纯决策层，AttentionItem → Decision）→ emit 'orca/decision'
         → ActionExecutor（Phase 4.B：registry + builtin handlers + deferred store）→ emit 'orca/action-result'
+        → NotifyHandler（Phase 4.C：EventBus.get(id) 反查 → FeishuClient.sendToChat）
 ```
 
 设计原则（详见 `guide/orca-cordis-migration-plan.md`）：**纯 Cordis 自写飞书通道（B 方案）**；信息获取用 CEO-员工-档案室模型（`guide/orca-info-agent-framework.md`）；Persistent Context Runtime 分阶段演进（EventBus → WorldState → Attention → Decision）。
@@ -96,7 +97,7 @@ dev-log.md / TODO.md / README.md
 - **WorldState**（services/worldState.ts + plugins/world-state-updater.ts）：4 块（user/device/time/extensions）；reducer 注册表 key = `${source}:${type}`；字段级变化检测才 emit `'orca/state_changed'`；time tick 推导 away（仅 awake→away 单向，严格 30min）
 - **Attention**（services/attention.ts + plugins/attention-engine.ts，Phase 3）：纯规则评估（5 条内置规则）→ dedup（窗口去重）→ throttle（source cooldown + hourly cap）→ emit `'orca/attention'`；**rule-registry**：Engine 与规则解耦，支持热更新
 - **Decision**（services/decision.ts + plugins/decision-engine.ts，Phase 4.A）：**纯决策层**——AttentionItem → Decision 1:1 映射；不重新判断 priority / 不重新评估 Attention 规则 / 不执行 action / 不持久化；emit `'orca/decision'`。AttentionItem 新增 `id: string`（randomUUID，Decision back-trace 用）。
-- **Action**（services/action.ts + plugins/action-executor.ts，Phase 4.B）：**执行层**——Decision → ActionResult 1:1；ActionHandlerRegistry 索引 handler；内置 5 个 handler（noop/remember/defer/notify-stub/act-stub）+ DeferredActionStore（仅 in-memory）；emit `'orca/action-result'`。**关键安全约束**：act handler 默认 stub，禁止任意 shell / JS / 插件调用；ORCA_ACTION_ENABLED 默认 false。
+- **Action**（services/action.ts + plugins/action-executor.ts，Phase 4.B + Phase 4.C）：**执行层**——Decision → ActionResult 1:1；ActionHandlerRegistry 索引 handler；内置 handler（noop/remember/defer/notify-stub/act-stub）+ Phase 4.C 真实 notify handler（依赖 EventBus.get + FeishuClient.sendToChat）+ DeferredActionStore（仅 in-memory）；emit `'orca/action-result'`。**关键安全约束**：act handler 默认 stub，禁止任意 shell / JS / 插件调用；ORCA_ACTION_ENABLED 默认 false。Phase 4.C：notify handler 通过 `ctx.get('feishu') + ctx.get('eventBus')` 软注入；任一缺失则保留 notify-stub。
 
 ### 4.4 关键事件（ctx.emit / ctx.on）
 | 事件 | 载荷 | 产生者 |
@@ -124,7 +125,7 @@ dev-log.md / TODO.md / README.md
 | 世界状态 | `services/worldState.ts` | 用户/设备/时间实时视图 |
 | 注意力评估 | `services/attention.ts` | 纯规则 → dedup → throttle |
 | 决策层（Phase 4.A） | `services/decision.ts` + `plugins/decision-engine.ts` | 纯函数：AttentionItem → Decision（不执行 action） |
-| 执行层（Phase 4.B） | `services/action.ts` + `plugins/action-executor.ts` | Decision → ActionResult（registry + 5 builtin handlers + deferred store；act/notify 默认 stub） |
+| 执行层（Phase 4.B + Phase 4.C） | `services/action.ts` + `plugins/action-executor.ts` | Decision → ActionResult（registry + builtin handlers + deferred store；Phase 4.C 真实 notify handler） |
 | 调试 | `plugins/dashboard.ts` | /dashboard HTML + /api/status + /api/events + /api/world-state + /api/attention + /debug/publish-event |
 
 > Python 版能力（桌面控制、瑞幸点单、联网搜索、截图）已在 Python 版删除时一并移除；如需迁移为 InfoAgent，见 `guide/orca-cordis-migration-plan.md`。
@@ -179,11 +180,14 @@ dev-log.md / TODO.md / README.md
 - **Phase 3.B（2026-08-27）**：dedup（去重）→ throttle（节流）→ rule-registry（规则注册表解耦，Engine 接受 AttentionRuleRegistry 注入）
 - **Phase 3.B.rule-config（2026-08-27）**：AttentionRuleConfigLoader（JSON 严格白名单 `enabled`，未知 ruleId 抛错）
 - **Phase 4.A（2026-08-27）**：Decision Engine 纯决策层（AttentionItem → Decision 1:1 映射；AttentionItem 新增 `id`；不执行 action）；R13 smoke 覆盖 5 条 action 映射 + priority/reason/eventId 透传 + 无副作用 + EventBus 集成
-- **Phase 4.B（2026-08-27）**：Action Executor 执行层——ActionHandlerRegistry + 5 个 builtin handler（noop/remember/defer/notify-stub/act-stub）+ DeferredActionStore（仅 in-memory）+ orca/action-result 事件；ORCA_ACTION_ENABLED 默认 false（**安全默认**）。R14 smoke 85 用例覆盖 5 个 action 行为 + registry 生命周期 + 真实 infoStore 写入 + pending store + EventBus 集成 + dispose + act 安全边界（禁止任意 shell）。
+- **Phase 4.B（2026-08-27）**：Action Executor 执行层——ActionHandlerRegistry + 5 个 builtin handler（noop/remember/defer/notify-stub/act-stub）+ DeferredActionStore（仅 in-memory）+ orca/action-result 事件；ORCA_ACTION_ENABLED 默认 false（**安全默认**）。R14 smoke 86 用例（85 + Phase 4.B Review 修复 dispose race）覆盖 5 个 action 行为 + registry 生命周期 + 真实 infoStore 写入 + pending store + EventBus 集成 + dispose + act 安全边界（禁止任意 shell）。
+- **Phase 4.B Review（2026-08-27，commit 1b20710）**：修复 dispose race condition（plugin dispose 后 in-flight execute 完成时不应 emit / log）。新增 R14.10.2 反向验证：移除 disposed 闸门后失败，恢复后通过。
+- **Phase 4.C（2026-08-27）**：Orca 第一个真实 Action——NotifyHandler。EventBus.get(id) 按 eventId 反查原始 OrcaEvent（O(n) 线性扫描，仅作用于 sliding window；找不到返回 undefined）；NotifyHandler 验证 decision.eventId / event.source==='feishu' / event.data.chatId；dryRun 复用现有 OrcaConfig.dryRun；调用 FeishuClient.sendToChat 发送 `[Orca] ${priority}\n${reason}\n\n源消息: ${text.slice(0,200)}`。**严格分层**：Decision / DecisionEngine 不感知 Feishu；NotifyHandler 是 Feishu-aware 的；FeishuEventData 用 type guard narrow（不使用 any）。R15 smoke 54 用例覆盖 EventBus.get / state-only / source 校验 / Feishu context / dryRun / 真实发送 / 失败处理 / EventBus 集成 / 决策追踪。
 - **Python 版删除（2026-08-27）**：v2.3.0 全部源码移除，app-cordis 成为唯一主线
 
 ### 8.2 待办（TODO.md）
-- **Phase 4.C**：ActionPlan 拆分（payload / channel / target）；真实 notify handler（复用 FeishuClient.sendToChat）；真实 act handler（最小权限 + 白名单校验）；DeferredActionStore scheduler（消费 pending，按 user.status 合并通知）；urgency=2 主动推送
+- **Phase 4.D**：真实 act handler（最小权限 + 白名单校验）；DeferredActionStore scheduler（消费 pending，按 user.status 合并通知）；urgency=2 主动推送
+- **Phase 4.E**：ActionPlan 拆分（payload / channel / target）；支持 bark / 邮件等其他通知渠道（NotifyHandler 按 event.source 分支扩展）
 - 迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull）
 - 会话持久化（jsonl）；独立飞书 bot 的 app_id 路由（远期）
 - 飞书事件订阅加密模式支持（技术债）
@@ -198,8 +202,10 @@ dev-log.md / TODO.md / README.md
 - **AttentionItem.id（Phase 4.A 引入）**：每个 AttentionItem 生成时分配 `randomUUID()`；用于 Decision `attentionId` back-trace；不影响 Phase 3 测试（R8/R9/R10/R11/R12 零改动）。
 - **DecisionEngine（Phase 4.A 纯决策层）**：严格分层不重新判断 Attention 规则；输入 AttentionItem → 输出 Decision（1:1 映射）；`decide()` / `decideMany()` 是**纯函数**，无 IO / 无 service 调用 / 无副作用 / 不发飞书 / 不写 infoStore / 不调 LLM / 不执行 shell。Action 映射：`notify_immediately→notify`、`remember_only→remember`、`wait_until_available→defer`、`act→act`、`ignore→no_action`；未知 AttentionAction 透传原值（fail-soft）。透传字段：priority / reason / eventId / source / ruleId。不重排 priority / 不排序 / 不持久化。`createDecisionEngine()` 工厂返回 `{ decide, decideMany }`。
 - **DecisionEnginePlugin（Phase 4.A Cordis integration）**：订阅 `ctx.on('orca/attention')` → `engine.decide(item)` → `ctx.emit('orca/decision')`。**不阻塞**原始 Attention publisher（ctx.on 是 listener；不影响 emit）；listener try/catch（handler 异常不崩其他 listener）；无 inject 依赖（DecisionEngine 是纯函数）。挂载顺序：**必须在 AttentionEngine 之后**（依赖 `orca/attention` emit；index.ts 已按顺序装配）。
-- **ActionExecutor（Phase 4.B 执行层）**：严格分层不重新评估 Decision / Attention / WorldState；输入 Decision → 输出 ActionResult（1:1）。`execute(decision)` 是异步（Promise）但**严格不抛异常给 caller**：handler 异常被内部 catch 转化为 success=false ActionResult。ActionHandlerRegistry 接口：`register / unregister / get / list / size / clear`；同 action 重复 register 覆盖（Last-Write-Wins）。**关键安全约束**：act / notify handler 默认是 stub（`act-stub` / `notify-stub`），禁止任意 shell / JS / 插件调用；未配置 handler 时 success=false + 明确 error；不提供 fake shell executor。`createActionExecutor({ registry?, deferredStore? })` 工厂返回 `{ execute, registry, deferredStore }`。DeferredActionStore 接口：`enqueue / get / list / size / clear`；Phase 4.B 第一版**不调度**（仅 in-memory 记录 + 查询接口；Phase 4.C+ scheduler 消费）。
-- **ActionExecutorPlugin（Phase 4.B Cordis integration）**：订阅 `ctx.on('orca/decision')` → `executor.execute(decision)` → `ctx.emit('orca/action-result')`。**不阻塞**原始 Decision publisher（ctx.on 是 listener；不影响 emit）；listener try/catch + Promise.catch 双重兜底（即使 handler 抛错也不崩服务）。`ctx.actionExecutor` service 暴露 executor。remember handler 通过 `ctx.get('infoStore')` 软注入（infoAgents plugin 未挂载时跳过 remember handler 注册，其他 handler 不受影响）。挂载顺序：**必须在 DecisionEngine 之后**（依赖 `orca/decision` emit；index.ts 已按顺序装配）。
+- **ActionExecutor（Phase 4.B 执行层）**：严格分层不重新评估 Decision / Attention / WorldState；输入 Decision → 输出 ActionResult（1:1）。`execute(decision)` 是异步（Promise）但**严格不抛异常给 caller**：handler 异常被内部 catch 转化为 success=false ActionResult。ActionHandlerRegistry 接口：`register / unregister / get / list / size / clear`；同 action 重复 register 覆盖（Last-Write-Wins）。**关键安全约束**：act handler 默认 stub（`act-stub`），禁止任意 shell / JS / 插件调用；未配置 handler 时 success=false + 明确 error；不提供 fake shell executor。`createActionExecutor({ registry?, deferredStore? })` 工厂返回 `{ execute, registry, deferredStore }`。DeferredActionStore 接口：`enqueue / get / list / size / clear`；Phase 4.B 第一版**不调度**（仅 in-memory 记录 + 查询接口；Phase 4.D scheduler 消费）。
+- **ActionExecutorPlugin（Phase 4.B + Phase 4.C Cordis integration）**：订阅 `ctx.on('orca/decision')` → `executor.execute(decision)` → `ctx.emit('orca/action-result')`。**不阻塞**原始 Decision publisher（ctx.on 是 listener；不影响 emit）；listener try/catch + Promise.catch 双重兜底（即使 handler 抛错也不崩服务）；**disposed 闸门**（Phase 4.B Review）：plugin dispose 后 in-flight execute 完成时不再 emit / 不再 logger.warn。`ctx.actionExecutor` service 暴露 executor。remember handler 通过 `ctx.get('infoStore')` 软注入（infoAgents plugin 未挂载时跳过 remember handler 注册，其他 handler 不受影响）。notify handler 通过 `ctx.get('feishu') + ctx.get('eventBus')` 软注入（任一缺失则保留 notify-stub）。挂载顺序：**必须在 DecisionEngine 之后**（依赖 `orca/decision` emit；index.ts 已按顺序装配）。
+- **EventBus.get(id)**（Phase 4.C 最小增量）：按 id 反查 sliding window 中的事件（O(n) 线性扫描；找不到返回 undefined）。仅作用于现有 sliding window（不改 windowSize；不持久化；超 windowSize 的最老事件已被丢弃 → 返回 undefined）。**不**把 EventBus 改造成永久事件数据库。
+- **NotifyHandler（Phase 4.C Orca 第一个真实 Action）**：Feishu-aware（持有 FeishuClient 依赖）；Decision / Attention / DecisionEngine 不感知 Feishu。输入 Decision → 顺序判断：eventId undefined / eventBus.get 找不到 / source !== 'feishu' / FeishuEventData type guard 失败 → 全部 success=false + 明确 error（绝不伪装成功）。dryRun=true → 仅日志不发送；dryRun=false → feishu.sendToChat。文本格式：`[Orca] ${priority}\n${reason}\n\n源消息: ${text.slice(0,200)}`（第一版最小化；不引入模板系统 / 卡片 DSL / i18n / LLM 生成）。`createNotifyHandler({ feishu, eventBus, dryRun, logger? })` 工厂。
 - **ORCA_ACTION_ENABLED 默认 false**（用户决策：act handler 暂无显式注册时不应执行任何副作用；启用前应明确注册 handler）。
 
 ---
@@ -237,4 +243,4 @@ dev-log.md / TODO.md / README.md
 
 ---
 
-*维护者：ka。本文档与代码同步于 **app-cordis v0.6.0 + Phase 4.B（2026-08-27，Python 版已删除）**。*
+*维护者：ka。本文档与代码同步于 **app-cordis v0.6.0 + Phase 4.C（2026-08-27，Python 版已删除）**。*

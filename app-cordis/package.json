@@ -3,7 +3,7 @@
   "version": "0.6.0",
   "private": true,
   "type": "module",
-  "description": "Project Orca — Cordis(TypeScript) 版：Phase 1 飞书→AI 最小闭环 + Phase 2 信息获取框架（InfoAgent：Pull+Push、档案室 JSONL、food-agent、会话绑定路由、本地视觉、直连图片上传 /info/images）+ Phase 0+1 Persistent Context Runtime（OrcaEvent 流 + EventBus 滑动窗口 + feishu-adapter，默认关闭）+ Phase 2 WorldState Runtime（WorldStateService + Reducer 注册表 + WorldStateUpdater time tick + 3 个 mock 输入 adapter + debug publisher，Phase 2.A/2.C/2.D 完整闭环）+ Phase 3 Attention Engine（纯规则评估 + dedup + throttle + rule-registry + rule-config loader）+ Phase 4.A Decision Engine（纯决策层：AttentionItem → Decision，无副作用）+ Phase 4.B Action Executor（registry + 5 builtin handlers + deferred store；ORCA_ACTION_ENABLED 默认 false）",
+  "description": "Project Orca — Cordis(TypeScript) 版：Phase 1 飞书→AI 最小闭环 + Phase 2 信息获取框架（InfoAgent：Pull+Push、档案室 JSONL、food-agent、会话绑定路由、本地视觉、直连图片上传 /info/images）+ Phase 0+1 Persistent Context Runtime（OrcaEvent 流 + EventBus 滑动窗口 + feishu-adapter，默认关闭）+ Phase 2 WorldState Runtime（WorldStateService + Reducer 注册表 + WorldStateUpdater time tick + 3 个 mock 输入 adapter + debug publisher，Phase 2.A/2.C/2.D 完整闭环）+ Phase 3 Attention Engine（纯规则评估 + dedup + throttle + rule-registry + rule-config loader）+ Phase 4.A Decision Engine（纯决策层：AttentionItem → Decision，无副作用）+ Phase 4.B Action Executor（registry + 5 builtin handlers + deferred store；ORCA_ACTION_ENABLED 默认 false）+ Phase 4.C Notify Handler（真实 Feishu 通知：EventBus.get(id) 反查 + FeishuClient.sendToChat + dryRun 复用）",
   "engines": {
     "node": ">=20"
   },
@@ -17,7 +17,8 @@
     "smoke:attention": "npm run build && node scripts/smoke-attention.mjs",
     "smoke:decision": "npm run build && node scripts/smoke-decision.mjs",
     "smoke:action": "npm run build && node scripts/smoke-action.mjs",
-    "smoke:all": "npm run smoke && npm run smoke:world-state && npm run smoke:attention && npm run smoke:decision && npm run smoke:action"
+    "smoke:notify": "npm run build && node scripts/smoke-notify.mjs",
+    "smoke:all": "npm run smoke && npm run smoke:world-state && npm run smoke:attention && npm run smoke:decision && npm run smoke:action && npm run smoke:notify"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1"

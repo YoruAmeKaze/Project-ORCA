@@ -28,6 +28,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Decision } from '../types/decision.js'
+import type { OrcaEvent } from '../types/event.js'
 import type {
   ActionExecutorService,
   ActionHandler,
@@ -289,15 +290,14 @@ export function createDeferHandler(ctx: DeferActionContext = {}): ActionHandler 
 }
 
 /**
- * NotifyActionContext —— notify handler 需要的依赖（Phase 4.B 第一版仅 stub）
+ * NotifyStubActionContext —— notify stub handler 需要的依赖（Phase 4.B 保留的 fallback）
  *
- * 注：现有 FeishuClient.sendToChat 可作为后续真实 notify handler 的实现，
- * Phase 4.B 第一版**不直接调 FeishuClient**，原因：
- * 1. notify action 缺少必要字段（chatId / text）；直接用会过度耦合
- * 2. Phase 4.B 第一版要保证默认安全（未配置 handler 时不发送）
- * 3. 真实 notify handler 需要 ActionPlan 拆分（payload / channel / target），属 Phase 4.C+
+ * 注：真实 notify handler 由 createNotifyHandler 实现（Phase 4.C），
+ * createNotifyStubHandler 仅作为 fallback：
+ * - 当 plugin 检测到 feishu 或 eventBus 缺失时，notify stub 保留
+ * - 当外部不调用 createActionHandlerRegistry.register 覆盖时，stub 仍生效
  */
-export interface NotifyActionContext {
+export interface NotifyStubActionContext {
   logger?: { warn(msg: string, ...args: unknown[]): void }
 }
 
@@ -318,7 +318,7 @@ export interface NotifyActionContext {
  *  可以先提供一个明确的 notify handler stub：success = false + error = 'notification handler not configured'。
  *  不要伪造成功。"
  */
-export function createNotifyStubHandler(ctx: NotifyActionContext = {}): ActionHandler {
+export function createNotifyStubHandler(ctx: NotifyStubActionContext = {}): ActionHandler {
   return {
     name: 'notify-stub',
     action: 'notify',
@@ -372,6 +372,181 @@ export function createActStubHandler(ctx: ActActionContext = {}): ActionHandler 
         decision.decisionId, decision.ruleId,
       )
       return failResult(decision, 'action handler not configured')
+    },
+  }
+}
+
+// ── 真实 NotifyHandler（Phase 4.C：Orca 第一个真实 Action）────────────
+
+/**
+ * NotifyFeishuLike —— NotifyHandler 依赖的 Feishu 最小接口
+ *
+ * 结构化类型（structural typing）：仅声明 sendToChat；不强制注入完整 FeishuClient。
+ * 这样 NotifyHandler 不依赖完整 FeishuClient，便于测试用 mock 替代。
+ *
+ * FeishuClient.sendToChat 已存在（services/feishu.ts:49）；结构兼容。
+ */
+export interface NotifyFeishuLike {
+  sendToChat(chatId: string, text: string): Promise<void>
+}
+
+/**
+ * NotifyEventBusLike —— NotifyHandler 依赖的 EventBus 最小接口
+ *
+ * 结构化类型：仅声明 get（按 eventId 反查 OrcaEvent）。
+ * EventBus.get(id) 已存在（services/eventBus.ts:140，Phase 4.C 最小增量）。
+ */
+export interface NotifyEventBusLike {
+  get(id: string): OrcaEvent | undefined
+}
+
+/**
+ * NotifyActionContext —— NotifyHandler 依赖上下文
+ *
+ * 关键约束：
+ * - feishu + eventBus 是必须依赖（dryRun=true 时 feishu 仍需注入但不被调用）
+ * - dryRun 复用现有 OrcaConfig.dryRun（ORCA_DRY_RUN=1）
+ * - logger 可选；用于 dryRun 日志 + 成功/失败日志
+ *
+ * NotifyHandler 是 Feishu-aware 的；Decision / Attention / DecisionEngine 不感知 Feishu。
+ */
+export interface NotifyActionContext {
+  feishu: NotifyFeishuLike
+  eventBus: NotifyEventBusLike
+  dryRun: boolean
+  logger?: {
+    info(msg: string, ...args: unknown[]): void
+    warn(msg: string, ...args: unknown[]): void
+  }
+}
+
+/**
+ * FeishuEventData —— Feishu event.data 的最小视图
+ *
+ * 由 feishu-adapter.ts 翻译 FeishuMessageEvent / FeishuImageEvent 时写入 OrcaEvent.data。
+ * 最小契约：
+ * - chatId 必需（用于 sendToChat）
+ * - text 可选（仅 message 类型事件有；image 类型无；用于上下文回显）
+ *
+ * 不读其他字段（openId / messageId / meta 等）；Phase 4.C 第一版不需要。
+ *
+ * extends Record<string, unknown> 是为了让 isFeishuEventData 的 type predicate
+ * 能通过 TS 的"参数类型与谓词类型必须可赋值"约束。
+ */
+interface FeishuEventData extends Record<string, unknown> {
+  /** 飞书 chat id（p2p / 群聊均可；sendToChat 走 receive_id_type=chat_id） */
+  chatId: string
+  /** 原始文本（仅 message 类型事件有；image 类型无） */
+  text?: string
+}
+
+/**
+ * 类型守卫：OrcaEvent.data 形如 FeishuEventData
+ *
+ * 不使用 any；只校验 chatId 字段（必须为非空 string）。
+ * 校验通过后 TypeScript 视 data 为 FeishuEventData，可安全访问 chatId。
+ */
+function isFeishuEventData(d: Record<string, unknown>): d is FeishuEventData {
+  return typeof d.chatId === 'string' && (d.chatId as string).length > 0
+}
+
+/**
+ * createNotifyHandler —— notify action 的真实 handler（Phase 4.C）
+ *
+ * 行为（顺序判断，任一失败立即返回 success=false）：
+ * 1. decision.eventId undefined  → "no source event for state-only trigger"
+ *    （state-only 触发如 orca/state_changed 没有源事件）
+ * 2. eventBus.get(eventId) === undefined  → "event evicted from window"
+ *    （事件已被 sliding window 丢弃；windowSize 默认 200）
+ * 3. event.source !== 'feishu'  → "unsupported source for notify: ${source}"
+ *    （当前仅支持 feishu；其他 source 留作 Phase 4.D+ 扩展）
+ * 4. !isFeishuEventData(event.data)  → "feishu event missing chat context"
+ *    （Feishu 事件但 data.chatId 缺失 / 非字符串 / 空字符串）
+ * 5. dryRun=true  → 仅日志，return success=true + metadata={dryRun,chatId,textPreview}
+ * 6. dryRun=false → feishu.sendToChat(chatId, text)；
+ *    成功 → success=true + metadata={chatId}；失败 → success=false + error
+ *
+ * 消息文本（第一版最小化；不引入模板系统 / 卡片 DSL / i18n / LLM 生成）：
+ *   [Orca] ${priority}
+ *   ${reason}
+ *
+ *   源消息: ${originalText.slice(0, 200)}    // 仅当 text 存在
+ *
+ * 严格安全 / 不允许：
+ * - ❌ 任何 shell / exec / plugin 调用（NotifyHandler 不持有 shell 接口）
+ * - ❌ 自动 fallback（source 非 feishu 即失败，不尝试其他通道）
+ * - ❌ 伪造 success（任何错误都明确返回 success=false + error）
+ * - ❌ 修改 Decision / AttentionItem / WorldState
+ * - ❌ LLM 生成消息内容
+ */
+export function createNotifyHandler(ctx: NotifyActionContext): ActionHandler {
+  return {
+    name: 'notify',
+    action: 'notify',
+    async execute(decision: Decision): Promise<ActionResult> {
+      // 1. eventId 必须存在（state-only 触发没源事件）
+      if (!decision.eventId) {
+        return failResult(decision, 'no source event for state-only trigger')
+      }
+
+      // 2. 从 EventBus 反查原始 OrcaEvent
+      const event = ctx.eventBus.get(decision.eventId)
+      if (!event) {
+        return failResult(decision, 'event evicted from window')
+      }
+
+      // 3. 仅支持 feishu source
+      if (event.source !== 'feishu') {
+        return failResult(decision, `unsupported source for notify: ${event.source}`)
+      }
+
+      // 4. narrow event.data 到 FeishuEventData（type guard；不使用 any）
+      if (!isFeishuEventData(event.data)) {
+        return failResult(decision, 'feishu event missing chat context')
+      }
+
+      const chatId = event.data.chatId
+      const originalText = typeof event.data.text === 'string' ? event.data.text : ''
+
+      // 5. 构造通知文本（第一版最小化）
+      const lines: string[] = [
+        `[Orca] ${decision.priority}`,
+        decision.reason,
+      ]
+      if (originalText) {
+        lines.push('', `源消息: ${originalText.slice(0, 200)}`)
+      }
+      const text = lines.join('\n')
+
+      // 6. dryRun 拦截：仅记录日志，不发送
+      if (ctx.dryRun) {
+        ctx.logger?.info(
+          '[action:notify] dryRun=true 不发送。chatId=%s decisionId=%s text=%s',
+          chatId, decision.decisionId, text.slice(0, 80),
+        )
+        return okResult(decision, {
+          dryRun: true,
+          chatId,
+          textPreview: text.slice(0, 80),
+        })
+      }
+
+      // 7. 真实发送
+      try {
+        await ctx.feishu.sendToChat(chatId, text)
+        ctx.logger?.info(
+          '[action:notify] 发送成功。chatId=%s decisionId=%s',
+          chatId, decision.decisionId,
+        )
+        return okResult(decision, { chatId })
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        ctx.logger?.warn(
+          '[action:notify] sendToChat 失败 (decisionId=%s chatId=%s): %s',
+          decision.decisionId, chatId, detail,
+        )
+        return failResult(decision, `feishu sendToChat failed: ${detail}`)
+      }
     },
   }
 }

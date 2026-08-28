@@ -1,9 +1,10 @@
 /**
- * Orca Action Executor Plugin —— Cordis integration（Phase 4.B）
+ * Orca Action Executor Plugin — Cordis integration (Phase 4.B + Phase 4.C)
  *
  * 职责：
  * - 创建 ActionExecutor 实例（含 ActionHandlerRegistry + DeferredActionStore）
- * - 注册内置 5 个 handler（noop / remember(store-dep) / defer / notify-stub / act-stub）
+ * - 注册内置 handler：noop / remember(store-dep) / defer / act-stub（默认）
+ * - Phase 4.C 注册真实 notify handler（依赖 feishu + eventBus；缺失则保留 notify-stub）
  * - 订阅 'orca/decision'（decision-engine emit 的产物）
  * - 每个 Decision → executor.execute() → ctx.emit('orca/action-result')
  * - 提供 ctx.actionExecutor service（便于外部直接调用）
@@ -19,7 +20,6 @@
  * - act handler 默认 stub（success=false + "action handler not configured"）
  * - 不允许任意 shell / 任意 JS / 任意插件调用
  * - 不允许 fake shell executor
- * - 真实 notify/act handler 必须由 Phase 4.C+ 显式 register 并配置最小权限依赖
  *
  * Cordis quirk 防护：
  * - listener try/catch（handler 异常不崩服务、不阻塞其他 listener）
@@ -27,14 +27,12 @@
  *
  * 挂载时序：
  * - ActionExecutor 必须在 DecisionEngine 之后挂载（依赖 orca/decision emit）
- * - remember handler 需要 infoStore；本 plugin 挂载在 infoAgents plugin 之后（infoStore 已 provide）
- * - 但默认未注册 remember handler（避免 infoAgents 关闭时挂在上面）；如有需要可在外层 plugin 显式 register
+ * - remember handler 需要 infoStore；infoAgents plugin 已先挂（infoStore 已 provide）
+ * - notify handler 需要 feishu + eventBus；index.ts 已先 provide feishu（line 45）+ orcaRuntime provide eventBus
  *
  * 配置：
  * - ORCA_ACTION_ENABLED 默认 false（用户决策：默认安全）
  * - 启用时挂载 plugin；不启用时跳过整个 executor
- * - 默认 ORCA_ACTION_ENABLED=false 意味着 DecisionEngine 的产出无下游消费
- *   （仍然符合三层职责；只是当前 Phase 链路停在 decision）
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -43,14 +41,15 @@ import type { Decision } from '../types/decision.js'
 import type { ActionExecutorService } from '../types/action.js'
 import {
   createActionExecutor,
+  createNotifyHandler,
   createRememberHandler,
 } from '../services/action.js'
 
 /**
  * ActionExecutor Cordis plugin
  *
- * 无 inject 声明（executor 不强依赖 ctx 服务；remember handler 由 plugin 内部按需获取）。
- * 订阅 ctx.on('orca/decision') 不阻塞 emit（ctx.on 是 listener；emit 是 sync 派发所有 listener）。
+ * 无 inject 声明（executor 不强依赖 ctx 服务；remember/notify handler 由 plugin 内部按需获取）。
+ * 订阅 ctx.on('orca/decision') 不阻塞 emit（ctx.on 注册的是 listener；emit 是 sync 派发所有 listener）。
  */
 export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   // 1. 创建 ActionExecutor（含 registry + deferred store）
@@ -71,6 +70,31 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   } else {
     ctx.logger.info(
       '[action-executor] infoStore 未提供；remember handler 未挂载（其他 handler 不受影响）',
+    )
+  }
+
+  // 2.5 注入 notify handler（Phase 4.C 真实通知；依赖 feishu + eventBus）
+  // 任一缺失则保留默认 notify-stub（failResult）。注意 Last-Write-Wins：override stub。
+  const feishu = ctx.get('feishu') as
+    | Parameters<typeof createNotifyHandler>[0]['feishu']
+    | undefined
+  const eventBus = ctx.get('eventBus') as
+    | Parameters<typeof createNotifyHandler>[0]['eventBus']
+    | undefined
+  if (feishu && eventBus) {
+    executor.registry.register(createNotifyHandler({
+      feishu,
+      eventBus,
+      dryRun: _config.dryRun,
+      logger: ctx.logger,
+    }))
+    ctx.logger.info(
+      '[action-executor] notify handler 已挂载（真实通知；feishu + eventBus；dryRun=%s）',
+      _config.dryRun,
+    )
+  } else {
+    ctx.logger.info(
+      '[action-executor] feishu 或 eventBus 未提供；notify-stub 保留（failResult）',
     )
   }
 

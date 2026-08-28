@@ -131,6 +131,20 @@ export class EventBus {
     return out
   }
 
+  /**
+   * 按 id 查找 sliding window 中的事件（O(n) 线性扫描；找不到返回 undefined）。
+   *
+   * Phase 4.C notify handler 依赖：Decision.eventId → OrcaEvent.id 反查。
+   * 仅作用于现有 sliding window（不会改 windowSize / 不会持久化）。
+   * 超 windowSize 的最老事件已被丢弃（services/eventBus.ts:87）→ 返回 undefined。
+   */
+  get(id: string): OrcaEvent | undefined {
+    for (const e of this.buffer) {
+      if (e.id === id) return e
+    }
+    return undefined
+  }
+
   /** 当前窗口中的事件数 */
   size(): number {
     return this.buffer.length
