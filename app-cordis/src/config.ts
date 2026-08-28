@@ -48,6 +48,8 @@ export interface OrcaRuntimeConfig {
   phone: OrcaInputAdapterConfig
   /** Phase 3 Attention Engine 子配置 */
   attention: OrcaAttentionConfig
+  /** Phase 4.A Decision Engine 子配置 */
+  decision: OrcaDecisionConfig
 }
 
 /**
@@ -55,6 +57,16 @@ export interface OrcaRuntimeConfig {
  */
 export interface OrcaAttentionConfig {
   /** 是否启用 Attention Engine（默认 true；仅当 OrcaRuntime enabled 时才生效） */
+  enabled: boolean
+}
+
+/**
+ * Decision Engine 配置（Phase 4.A 第一版，纯决策层，不执行 action）。
+ *
+ * 默认启用：纯决策层无副作用（不发飞书 / 不写 infoStore / 不调 LLM），安全默认。
+ */
+export interface OrcaDecisionConfig {
+  /** 是否启用 Decision Engine（默认 true；仅当 OrcaRuntime + Attention enabled 时才生效） */
   enabled: boolean
 }
 
@@ -202,6 +214,10 @@ export function getConfig(): OrcaConfig {
       attention: {
         // 默认启用（Phase 3 第一版：纯评估不执行任何 action，安全默认）
         enabled: process.env.ORCA_ATTENTION_ENABLED !== '0',
+      },
+      decision: {
+        // 默认启用（Phase 4.A 第一版：纯决策层不执行 action，安全默认）
+        enabled: process.env.ORCA_DECISION_ENABLED !== '0',
       },
     },
   }

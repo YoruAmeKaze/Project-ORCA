@@ -13,6 +13,7 @@
  * - LLM 增强（Phase 5）
  */
 
+import { randomUUID } from 'node:crypto'
 import type {
   AttentionDedupService,
   AttentionEngineService,
@@ -247,6 +248,8 @@ export class AttentionEngine implements AttentionEngineService {
       // Phase 3.B.throttle：source 用于 source cooldown；state-only 触发用 'state' 占位
       const source = input.event?.source ?? 'state'
       out.push({
+        // Phase 4.A：每个 AttentionItem 分配稳定唯一 id（Decision back-trace 用）
+        id: randomUUID(),
         ruleId: rule.id,
         stateSnapshot,
         evaluatedAt,

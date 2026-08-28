@@ -60,6 +60,7 @@ export interface AttentionInput {
 /**
  * 评估输出（一条规则 = 一个 item）。
  *
+ * - id: 稳定唯一 ID（Phase 4.A 引入；Decision back-trace + debug 日志关联）
  * - ruleId: 触发规则的唯一 ID（用于追溯）
  * - priority / action / reason: 规则的语义产出
  * - eventId: 触发的具体事件（state-only 触发为 undefined）
@@ -70,6 +71,8 @@ export interface AttentionInput {
  * - evaluatedAt: 评估时间戳
  */
 export interface AttentionItem {
+  /** 稳定唯一 ID（AttentionEngine.evaluate 时生成 randomUUID）；Phase 4.A Decision back-trace 用 */
+  id: string
   ruleId: string
   priority: AttentionPriority
   reason: string
@@ -83,10 +86,10 @@ export interface AttentionItem {
 /** 规则判定函数：返回 true 表示触发 */
 export type AttentionPredicate = (input: AttentionInput) => boolean
 
-/** 规则产物生成：触发后如何描述（除 ruleId / stateSnapshot / evaluatedAt 外的字段） */
+/** 规则产物生成：触发后如何描述（除 id / ruleId / stateSnapshot / evaluatedAt 外的字段；id 由 Engine 生成） */
 export type AttentionProducer = (
   input: AttentionInput
-) => Omit<AttentionItem, 'ruleId' | 'stateSnapshot' | 'evaluatedAt'>
+) => Omit<AttentionItem, 'id' | 'ruleId' | 'stateSnapshot' | 'evaluatedAt'>
 
 /** 完整规则（id 必须全局唯一） */
 export interface AttentionRule {

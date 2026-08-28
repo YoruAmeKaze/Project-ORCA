@@ -14,6 +14,7 @@ import { dashboard } from './plugins/dashboard.js'
 import { orcaRuntime } from './plugins/orca-runtime.js'
 import { worldStateUpdater } from './plugins/world-state-updater.js'
 import { attentionEngine } from './plugins/attention-engine.js'
+import { decisionEngine } from './plugins/decision-engine.js'
 import { pcAdapter } from './plugins/input-adapters/pc-adapter.js'
 import { calendarAdapter } from './plugins/input-adapters/calendar-adapter.js'
 import { phoneAdapter } from './plugins/input-adapters/phone-adapter.js'
@@ -67,6 +68,13 @@ if (config.runtime.enabled) {
   if (config.runtime.attention.enabled) {
     ctx.plugin(attentionEngine, config)
     ctx.logger.info('[orca-cordis] Attention Engine 已启用（Phase 3）')
+    // Phase 4.A：Decision Engine 必须在 Attention 之后（订阅 orca/attention emit）
+    if (config.runtime.decision.enabled) {
+      ctx.plugin(decisionEngine, config)
+      ctx.logger.info('[orca-cordis] Decision Engine 已启用（Phase 4.A）')
+    } else {
+      ctx.logger.info('[orca-cordis] Decision Engine 未启用（ORCA_DECISION_ENABLED=0 关闭）')
+    }
   } else {
     ctx.logger.info('[orca-cordis] Attention Engine 未启用（ORCA_ATTENTION_ENABLED=0 关闭）')
   }
@@ -89,7 +97,7 @@ if (config.runtime.enabled) {
 ctx.plugin(agent, config)
 
 ctx.logger.info(
-  '[orca-cordis] Phase 2 骨架已启动 host=%s port=%d model=%s dryRun=%s',
+  '[orca-cordis] Phase 4.A 骨架已启动 host=%s port=%d model=%s dryRun=%s',
   config.host,
   config.port,
   config.llm.model,
