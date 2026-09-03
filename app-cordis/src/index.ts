@@ -16,6 +16,7 @@ import { worldStateUpdater } from './plugins/world-state-updater.js'
 import { attentionEngine } from './plugins/attention-engine.js'
 import { decisionEngine } from './plugins/decision-engine.js'
 import { actionExecutor } from './plugins/action-executor.js'
+import { deferredScheduler } from './plugins/deferred-scheduler.js'
 import { pcAdapter } from './plugins/input-adapters/pc-adapter.js'
 import { calendarAdapter } from './plugins/input-adapters/calendar-adapter.js'
 import { phoneAdapter } from './plugins/input-adapters/phone-adapter.js'
@@ -77,6 +78,9 @@ if (config.runtime.enabled) {
       if (config.runtime.action.enabled) {
         ctx.plugin(actionExecutor, config)
         ctx.logger.info('[orca-cordis] Action Executor 已启用（Phase 4.B）')
+        // Phase 4.D：Deferred Scheduler 必须在 Action Executor 之后（依赖 ctx.actionExecutor.deferredStore）
+        ctx.plugin(deferredScheduler, config)
+        ctx.logger.info('[orca-cordis] Deferred Scheduler 已启用（Phase 4.D）')
       } else {
         ctx.logger.info('[orca-cordis] Action Executor 未启用（ORCA_ACTION_ENABLED=0 关闭；默认安全）')
       }
@@ -105,7 +109,7 @@ if (config.runtime.enabled) {
 ctx.plugin(agent, config)
 
 ctx.logger.info(
-  '[orca-cordis] Phase 4.B 骨架已启动 host=%s port=%d model=%s dryRun=%s',
+  '[orca-cordis] Phase 4.D 骨架已启动 host=%s port=%d model=%s dryRun=%s',
   config.host,
   config.port,
   config.llm.model,

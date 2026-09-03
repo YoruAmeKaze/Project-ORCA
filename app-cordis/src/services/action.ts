@@ -1,9 +1,9 @@
 /**
- * Orca Action Executor —— 执行层实现（Phase 4.B）
+ * Orca Action Executor —— 执行层实现（Phase 4.B + Phase 4.D）
  *
  * 职责：
  * - ActionHandlerRegistry 标准实现（register/unregister/get/list/size/clear）
- * - DeferredActionStore 内存实现（Phase 4.B 第一版；不调度、不持久化）
+ * - DeferredActionStore 内存实现（Phase 4.B；Phase 4.D 增加 consume(pendingId) 原子删除）
  * - ActionExecutor 服务：execute(decision) → Promise<ActionResult>
  *
  * 第一版内置 5 个 ActionHandler（按 action 一一对应）：
@@ -19,11 +19,15 @@
  * - 不允许 fake shell executor
  * - Executor 内部捕获所有 handler 异常 → 转化为 success=false ActionResult
  *
- * 不做（Phase 4.B 范围外）：
+ * Phase 4.D 增加的能力：
+ * - DeferredActionStore.consume(pendingId) —— 原子删除；scheduler 调用
+ * - 不修改 5 个 handler；不修改 ActionExecutor；不修改 DecisionEngine
+ *
+ * 不做（Phase 4.B + Phase 4.D 范围外）：
  * - 排序 / 排重 / 节流
  * - 持久化（DeferredActionStore 仅 in-memory）
  * - LLM 增强
- * - 真实 scheduler（仅 pending store；不消费）
+ * - scheduler 内部逻辑（由 DeferredActionScheduler plugin 负责）
  */
 
 import { randomUUID } from 'node:crypto'
@@ -82,15 +86,16 @@ export function createActionHandlerRegistry(): ActionHandlerRegistry {
 // ── DeferredActionStore 内存实现 ────────────────────────────────────────
 
 /**
- * DeferredActionStoreImpl —— Phase 4.B 第一版 pending store
+ * DeferredActionStoreImpl —— Phase 4.B + Phase 4.D pending store
  *
  * - 仅 in-memory（不持久化）
- * - 不消费 / 不调度（pendingId 永远不会被自动删除）
- * - 提供 list() / get() / size() / clear() 查询接口
+ * - 不调度（scheduler 由 DeferredActionScheduler plugin 负责）
+ * - Phase 4.D 增加 consume(pendingId) 原子删除能力
  *
  * 不做：
  * - 不持久化（重启即失）
- * - 不调度（Phase 4.B 范围外）
+ * - 不调度（不在 store 内部做时间判断）
+ * - 不做 eligibility 判定（user.status 过滤由 scheduler 负责）
  */
 class DeferredActionStoreImpl implements DeferredActionStore {
   private entries = new Map<string, DeferredActionEntry>()
@@ -115,6 +120,16 @@ class DeferredActionStoreImpl implements DeferredActionStore {
 
   size(): number {
     return this.entries.size
+  }
+
+  /**
+   * 消费一个 pending（原子删除）。
+   *
+   * Map.delete 本身是原子的；语义：consume 后同 pendingId 不再可见。
+   * 如果同一 tick 内重复 consume 同一 pendingId：第二次返回 false（已删）。
+   */
+  consume(pendingId: string): boolean {
+    return this.entries.delete(pendingId)
   }
 
   clear(): void {

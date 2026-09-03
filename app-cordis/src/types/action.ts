@@ -160,10 +160,23 @@ export interface DeferredActionEntry {
 /**
  * DeferredActionStore —— 内存 pending store 接口
  *
- * 严格约束（Phase 4.B 第一版）：
+ * 严格约束（Phase 4.B + Phase 4.D 第一版）：
  * - 仅 in-memory（不持久化）
- * - 不消费 / 不调度（pendingId 永远不会被自动删除）
- * - 提供 list() / get() 查询接口供 Phase 4.C+ 接入真实 scheduler
+ * - 不调度（scheduler 由 DeferredActionScheduler plugin 负责）
+ * - 提供 list() / get() 查询接口 + consume(pendingId) 消费接口
+ *
+ * Phase 4.D 增加的能力：
+ * - consume(pendingId) —— 原子删除指定 pendingId；返回 boolean
+ * - consume 是 store 自身的能力（不是 scheduler 闭包内 Set）
+ * - 语义：consume 后同一 pendingId 不会再出现在 list/get 中
+ *
+ * Pending 状态（store 自身视图）：
+ * 1. 不存在 → enqueue 之后 = eligible
+ * 2. eligible → 在 list() 中可见；scheduler 可 consume
+ * 3. consumed → 从 entries Map 中删除；不再可见
+ *
+ * 注意：eligibility 判定（user.status 过滤）不在 store 职责内；
+ * store 仅提供 list() / consume()；scheduler 决定"是否消费某条"。
  */
 export interface DeferredActionStore {
   /** 入队（返回生成的 pendingId） */
@@ -174,6 +187,16 @@ export interface DeferredActionStore {
   list(): DeferredActionEntry[]
   /** 当前 pending 数 */
   size(): number
+  /**
+   * 消费一个 pending（原子删除；返回是否成功）。
+   *
+   * - 同一 pendingId 只能被 consume 一次（consume 后从 store 消失）
+   * - consume 失败时（pendingId 不存在）返回 false
+   * - consume 不影响 list() 顺序：consume 仅删除指定 entry，其他 entry 保持原顺序
+   *
+   * @returns true = 成功消费；false = pendingId 不存在（可能已被消费 / 已被 clear）
+   */
+  consume(pendingId: string): boolean
   /** 清空（dispose / 测试用） */
   clear(): void
 }
