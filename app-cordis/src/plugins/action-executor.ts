@@ -41,6 +41,8 @@ import type { Decision } from '../types/decision.js'
 import type { ActionExecutorService } from '../types/action.js'
 import {
   createActionExecutor,
+  createMemoryForgetHandler,
+  createMemoryRememberHandler,
   createNotifyHandler,
   createRememberHandler,
 } from '../services/action.js'
@@ -95,6 +97,20 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   } else {
     ctx.logger.info(
       '[action-executor] feishu 或 eventBus 未提供；notify-stub 保留（failResult）',
+    )
+  }
+
+  // 2.6 注入 memory.remember / memory.forget handler（Phase 5.2；依赖 ctx.memory）
+  const memory = ctx.get('memory') as
+    | Parameters<typeof createMemoryRememberHandler>[0]['memory']
+    | undefined
+  if (memory) {
+    executor.registry.register(createMemoryRememberHandler({ memory, logger: ctx.logger }))
+    executor.registry.register(createMemoryForgetHandler({ memory, logger: ctx.logger }))
+    ctx.logger.info('[action-executor] memory.remember + memory.forget handler 已挂载（Phase 5.2）')
+  } else {
+    ctx.logger.info(
+      '[action-executor] memory 未提供；memory.remember/forget handler 未挂载',
     )
   }
 

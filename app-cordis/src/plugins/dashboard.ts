@@ -66,6 +66,12 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       void handleAttention(req, res)
     } else if (url.pathname === '/debug/publish-event' && req.method === 'POST') {
       void handleDebugPublishEvent(req, res)
+    } else if (url.pathname === '/api/memory') {
+      void handleMemory(req, res)
+    } else if (url.pathname === '/api/chat' && req.method === 'POST') {
+      void handleChat(req, res)
+    } else if (url.pathname === '/api/stream' && req.method === 'GET') {
+      void handleStream(req, res)
     } else if (url.pathname === '/dashboard' || url.pathname === '/') {
       void handleDashboard(req, res)
     } else {
@@ -210,6 +216,148 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
   }
 
   /**
+   * Memory Ocean 统计端点：
+   * - 查询 infoStore 各 namespace 的记录数与最新时间戳
+   * - namespace 映射为 4 个语义层：Projects / Preferences / Knowledge / Experiences
+   * - infoStore 未注入时返回 503
+   */
+  async function handleMemory(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const store = ctx.get('infoStore') as
+      | { query(opts: { namespaces?: string[]; limit?: number }): Promise<unknown[]>; namespaces?: () => string[] }
+      | undefined
+    if (!store) {
+      sendJson(res, 503, { ok: false, error: 'infoStore 未启用' })
+      return
+    }
+
+    // 语义 namespace → 展示层映射
+    const LAYER_MAP: Record<string, string> = {
+      'food-agent': 'Projects',
+      'preferences': 'Preferences',
+      'knowledge': 'Knowledge',
+      'experiences': 'Experiences',
+      'memory': 'Experiences',
+    }
+
+    const layerCounts: { Projects: { count: number; latestTs: number | null }; Preferences: { count: number; latestTs: number | null }; Knowledge: { count: number; latestTs: number | null }; Experiences: { count: number; latestTs: number | null } } = {
+      Projects: { count: 0, latestTs: null },
+      Preferences: { count: 0, latestTs: null },
+      Knowledge: { count: 0, latestTs: null },
+      Experiences: { count: 0, latestTs: null },
+    }
+
+    try {
+      // 查询所有 namespace（取最新 1 条记录判断是否存在）
+      const nsList = (store as { namespaces?: () => string[] }).namespaces?.() ?? []
+      const allNamespaces = nsList.length ? nsList : ['food-agent', 'preferences', 'knowledge', 'experiences', 'memory']
+
+      for (const ns of allNamespaces) {
+        const records = await store.query({ namespaces: [ns], limit: 200 }) as Array<{ ts?: number }>
+        const layer = LAYER_MAP[ns] ?? null
+        if (records.length > 0) {
+          const latestTs = Math.max(...records.map((r) => r.ts ?? 0))
+          if (layer) {
+            const target = layerCounts[layer as keyof typeof layerCounts]
+            if (target) {
+              target.count += records.length
+              if (!target.latestTs || latestTs > target.latestTs) {
+                target.latestTs = latestTs
+              }
+            }
+          }
+        }
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        ts: Date.now(),
+        layers: [
+          { key: 'Projects', label: 'Projects', count: layerCounts.Projects.count, latestTs: layerCounts.Projects.latestTs },
+          { key: 'Preferences', label: 'Preferences', count: layerCounts.Preferences.count, latestTs: layerCounts.Preferences.latestTs },
+          { key: 'Knowledge', label: 'Knowledge', count: layerCounts.Knowledge.count, latestTs: layerCounts.Knowledge.latestTs },
+          { key: 'Experiences', label: 'Experiences', count: layerCounts.Experiences.count, latestTs: layerCounts.Experiences.latestTs },
+        ],
+      })
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: String(err) })
+    }
+  }
+
+  /**
+   * 命令发送端点：POST /api/chat
+   * Body: { text: string }
+   * 行为：发射 dashboard/message 事件，由 agent 订阅处理后通过 eventBus 推送回复。
+   * 前端通过 SSE /api/stream 接收 orca/dashboard-reply 事件。
+   */
+  async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== 'POST') { sendJson(res, 405, { ok: false, error: 'method not allowed' }); return }
+
+    const chunks: Buffer[] = []
+    let size = 0
+    for await (const chunk of req) {
+      size += chunk.length
+      if (size > 4096) { sendJson(res, 413, { ok: false, error: 'body too large' }); req.destroy(); return }
+      chunks.push(chunk as Buffer)
+    }
+    let body: { text?: unknown; id?: unknown }
+    try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { sendJson(res, 400, { ok: false, error: 'invalid json' }); return }
+
+    const text = typeof body.text === 'string' ? body.text.trim() : ''
+    if (!text) { sendJson(res, 400, { ok: false, error: 'text is required' }); return }
+
+    const id = typeof body.id === 'string' ? body.id : `msg-${Date.now()}`
+
+    // 发射 dashboard/message 事件，agent 订阅处理
+    ctx.emit('dashboard/message', { text, id })
+    ctx.logger.info('[dashboard-chat] 收到消息: %s', text.slice(0, 60))
+
+    sendJson(res, 202, { ok: true, id, status: 'processing' })
+  }
+
+  /**
+   * SSE 实时事件流：GET /api/stream
+   * 前端 EventSource 连接此端点，接收 Orca 内部事件推送。
+   * 用于：命令回复实时显示、事件监听。
+   * eventBus 未注入时返回 503。
+   */
+  async function handleStream(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const bus = ctx.get('eventBus') as
+      | { subscribe(filter: Record<string, unknown>, handler: (event: unknown) => void): () => void; size(): number }
+      | undefined
+    if (!bus) {
+      sendJson(res, 503, { ok: false, error: 'EventBus 未启用' })
+      return
+    }
+
+    // CORS + SSE 头
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    })
+
+    // 每秒 keepalive ping
+    const pingInterval = setInterval(() => {
+      res.write(': ping\n\n')
+    }, 15_000)
+
+    // 订阅 orca 内部事件（source=orca 的事件，包括 dashboard-reply）
+    const unsubscribe = bus.subscribe({ minPriority: 1 }, (event: unknown) => {
+      const ev = event as { source?: string; type?: string; data?: Record<string, unknown> }
+      if (ev.source === 'orca') {
+        res.write(`event: orca\ndata: ${JSON.stringify(ev)}\n\n`)
+      }
+    })
+
+    // 客户端断开时清理
+    req.on('close', () => {
+      clearInterval(pingInterval)
+      unsubscribe()
+    })
+  }
+
+  /**
    * 调试端点（Phase 2.D）：POST /debug/publish-event
    * Body: { source, type, data?, priority? }
    * 仅本地开发用：直接调用 ctx.eventBus.publish()，便于手动验证 reducer 链路。
@@ -277,17 +425,6 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
 :root {
   --ff: 'Inter', -apple-system, sans-serif;
   --mono: 'Space Mono', monospace;
-}
-
-body:not([data-theme]) {
-  --bg: #030508;
-  --text: #ffffff;
-  --muted: #6b7280;
-  --dim: #374151;
-  --accent: #7dd3fc;
-  --cyan: #22d3ee;
-  --green: #4ade80;
-  --amber: #f59e0b;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -454,10 +591,10 @@ body::before {
 /* ---- Theme: Orca Prime (dark neon sci-fi) ---- */
 body[data-theme="orca-prime"],
 body:not([data-theme]) {
-  --bg: #030508;
-  --text: #ffffff;
-  --muted: #6b7280;
-  --dim: #374151;
+  --bg: #0b0f1a;
+  --text: #e8eeff;
+  --muted: #8899bb;
+  --dim: #3d4f6a;
   --accent: #7dd3fc;
   --cyan: #22d3ee;
   --green: #4ade80;
@@ -514,7 +651,7 @@ html, body {
   inset: 0;
   overflow-y: scroll;
   scroll-snap-type: y mandatory;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
   z-index: 1;
   /* Hide scrollbar */
   scrollbar-width: none;
@@ -527,6 +664,7 @@ html, body {
 .page {
   min-height: 100vh;
   scroll-snap-align: start;
+  scroll-margin-top: 0;
   position: relative;
 }
 
@@ -548,7 +686,8 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  padding-top: 12vh;
   text-align: center;
   position: relative;
 }
@@ -559,7 +698,8 @@ html, body {
   letter-spacing: 0.35em;
   text-transform: uppercase;
   color: var(--muted);
-  margin-bottom: 28px;
+  margin-top: -18px;
+  margin-bottom: 4px;
   opacity: 0;
   animation: aUp 0.9s ease 0.15s forwards;
 }
@@ -569,64 +709,98 @@ html, body {
   font-weight: 700;
   letter-spacing: 0.08em;
   line-height: 0.88;
-  color: #ffffff;
-  margin-bottom: 28px;
-  opacity: 0;
-  animation: aUp 0.9s ease 0.3s forwards;
+  margin-top: 0;
+  margin-bottom: 0;
   position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+/* Each layer — relative so they stack naturally, not positioned */
+.t-cyan, .t-blue, .t-pink, .t-white {
+  position: absolute;
+  top: 0;
+}
+
+/* <b> holds the solid fill + glow; animation drives a gentle drift */
+.t-cyan > b, .t-blue > b, .t-pink > b, .t-white > b {
+  display: block;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+}
+
+/* Cyan — solid fill, slight left-up drift */
+.t-cyan > b {
+  color: #22d3ee;
+  animation: driftCyan 4.5s ease-in-out 0s infinite alternate;
+  filter:
+    blur(0px)
+    drop-shadow(0 0 8px #22d3ee)
+    drop-shadow(0 0 20px rgba(34,211,238,0.8))
+    drop-shadow(0 0 40px rgba(34,211,238,0.5))
+    drop-shadow(0 0 80px rgba(34,211,238,0.25));
+}
+
+/* Blue — solid fill, slight right-up drift */
+.t-blue > b {
+  color: #7dd3fc;
+  animation: driftBlue 5s ease-in-out 0.6s infinite alternate;
+  filter:
+    blur(0px)
+    drop-shadow(0 0 8px #7dd3fc)
+    drop-shadow(0 0 20px rgba(125,211,252,0.8))
+    drop-shadow(0 0 40px rgba(125,211,252,0.5))
+    drop-shadow(0 0 80px rgba(125,211,252,0.25));
+}
+
+/* Pink — solid fill, slight down drift */
+.t-pink > b {
+  color: #f472b6;
+  animation: driftPink 5.5s ease-in-out 1.2s infinite alternate;
+  filter:
+    blur(0px)
+    drop-shadow(0 0 8px #f472b6)
+    drop-shadow(0 0 20px rgba(244,114,182,0.8))
+    drop-shadow(0 0 40px rgba(244,114,182,0.5))
+    drop-shadow(0 0 80px rgba(244,114,182,0.25));
+}
+
+/* White — bright core, reduced opacity */
+.t-white > b {
+  color: rgba(230, 240, 255, 0.7);
+  animation: titlePulse 4s ease-in-out 1.2s infinite;
   text-shadow:
-    0 0 8px rgba(125,211,252,0.8),
-    0 0 20px rgba(125,211,252,0.6),
-    0 0 40px rgba(125,211,252,0.4),
-    0 0 80px rgba(99,179,237,0.25);
-  animation: aUp 0.9s ease 0.3s forwards, titlePulse 4s ease-in-out 1.2s infinite;
+    0 0 12px rgba(255,255,255,0.9),
+    0 0 30px rgba(125,211,252,0.7),
+    0 0 60px rgba(125,211,252,0.5),
+    0 0 120px rgba(125,211,252,0.25);
 }
 
-/* Neon ORCA with chromatic aberration */
-.hero-title::before {
-  content: 'ORCA';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(135deg, #22d3ee 0%, #7dd3fc 40%, #a78bfa 70%, #22d3ee 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  filter: blur(0px);
-  opacity: 0.9;
-  z-index: -1;
-  text-shadow:
-    0 0 12px rgba(34,211,238,0.9),
-    0 0 30px rgba(34,211,238,0.6),
-    0 0 60px rgba(167,139,250,0.4);
-  animation: chromaShift 6s ease-in-out 1.2s infinite;
+/* Each color drifts subtly from center */
+@keyframes driftCyan {
+  0%   { transform: translate(-6px, -4px); filter: drop-shadow(0 0 8px #22d3ee) drop-shadow(0 0 20px rgba(34,211,238,0.8)) drop-shadow(0 0 40px rgba(34,211,238,0.5)) drop-shadow(0 0 80px rgba(34,211,238,0.25)); }
+  50%  { transform: translate(-10px, -7px); filter: drop-shadow(0 0 14px #22d3ee) drop-shadow(0 0 30px rgba(34,211,238,0.9)) drop-shadow(0 0 55px rgba(34,211,238,0.55)) drop-shadow(0 0 110px rgba(34,211,238,0.3)); }
+  100% { transform: translate(-7px, -5px); filter: drop-shadow(0 0 10px #22d3ee) drop-shadow(0 0 25px rgba(34,211,238,0.85)) drop-shadow(0 0 48px rgba(34,211,238,0.5)) drop-shadow(0 0 95px rgba(34,211,238,0.25)); }
 }
 
-/* Cyan ghost layer */
-.hero-title::after {
-  content: 'ORCA';
-  position: absolute;
-  inset: 0;
-  background: none;
-  -webkit-text-stroke: 1px rgba(34,211,238,0.3);
-  -webkit-text-fill-color: transparent;
-  filter: blur(1px);
-  transform: translate(-2px, -1px);
-  opacity: 0.5;
-  z-index: -2;
+@keyframes driftBlue {
+  0%   { transform: translate(5px, -3px); filter: drop-shadow(0 0 8px #7dd3fc) drop-shadow(0 0 20px rgba(125,211,252,0.8)) drop-shadow(0 0 40px rgba(125,211,252,0.5)) drop-shadow(0 0 80px rgba(125,211,252,0.25)); }
+  50%  { transform: translate(9px, -6px); filter: drop-shadow(0 0 14px #7dd3fc) drop-shadow(0 0 30px rgba(125,211,252,0.9)) drop-shadow(0 0 55px rgba(125,211,252,0.55)) drop-shadow(0 0 110px rgba(125,211,252,0.3)); }
+  100% { transform: translate(6px, -4px); filter: drop-shadow(0 0 10px #7dd3fc) drop-shadow(0 0 25px rgba(125,211,252,0.85)) drop-shadow(0 0 48px rgba(125,211,252,0.5)) drop-shadow(0 0 95px rgba(125,211,252,0.25)); }
 }
 
-/* Purple ghost layer */
-.hero-title .glow-layer {
-  content: 'ORCA';
-  position: absolute;
-  inset: 0;
-  background: none;
-  -webkit-text-stroke: 1px rgba(167,139,250,0.2);
-  -webkit-text-fill-color: transparent;
-  filter: blur(2px);
-  transform: translate(3px, 2px);
-  opacity: 0.35;
-  z-index: -3;
+@keyframes driftPink {
+  0%   { transform: translate(2px, 5px); filter: drop-shadow(0 0 8px #f472b6) drop-shadow(0 0 20px rgba(244,114,182,0.8)) drop-shadow(0 0 40px rgba(244,114,182,0.5)) drop-shadow(0 0 80px rgba(244,114,182,0.25)); }
+  50%  { transform: translate(4px, 9px); filter: drop-shadow(0 0 14px #f472b6) drop-shadow(0 0 30px rgba(244,114,182,0.9)) drop-shadow(0 0 55px rgba(244,114,182,0.55)) drop-shadow(0 0 110px rgba(244,114,182,0.3)); }
+  100% { transform: translate(3px, 7px); filter: drop-shadow(0 0 10px #f472b6) drop-shadow(0 0 25px rgba(244,114,182,0.85)) drop-shadow(0 0 48px rgba(244,114,182,0.5)) drop-shadow(0 0 95px rgba(244,114,182,0.25)); }
+}
+
+@keyframes acidDrift {
+  0%   { filter: blur(3px) brightness(1.4); transform: translate(-5px, -4px); }
+  33%  { filter: blur(5px) brightness(1.6); transform: translate(-3px, -6px); }
+  66%  { filter: blur(4px) brightness(1.5); transform: translate(-6px, -3px); }
+  100% { filter: blur(3px) brightness(1.4); transform: translate(-5px, -4px); }
 }
 
 @keyframes titlePulse {
@@ -638,24 +812,25 @@ html, body {
   }
 }
 
-@keyframes chromaShift {
-  0%, 100% {
-    filter: blur(0px) brightness(1);
-    opacity: 0.9;
-  }
-  50% {
-    filter: blur(0.5px) brightness(1.1);
-    opacity: 1;
-  }
-}
+
 
 .hero-sub {
   font-size: clamp(14px, 1.6vw, 16px);
   font-weight: 300;
   letter-spacing: 0.12em;
   color: var(--muted);
+  margin-top: -20px;
+  margin-bottom: 0;
   opacity: 0;
   animation: aUp 0.9s ease 0.45s forwards;
+}
+
+.hero-lower {
+  margin-top: 14vh;
+}
+
+.strip {
+  margin-top: -60px;
 }
 
 /* Core Orb */
@@ -772,39 +947,9 @@ html, body {
 @keyframes sPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.9; } }
 
 /* ---- FLOWING PATHWAYS — diving into depths ---- */
-.flow-svg {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  overflow: hidden;
-  perspective: 1000px;
-  perspective-origin: 50% 40%;
-}
 
-/* Paths that dive from top-right into bottom-left, creating depth */
-.fpath {
-  fill: none;
-  stroke: rgba(125,211,252,0.06);
-  stroke-width: 0.8;
-  stroke-dasharray: 4 18;
-  animation: fDash 90s linear infinite;
-  filter: blur(0.5px);
-}
 
-.fpath-a {
-  stroke: rgba(34,211,238,0.04);
-  animation: fDash 120s linear infinite reverse;
-  animation-delay: -40s;
-  filter: blur(0.8px);
-}
 
-/* Diving paths — from upper right going down-left into the depths */
-.fdive-1 { animation: fDash 90s linear infinite; stroke: rgba(125,211,252,0.07); }
-.fdive-2 { animation: fDash 110s linear infinite; animation-delay: -25s; stroke: rgba(99,179,237,0.05); filter: blur(0.5px); }
-.fdive-3 { animation: fDash 140s linear infinite reverse; animation-delay: -60s; stroke: rgba(34,211,238,0.04); filter: blur(1px); }
-
-@keyframes fDash { to { stroke-dashoffset: -2000; } }
 
 /* ---- WORKSPACE ---- */
 .space {
@@ -1198,18 +1343,6 @@ html, body {
 <!-- Scan line texture -->
 <div class="scanlines"></div>
 
-<!-- Flowing pathways — diving into depths -->
-<svg class="flow-svg" aria-hidden="true" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice">
-  <!-- Horizontal surface flows -->
-  <path class="fpath"    d="M-100,200 C300,60 500,440 700,260 S1100,60 1600,300" />
-  <path class="fpath"    d="M-50,520  C400,340 600,640 900,480 S1300,160 1600,420" style="animation-delay:-20s" />
-  <path class="fpath-a"  d="M-100,740 C200,580 500,860 800,680 S1200,360 1600,640" />
-  <!-- Diving paths — upper-right to lower-left, giving depth -->
-  <path class="fdive-1" d="M1400,-50 C1100,150 800,350 500,550 S100,750 -100,900" />
-  <path class="fdive-2" d="M1500,50 C1200,280 900,480 600,620 S200,800 0,950" />
-  <path class="fdive-3" d="M1300,-20 C1000,200 700,400 400,600 S0,820 -200,1000" />
-</svg>
-
 <div class="snap-viewport">
 
   <!-- PAGE 1: HERO -->
@@ -1217,9 +1350,15 @@ html, body {
     <div class="wrap">
       <section class="hero">
         <div class="hero-eyebrow">Personal Intelligence System</div>
-        <h1 class="hero-title"><span>ORCA</span><span class="glow-layer">ORCA</span></h1>
+        <h1 class="hero-title">
+          <span class="t-cyan"><b class="t-inner">ORCA</b></span>
+          <span class="t-blue"><b class="t-inner">ORCA</b></span>
+          <span class="t-pink"><b class="t-inner">ORCA</b></span>
+          <span class="t-white"><b class="t-inner">ORCA</b></span>
+        </h1>
         <p class="hero-sub">Autonomous AI Workspace</p>
 
+        <div class="hero-lower">
         <div class="core-wrap">
           <svg class="core-svg" viewBox="0 0 300 300">
             <circle class="cring cring-1" cx="150" cy="150" r="55" />
@@ -1230,26 +1369,27 @@ html, body {
           <div class="cdot"></div>
         </div>
 
+        <div class="scroll">
+          <div class="scroll-t">Explore</div>
+          <div class="scroll-l"></div>
+        </div>
+        </div>
+
         <div class="strip">
           <div class="strip-item">
-            <div class="strip-n">${agents.length}</div>
+            <div class="strip-n" id="hero-agents">${agents.length}</div>
             <div class="strip-l">Agents</div>
           </div>
           <div class="strip-sep"></div>
           <div class="strip-item">
-            <div class="strip-n">${orcaOk ? 'Online' : 'Offline'}</div>
+            <div class="strip-n" id="hero-core">${orcaOk ? 'Online' : 'Offline'}</div>
             <div class="strip-l">Core</div>
           </div>
           <div class="strip-sep"></div>
           <div class="strip-item">
-            <div class="strip-n">${state.feishu.lastMessageAt ? relTime(state.feishu.lastMessageAt) : '—'}</div>
+            <div class="strip-n" id="hero-lastseen">${state.feishu.lastMessageAt ? relTime(state.feishu.lastMessageAt) : '—'}</div>
             <div class="strip-l">Last seen</div>
           </div>
-        </div>
-
-        <div class="scroll">
-          <div class="scroll-t">Explore</div>
-          <div class="scroll-l"></div>
         </div>
       </section>
     </div>
@@ -1272,7 +1412,7 @@ html, body {
             <div class="pill a1">
               <div class="pill-head">
                 <span class="pill-label">Agent Network</span>
-                <span class="pill-badge">${agents.length}</span>
+                <span class="pill-badge" id="agent-count">${agents.length}</span>
               </div>
               <div class="agent-list">
                 ${agents.length === 0 ? `
@@ -1340,10 +1480,10 @@ html, body {
               </div>
 
               <div class="mem-cats">
-                <div class="mem-cat"><div class="mem-cdot" style="background:var(--accent)"></div><span class="mem-clbl">Projects</span><span class="mem-cn">—</span></div>
-                <div class="mem-cat"><div class="mem-cdot" style="background:var(--cyan)"></div><span class="mem-clbl">Preferences</span><span class="mem-cn">—</span></div>
-                <div class="mem-cat"><div class="mem-cdot" style="background:var(--green)"></div><span class="mem-clbl">Knowledge</span><span class="mem-cn">—</span></div>
-                <div class="mem-cat"><div class="mem-cdot" style="background:var(--amber)"></div><span class="mem-clbl">Experiences</span><span class="mem-cn">—</span></div>
+                <div class="mem-cat"><div class="mem-cdot" style="background:var(--accent)"></div><span class="mem-clbl">Projects</span><span class="mem-cn" id="mc-projects">—</span></div>
+                <div class="mem-cat"><div class="mem-cdot" style="background:var(--cyan)"></div><span class="mem-clbl">Preferences</span><span class="mem-cn" id="mc-preferences">—</span></div>
+                <div class="mem-cat"><div class="mem-cdot" style="background:var(--green)"></div><span class="mem-clbl">Knowledge</span><span class="mem-cn" id="mc-knowledge">—</span></div>
+                <div class="mem-cat"><div class="mem-cdot" style="background:var(--amber)"></div><span class="mem-clbl">Experiences</span><span class="mem-cn" id="mc-experiences">—</span></div>
               </div>
             </div>
 
@@ -1352,44 +1492,8 @@ html, body {
               <div class="pill-head">
                 <span class="pill-label">Activity</span>
               </div>
-              <div class="act">
-                <div class="act-row">
-                  <div class="act-av act-av-g">◉</div>
-                  <div class="act-b">
-                    <div class="act-t">Orca core online</div>
-                    <div class="act-m">localhost:${state.orcaPort}</div>
-                  </div>
-                </div>
-                <div class="act-row">
-                  <div class="act-av act-av-c">◎</div>
-                  <div class="act-b">
-                    <div class="act-t">${receiverOk ? 'Info-Receiver connected' : 'Info-Receiver offline'}</div>
-                    <div class="act-m">localhost:${state.receiverPort}</div>
-                  </div>
-                </div>
-                ${state.feishu.lastMessageAt ? `
-                <div class="act-row">
-                  <div class="act-av act-av-ac">✉</div>
-                  <div class="act-b">
-                    <div class="act-t">Feishu text received</div>
-                    <div class="act-m">${relTime(state.feishu.lastMessageAt)}</div>
-                  </div>
-                </div>` : ''}
-                ${state.feishu.lastImageAt ? `
-                <div class="act-row">
-                  <div class="act-av act-av-ac">◻</div>
-                  <div class="act-b">
-                    <div class="act-t">Image processed</div>
-                    <div class="act-m">${relTime(state.feishu.lastImageAt)}</div>
-                  </div>
-                </div>` : ''}
-                <div class="act-row">
-                  <div class="act-av ${orcaOk ? 'act-av-g' : 'act-av-a'}">${orcaOk ? '◉' : '◌'}</div>
-                  <div class="act-b">
-                    <div class="act-t">${agents.length} agent${agents.length !== 1 ? 's' : ''} registered</div>
-                    <div class="act-m">${agents.map(a => a.name).join(', ') || 'none'}</div>
-                  </div>
-                </div>
+              <div class="act" id="actFeed">
+                <div class="act-loading" style="font-size:12px;color:var(--dim);padding:8px 0">Loading events…</div>
               </div>
             </div>
           </div>
@@ -1419,19 +1523,19 @@ html, body {
 <div class="sbar">
   <div class="sbar-l">
     <div class="sbar-i">
-      <div class="sbar-pip ${orcaOk ? 'l' : 'd'}"></div>
-      <span>Orca ${orcaOk ? 'active' : 'inactive'}</span>
+      <div class="sbar-pip" id="sb-pip-orca"></div>
+      <span id="sb-txt-orca">Orca ${orcaOk ? 'active' : 'inactive'}</span>
     </div>
     <div class="sbar-i">
-      <div class="sbar-pip ${receiverOk ? 'l' : 'd'}"></div>
-      <span>Receiver ${receiverOk ? 'ready' : 'down'}</span>
+      <div class="sbar-pip" id="sb-pip-receiver"></div>
+      <span id="sb-txt-receiver">Receiver ${receiverOk ? 'ready' : 'down'}</span>
     </div>
     <div class="sbar-i">
-      <div class="sbar-pip ${state.feishu.lastMessageAt ? 'l' : 'n'}"></div>
-      <span>Feishu ${state.feishu.lastMessageAt ? 'connected' : 'idle'}</span>
+      <div class="sbar-pip" id="sb-pip-feishu"></div>
+      <span id="sb-txt-feishu">Feishu ${state.feishu.lastMessageAt ? 'connected' : 'idle'}</span>
     </div>
   </div>
-  <div class="sbar-r">${new Date().toLocaleString('zh-CN', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
+  <div class="sbar-r" id="sbar-time">${new Date().toLocaleString('zh-CN', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
 </div>
 
 <!-- Theme picker — placed OUTSIDE snap-viewport so z-index:9999 is at root level -->
@@ -1454,52 +1558,296 @@ html, body {
 </div>
 
 <script>
-document.addEventListener('DOMContentLoaded', () => {
-  /* ---- Theme switcher ---- */
-  const tBtn  = document.getElementById('tBtn')
-  const tMenu = document.getElementById('tMenu')
-  const body  = document.body
+document.addEventListener('DOMContentLoaded', function() {
+  /* ─── Helpers ─── */
+  var $ = function(id) { return document.getElementById(id) }
 
-  // Restore saved theme
-  const saved = localStorage.getItem('orca-theme')
-  if (saved) applyTheme(saved, false)
+  function relTime(ts) {
+    if (!ts) return '—'
+    var diff = Date.now() - ts
+    if (diff < 60000) return Math.floor(diff / 1000) + 's ago'
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago'
+    return Math.floor(diff / 3600000) + 'h ago'
+  }
 
-  tBtn?.addEventListener('click', (e) => {
-    e.stopPropagation()
-    tMenu?.classList.toggle('open')
-  })
+  function esc(s) {
+    var d = document.createElement('div')
+    d.textContent = s
+    return d.innerHTML
+  }
 
-  document.addEventListener('click', () => tMenu?.classList.remove('open'))
+  /* ─── Theme switcher ─── */
+  var tBtn = $('tBtn')
+  var tMenu = $('tMenu')
 
-  tMenu?.querySelectorAll('.titem').forEach(item => {
-    item.addEventListener('click', (e) => {
+  var savedTheme = localStorage.getItem('orca-theme')
+  if (savedTheme) applyTheme(savedTheme, false)
+
+  tBtn && tBtn.addEventListener('click', function(e) { e.stopPropagation(); tMenu && tMenu.classList.toggle('open') })
+  document.addEventListener('click', function() { tMenu && tMenu.classList.remove('open') })
+  tMenu && tMenu.querySelectorAll('.titem').forEach(function(item) {
+    item.addEventListener('click', function(e) {
       e.stopPropagation()
-      const theme = (item as HTMLElement).dataset.theme ?? 'orca-prime'
+      var theme = item.dataset.theme || 'orca-prime'
       applyTheme(theme, true)
-      tMenu?.classList.remove('open')
+      tMenu && tMenu.classList.remove('open')
     })
   })
 
-  function applyTheme(theme: string, save: boolean) {
-    body.setAttribute('data-theme', theme)
+  function applyTheme(theme, save) {
+    document.body.setAttribute('data-theme', theme)
     if (save) localStorage.setItem('orca-theme', theme)
-    tMenu?.querySelectorAll('.titem').forEach(it => {
-      it.classList.toggle('active', (it as HTMLElement).dataset.theme === theme)
+    tMenu && tMenu.querySelectorAll('.titem').forEach(function(it) {
+      it.classList.toggle('active', it.dataset.theme === theme)
     })
   }
 
-  /* ---- Command bar ---- */
-  const inp = document.getElementById('cmdIn')
-  const fld = document.getElementById('cmdFld')
-  fld?.addEventListener('click', () => inp?.focus())
-  document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); inp?.focus() }
+  /* ─── Status bar & hero live update ─── */
+  async function refreshStatus() {
+    try {
+      var r = await fetch('/api/status')
+      if (!r.ok) return
+      var d = await r.json()
+
+      var heroAgents = $('hero-agents')
+      var heroCore = $('hero-core')
+      var heroLastseen = $('hero-lastseen')
+      if (heroAgents) heroAgents.textContent = String(d.infoAgents && d.infoAgents.length || 0)
+      if (heroCore) heroCore.textContent = d.services && d.services.orca && d.services.orca.reachable ? 'Online' : 'Offline'
+      if (heroLastseen && d.feishu && d.feishu.lastMessageAt) {
+        heroLastseen.textContent = d.feishu.lastMessageRel
+      }
+
+      var orcaPip = $('sb-pip-orca')
+      var orcaTxt = $('sb-txt-orca')
+      var recvPip = $('sb-pip-receiver')
+      var recvTxt = $('sb-txt-receiver')
+      var feishuPip = $('sb-pip-feishu')
+      var feishuTxt = $('sb-txt-feishu')
+
+      if (orcaPip) orcaPip.className = 'sbar-pip ' + (d.services && d.services.orca && d.services.orca.reachable ? 'l' : 'd')
+      if (orcaTxt) orcaTxt.textContent = 'Orca ' + (d.services && d.services.orca && d.services.orca.reachable ? 'active' : 'inactive')
+      if (recvPip) recvPip.className = 'sbar-pip ' + (d.services && d.services.infoReceiver && d.services.infoReceiver.reachable ? 'l' : 'd')
+      if (recvTxt) recvTxt.textContent = 'Receiver ' + (d.services && d.services.infoReceiver && d.services.infoReceiver.reachable ? 'ready' : 'down')
+      if (feishuPip) feishuPip.className = 'sbar-pip ' + (d.feishu && d.feishu.lastMessageAt ? 'l' : 'n')
+      if (feishuTxt) feishuTxt.textContent = 'Feishu ' + (d.feishu && d.feishu.lastMessageAt ? 'connected' : 'idle')
+
+      var agentCount = $('agent-count')
+      if (agentCount) agentCount.textContent = String(d.infoAgents && d.infoAgents.length || 0)
+
+      renderAgentList(d.infoAgents || [])
+    } catch (_) {}
+  }
+
+  function renderAgentList(agents) {
+    var list = document.querySelector('.agent-list')
+    if (!list) return
+    if (!agents.length) {
+      list.innerHTML = '<div class="agent-item"><div class="agent-doing" style="margin-left:0">No agents active — awaiting connection</div></div>'
+      return
+    }
+    list.innerHTML = agents.map(function(a, i) {
+      var on = i === 0
+      return '<div class="agent-item">' +
+        '<div class="agent-top">' +
+          '<span class="agent-name">' + esc(a.name) + '</span>' +
+          '<div class="agent-meta">' +
+            '<span class="agent-dot ' + (on ? 'on' : 'idle') + '"></span>' +
+            '<span class="agent-slabel ' + (on ? 'on' : 'idle') + '">' + (on ? 'Active' : 'Idle') + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="agent-doing">' + esc(a.description || 'Standing by') + '</div>' +
+      '</div>'
+    }).join('')
+  }
+
+  /* ─── Activity feed ─── */
+  async function refreshActivity() {
+    try {
+      var r = await fetch('/api/events?limit=20')
+      if (!r.ok) return
+      var d = await r.json()
+      var feed = $('actFeed')
+      if (!feed) return
+
+      if (!d.events || !d.events.length) {
+        feed.innerHTML = '<div class="act-loading" style="font-size:12px;color:var(--dim);padding:8px 0">No events yet</div>'
+        return
+      }
+
+      feed.innerHTML = d.events.slice(0, 15).map(function(ev) {
+        var icon = ev.source === 'feishu' ? (ev.type === 'image' ? '◻' : '✉') : '◉'
+        var cls = ev.source === 'feishu' ? 'act-av-ac' : 'act-av-g'
+        var label = ev.type === 'message' ? 'Feishu message'
+          : ev.type === 'image' ? 'Image processed'
+          : ev.type === 'dashboard-reply' ? 'Orca replied'
+          : ev.source === 'orca' ? 'Orca'
+          : (ev.source + '/' + ev.type)
+        var text = ev.data && ev.data.text
+          ? (String(ev.data.text).slice(0, 60) + (String(ev.data.text).length > 60 ? '…' : ''))
+          : label
+        var meta = new Date(ev.timestamp).toLocaleTimeString('zh-CN', { hour12: false })
+        return '<div class="act-row">' +
+          '<div class="act-av ' + cls + '">' + icon + '</div>' +
+          '<div class="act-b">' +
+            '<div class="act-t">' + esc(text) + '</div>' +
+            '<div class="act-m">' + esc(meta) + ' · ' + esc(label) + '</div>' +
+          '</div>' +
+        '</div>'
+      }).join('')
+    } catch (_) {}
+  }
+
+  /* ─── Memory Ocean counts ─── */
+  async function refreshMemory() {
+    try {
+      var r = await fetch('/api/memory')
+      if (!r.ok) return
+      var d = await r.json()
+      if (!d.layers) return
+      d.layers.forEach(function(layer) {
+        var el = $('mc-' + layer.key.toLowerCase())
+        if (el) el.textContent = layer.count ? String(layer.count) : '—'
+      })
+    } catch (_) {}
+  }
+
+  /* ─── Command bar ─── */
+  var inp = $('cmdIn')
+  var fld = $('cmdFld')
+  fld && fld.addEventListener('click', function() { inp && inp.focus() })
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); inp && inp.focus() }
     if (e.key === 'Escape' && document.activeElement === inp) { inp.value = ''; inp.blur() }
   })
-  inp?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && inp.value.trim()) { console.log('Orca:', inp.value); inp.value = '' }
+
+  inp && inp.addEventListener('keydown', async function(e) {
+    if (e.key !== 'Enter' || !inp.value.trim()) return
+    var text = inp.value.trim()
+    inp.value = ''
+
+    var id = 'msg-' + Date.now()
+    appendActivity('◉', 'act-av-g', esc(text), 'sending…', id)
+
+    try {
+      var r = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: text, id: id }),
+      })
+      if (!r.ok) throw new Error('chat failed')
+    } catch (_) {
+      updateActivity(id, '◌', 'act-av-a', esc(text), 'send failed')
+    }
   })
-  setInterval(async () => { try { await fetch('/api/status') } catch (_) {} }, 5000)
+
+  function appendActivity(icon, cls, text, meta, id) {
+    var feed = $('actFeed')
+    if (!feed) return
+    var loading = feed.querySelector('.act-loading')
+    if (loading) loading.remove()
+    var row = document.createElement('div')
+    row.className = 'act-row'
+    row.id = 'act-' + id
+    row.innerHTML = '<div class="act-av ' + cls + '">' + icon + '</div>' +
+      '<div class="act-b">' +
+        '<div class="act-t">' + text + '</div>' +
+        '<div class="act-m">' + meta + '</div>' +
+      '</div>'
+    feed.insertBefore(row, feed.firstChild)
+    while (feed.children.length > 20) feed.removeChild(feed.lastChild)
+  }
+
+  function updateActivity(id, icon, cls, text, meta) {
+    var row = $('act-' + id)
+    if (!row) return
+    row.innerHTML = '<div class="act-av ' + cls + '">' + icon + '</div>' +
+      '<div class="act-b">' +
+        '<div class="act-t">' + text + '</div>' +
+        '<div class="act-m">' + meta + '</div>' +
+      '</div>'
+  }
+
+  /* ─── SSE — real-time Orca replies ─── */
+  var evtSrc = null
+  function connectSSE() {
+    if (evtSrc) evtSrc.close()
+    evtSrc = new EventSource('/api/stream')
+    evtSrc.addEventListener('orca', function(e) {
+      try {
+        var ev = JSON.parse(e.data)
+        if (ev.type === 'orca' && ev.data && ev.data.id) {
+          var icon = ev.data.error ? '◌' : '◉'
+          var cls = ev.data.error ? 'act-av-a' : 'act-av-g'
+          updateActivity(ev.data.id, icon, cls, esc(ev.data.reply || ''), new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+        }
+      } catch (_) {}
+    })
+    evtSrc.onerror = function() {
+      evtSrc && evtSrc.close()
+      setTimeout(connectSSE, 5000)
+    }
+  }
+
+  /* ─── Clock ─── */
+  function tick() {
+    var el = $('sbar-time')
+    if (el) el.textContent = new Date().toLocaleString('zh-CN', { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  }
+
+  /* ─── Wheel scroll — one wheel tick = one full page snap ─── */
+  var snapViewport = $('.snap-viewport')
+  var pages = snapViewport ? snapViewport.querySelectorAll('.page') : []
+  var currentPage = 0
+  var isScrolling = false
+
+  if (snapViewport) {
+    snapViewport.addEventListener('wheel', function(e) {
+      e.preventDefault()
+      if (isScrolling) return
+      var delta = e.wheelDeltaY !== undefined ? -e.wheelDeltaY : (e.deltaY || e.detail || 0)
+      var nextPage = currentPage + (delta > 0 ? 1 : delta < 0 ? -1 : 0)
+      if (nextPage < 0 || nextPage >= pages.length || nextPage === currentPage) return
+      currentPage = nextPage
+      isScrolling = true
+      var targetTop = pages[currentPage].offsetTop
+      smoothScrollTo(snapViewport, targetTop, 900, function() {
+        isScrolling = false
+      })
+    }, { passive: false })
+  }
+
+  function smoothScrollTo(el, targetTop, duration, onDone) {
+    var startTop = el.scrollTop
+    var diff = targetTop - startTop
+    var startTime = null
+    function step(timestamp) {
+      if (!startTime) startTime = timestamp
+      var elapsed = timestamp - startTime
+      var progress = Math.min(elapsed / duration, 1)
+      // easeInOutCubic
+      var t = progress < 0.5 ? 4 * progress * progress * progress : 1 - Math.pow(-2 * progress + 2, 3) / 2
+      el.scrollTop = startTop + diff * t
+      if (progress < 1) {
+        requestAnimationFrame(step)
+      } else {
+        onDone && onDone()
+      }
+    }
+    requestAnimationFrame(step)
+  }
+
+  /* ─── Boot ─── */
+  refreshStatus()
+  refreshActivity()
+  refreshMemory()
+  connectSSE()
+  tick()
+
+  setInterval(refreshStatus, 5000)
+  setInterval(refreshActivity, 5000)
+  setInterval(refreshMemory, 15000)
+  setInterval(tick, 10000)
 })
 </script>
 </body>

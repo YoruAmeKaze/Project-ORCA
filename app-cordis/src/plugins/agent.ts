@@ -110,6 +110,35 @@ export function agent(ctx: Context, config: OrcaConfig) {
       }
     }
   })
+
+  // Dashboard chat — 与 feishu/message 并列，接收 ctx.emit('dashboard/message', {text,id})
+  ctx.on('dashboard/message', async (payload: { text: string; id: string }) => {
+    const DASHBOARD_SESSION = 'dashboard'
+    try {
+      const { eventBus, llm, sessions, infoAgents, infoStore } = ctx as {
+        eventBus: { publish(input: { source: string; type: string; data: Record<string, unknown>; priority?: number }): void }
+        llm: { chat(messages: { role: string; content: string }[]): Promise<string> }
+        sessions: { push(id: string, turn: { role: string; content: string }): void; get(id: string): { role: string; content: string }[] }
+        infoAgents: { list(): { meta: { name: string; recordTypes?: string[] } }[] }
+        infoStore: { query(opts: { namespaces?: string[]; types?: string[]; limit?: number }): Promise<unknown[]> }
+        logger: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void }
+      }
+      const archive = await buildArchiveContext(infoAgents as Parameters<typeof buildArchiveContext>[0], infoStore as Parameters<typeof buildArchiveContext>[1], payload.text)
+      const system = personaPrompt() + (archive.context ? `\n\n${archive.context}` : '')
+      sessions.push(DASHBOARD_SESSION, { role: 'user', content: payload.text })
+      const history = sessions.get(DASHBOARD_SESSION)
+      const messages = [{ role: 'system', content: system }, ...history.map((t) => ({ role: t.role, content: t.content }))]
+      const reply = await llm.chat(messages)
+      sessions.push(DASHBOARD_SESSION, { role: 'assistant', content: reply })
+      ctx.logger.info('[dashboard-chat] 回复: %s', reply.slice(0, 80))
+      eventBus.publish({ source: 'orca', type: 'dashboard-reply', data: { id: payload.id, reply, sessionId: DASHBOARD_SESSION }, priority: 1 })
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      ctx.logger.warn('[dashboard-chat] 处理失败: %s', detail)
+      const bus = (ctx as { eventBus?: { publish(input: { source: string; type: string; data: Record<string, unknown>; priority?: number }): void } }).eventBus
+      bus?.publish({ source: 'orca', type: 'dashboard-reply', data: { id: payload.id, reply: `出错了：${detail.slice(0, 100)}`, sessionId: DASHBOARD_SESSION, error: true }, priority: 1 })
+    }
+  })
 }
 
 /** R0 查档 + 待汇报队列组装注入上下文 */
@@ -163,4 +192,4 @@ function summarizePayload(payload: unknown): string {
   return s.length > 80 ? `${s.slice(0, 80)}…` : s
 }
 
-agent.inject = ['feishu', 'llm', 'sessions', 'infoAgents', 'infoStore']
+agent.inject = ['feishu', 'llm', 'sessions', 'infoAgents', 'infoStore', 'eventBus']

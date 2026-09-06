@@ -3,14 +3,13 @@
 > **给 AI 代理/新会话的启动上下文请读 [`AGENT.md`](AGENT.md)**（权威快照，本文档只做对外概述）。
 > 开发进度见 [`dev-log.md`](dev-log.md)，待办见 [`TODO.md`](TODO.md)。
 
-通过飞书聊天的本地桌面 AI 助手（"全向性室内控制代理"）。发飞书消息给 Orca，它帮你操作电脑、看屏幕、搜网、点瑞幸咖啡、拍食物识别热量。**当前主线为 Cordis/TypeScript 版（`app-cordis/`，v0.6.0），Python 版已废弃。**
+通过飞书聊天的本地桌面 AI 助手（"全向性室内控制代理"）。发飞书消息给 Orca，它帮你识别食物热量、查询记录、闲聊；底层是持续感知的 Runtime（事件流 + 世界状态 + 注意力 + 决策 + 执行 + LongMemory）。**当前主线为 Cordis/TypeScript 版（`app-cordis/`，v0.6.4 + Phase 5.4.B），Python 版已删除。**
 
 ## 当前状态（2026-08-27）
 
-- **v0.6.0（app-cordis）**：Persistent Context Runtime 完整闭环 —— EventBus 事件流 + WorldState 世界状态 + 3 个 Mock 输入适配器（PC/Calendar/Phone）+ Debug Publisher
-- **Phase 3（开发中）**：Attention Engine 纯规则注意力系统（已实现：引擎 + 去重 dedup + 节流 throttle + 规则注册表 rule-registry；下一步：规则配置化）
-- **Phase 4（规划）**：Decision Executor 决策执行
-- Python 版（v2.3.0 Plan-then-Execute）已废弃，待删除
+- **v0.6.4（app-cordis）**：Phase 5.4.B 完成——Persistent Context Runtime + LongMemory + Reflection + MemoryAttentionAdapter（342/342 smoke PASS）
+- **Phase 5（已完成）**：MemoryStore（Phase 5.0）+ EpisodeEngine（Phase 5.1）+ memory ActionHandler（Phase 5.2）+ ReflectionEngine（Phase 5.3）+ D-AGENT-18 Contract Hardening（Phase 5.3.1）+ MemoryAttentionAdapter MVP（Phase 5.4.A）+ Memory Event Bridge（Phase 5.4.B）
+- **Phase 6（规划中）**：Memory-aware CEO Context（设计稿已完成，未实现代码）
 
 ## 功能
 
@@ -33,9 +32,17 @@ cd app-cordis && npm install --cache .npm-cache
 
 # 3. 构建 + 冒烟测试
 npm run build
-npm run smoke             # InfoAgent 框架 69 项
-npm run smoke:world-state # WorldState 94 项
-npm run smoke:attention   # Attention 110 项（Phase 3）
+npm run smoke             # InfoAgent 框架 smoke
+npm run smoke:world-state # WorldState smoke
+npm run smoke:attention   # Attention smoke
+# Phase 5 全套（11 套，342 项全部 PASS）：
+npm run smoke:memory     # MemoryStore 69 项
+npm run smoke:episode     # EpisodeEngine 45 项
+npm run smoke:memory-handler  # memory ActionHandler 51 项
+npm run smoke:reflection  # ReflectionEngine 58 项
+npm run smoke:d-agent-18  # D-AGENT-18 Contract 44 项
+npm run smoke:memory-attention  # MemoryAttentionAdapter 36 项
+npm run smoke:memory-event-bridge  # MemoryEventBridge 39 项
 
 # 4. 启动（本地调试：AI 回复只写日志不发飞书）
 ORCA_DRY_RUN=1 npm run dev
@@ -50,7 +57,7 @@ Windows 一键启动（含 SSH 隧道）：根目录 `start-cordis.bat`（构建
 
 服务监听 `0.0.0.0:8100`（飞书 webhook），`8101`（外部 Push 通道），`8200`（Dashboard）。
 
-## 架构（app-cordis v0.6.0 + Phase 3）
+## 架构（app-cordis v0.6.4 + Phase 5.4.B）
 
 ```
 飞书 webhook → feishu-channel（ctx.emit feishu/message + feishu/image）
@@ -61,7 +68,14 @@ Windows 一键启动（含 SSH 隧道）：根目录 `start-cordis.bat`（构建
         → WorldStateUpdater（reducer 注册表 + time tick）→ WorldStateService
         → pc/calendar/phone adapters（mock，默认 disabled）
         → AttentionEngine（Phase 3：规则评估 → dedup → throttle）→ 'orca/attention'
-        → [Phase 4] Decision Executor（规划中）
+        → DecisionEngine（Phase 4.A：纯决策层）→ 'orca/decision'
+        → ActionExecutor（Phase 4.B：执行层）→ 'orca/action-result'
+        → DeferredScheduler（Phase 4.D：30s tick，busy/sleeping 保留）
+        → NotifyHandler（Phase 4.C：真实飞书通知）
+      → MemoryStore（Phase 5.0：LongMemory，JSONL + 内存索引）
+        → EpisodeEngine（Phase 5.1：message.burst + state.transition）
+        → ReflectionEngine（Phase 5.3：Episode → Candidate → LongMemory）
+        → MemoryAttentionAdapter（Phase 5.4.A/B：Memory → Attention 桥接）
 ```
 
 设计文档：`guide/orca-cordis-migration-plan.md`（迁移方案）、`guide/orca-info-agent-framework.md`（InfoAgent 框架）、`guide/orca-iphone-channel.md`（iPhone 数据通道）。
@@ -88,13 +102,23 @@ Windows 一键启动（含 SSH 隧道）：根目录 `start-cordis.bat`（构建
 | `ORCA_CALENDAR_ENABLED` / `ORCA_CALENDAR_REFRESH_MS` | 0 / 120000 | Calendar adapter（mock） |
 | `ORCA_PHONE_ENABLED` / `ORCA_PHONE_REFRESH_MS` | 0 / 300000 | Phone adapter（mock） |
 | `ORCA_ATTENTION_ENABLED` | 1 | Attention Engine（纯评估，安全默认） |
+| `ORCA_DECISION_ENABLED` | 1 | Decision Engine（Phase 4.A 纯决策层，安全默认） |
+| `ORCA_ACTION_ENABLED` | 0 | Action Executor（Phase 4.B 执行层；默认禁用） |
+| `ORCA_MEMORY_ENABLED` | 1 | MemoryStore（Phase 5.0；默认启用） |
+| `ORCA_MEMORY_DIR` | appRoot/data/memory | Memory JSONL 数据目录 |
+| `ORCA_MEMORY_SALT` | CHANGE-ME-… | ForgetMarker fingerprint salt（**必须稳定**） |
+| `ORCA_MEMORY_MAX_ACTIVE_FACTS` | 100 | LongMemoryFact.active 检索结果上限 |
+| `ORCA_MEMORY_PROMOTE_THRESHOLD` | 0.7 | Candidate confidence 晋升阈值 |
+| `ORCA_MEMORY_ATTENTION_ENABLED` | 1 | MemoryAttentionAdapter（Phase 5.4.A；默认启用） |
+| `ORCA_MEMORY_ATTENTION_POLL_INTERVAL_MS` | 60000 | MAA 轮询间隔（毫秒） |
+| `ORCA_MEMORY_ATTENTION_TOP_K` | 5 | MAA 每次最多生成 AttentionItems 数 |
 
 > 注意：`ORCA_RUNTIME_ENABLED` 必须严格写 `1`（`true`/`yes`/`on` 不生效）；`ORCA_*_ENABLED` 同理。
 
 ## 项目结构
 
 ```
-app-cordis/                  # ★ Cordis/TypeScript 版（当前主线，v0.6.0）
+app-cordis/                  # ★ Cordis/TypeScript 版（唯一主线，v0.6.4）
 │   ├── src/
 │   │   ├── index.ts         # 入口：loadEnv → Context → 插件装配
 │   │   ├── config.ts        # .env 加载（根 .env + app-cordis/.env 覆盖）
@@ -102,15 +126,14 @@ app-cordis/                  # ★ Cordis/TypeScript 版（当前主线，v0.6.0
 │   │   ├── context.ts       # Cordis Context 类型增强
 │   │   ├── session.ts       # 内存会话
 │   │   ├── agents/          # InfoAgent 框架（types/registry/store/executor/router + food-log）
-│   │   ├── services/        # feishu / llm / vision / eventBus / worldState / attention
-│   │   ├── plugins/         # feishu-channel / agent / info-agents / info-receiver / image-router / food-image / dashboard / orca-runtime / world-state-updater / attention-engine / input-adapters/
-│   │   ├── types/           # event.ts / worldState.ts / attention.ts
-│   │   └── data/            # records/ 档案室 JSONL + images/ 图片落盘（gitignore）
-│   └── scripts/             # smoke-info-agent / smoke-world-state / smoke-attention / recognize-food / list-food
-guide/                       # 设计文档（memory-pack / decisions / cordis-migration-plan / info-agent-framework / iphone-channel）
+│   │   ├── services/        # feishu / llm / vision / eventBus / worldState / attention / decision / action / memoryStore（Phase 5.0）/ episodeEngine（Phase 5.1）/ reflectionEngine（Phase 5.3）/ memoryAttentionAdapter（Phase 5.4）
+│   │   ├── plugins/         # feishu-channel / agent / info-agents / info-receiver / image-router / food-image / dashboard / orca-runtime / world-state-updater / attention-engine / decision-engine / action-executor / episode-engine（Phase 5.1）/ reflection-engine（Phase 5.3）/ memory-attention-adapter（Phase 5.4）/ deferred-scheduler（Phase 4.D）
+│   │   ├── types/           # event.ts / worldState.ts / attention.ts / decision.ts / action.ts / memory.ts（Phase 5.0+）
+│   │   └── data/            # records/ 档案室 JSONL + images/ 图片落盘 + memory/（gitignore）
+│   └── scripts/             # smoke-*（11 套，覆盖全 Phase）
+guide/                       # 设计文档（decisions / cordis-migration-plan / info-agent-framework / iphone-channel / orca-memory-design / orca-memory-consumption-design / orca-im-bridge）
 AGENT.md                     # ★ 权威启动上下文（新会话必读）
-dev-log.md                   # 开发日志（版本历史）
-TODO.md                      # 待办
+dev-log.md / TODO.md / README.md
 ```
 
 ## 技术栈

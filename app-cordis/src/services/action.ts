@@ -580,6 +580,196 @@ export interface ActionExecutorOptions {
   deferredStore?: DeferredActionStore
 }
 
+// ── Memory handlers（Phase 5.2）────────────────────────────────────────────
+
+/**
+ * MemoryRememberContext —— memory.remember handler 需要的最小依赖
+ */
+export interface MemoryRememberContext {
+  memory: import('../types/memory.js').MemoryStore
+  logger?: { warn(msg: string, ...args: unknown[]): void }
+}
+
+/**
+ * MemoryForgetContext —— memory.forget handler 需要的最小依赖
+ */
+export interface MemoryForgetContext {
+  memory: import('../types/memory.js').MemoryStore
+  logger?: { warn(msg: string, ...args: unknown[]): void }
+}
+
+/**
+ * memory.remember handler（Phase 5.2）
+ *
+ * 行为：
+ * - 从 Decision.reason 中解析 JSON { subject, type, value, confidence? }
+ * - 调用 MemoryStore.upsertFact，source='user-explicit'，createdBy='user-explicit'
+ * - 同 type+subject 已存在时原地更新（Phase 5.0 upsert 语义）
+ *
+ * 约束：
+ * - 不经过 Reflection（source='user-explicit' 直接写入 active）
+ * - 不调用 createForgetMarker（那是 forget 的职责）
+ * - 写失败 → success=false（不抛异常给 caller）
+ * - Decision.reason 不是合法 JSON 时：尝试用 reason 本身作为 value，subject 尝试解析
+ */
+export function createMemoryRememberHandler(ctx: MemoryRememberContext): ActionHandler {
+  return {
+    name: 'memory.remember',
+    action: 'memory.remember',
+    async execute(decision: Decision): Promise<ActionResult> {
+      try {
+        const parsed = tryParseRememberReason(decision.reason)
+        if (!parsed) {
+          return failResult(decision, `memory.remember: cannot parse reason: ${decision.reason}`)
+        }
+
+        const { subject, type, value, confidence } = parsed
+
+        const fact: import('../types/memory.js').LongMemoryFact = {
+          id: '', // upsert 时自动生成或保持已有 id
+          type: type ?? 'fact',
+          subject: subject ?? decision.reason.slice(0, 100),
+          value: value ?? decision.reason,
+          confidence: confidence ?? 0.9,
+          source: 'user-explicit',
+          state: 'active',
+          representativeEvidenceIds: [],
+          evidenceCount: 1,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          createdBy: 'user-explicit',
+          privacyLevel: 'L1',
+        }
+
+        const saved = await ctx.memory.upsertFact(fact)
+        return {
+          success: true,
+          action: 'memory.remember',
+          decisionId: decision.decisionId,
+          executedAt: Date.now(),
+          metadata: {
+            factId: saved.id,
+            subject: saved.subject,
+            type: saved.type,
+          },
+        }
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        ctx.logger?.warn('[action:memory.remember] 写入失败: %s', detail)
+        return failResult(decision, `memory.remember failed: ${detail}`)
+      }
+    },
+  }
+}
+
+/**
+ * memory.forget handler（Phase 5.2）
+ *
+ * 行为：
+ * - 从 Decision.reason 中解析 JSON { subject?, type?, id? } 作为查询条件
+ * - 调用 MemoryStore.forgetByQuery（原子操作，内部包含 createForgetMarker + fact purge + audit）
+ * - 返回被删除的事实数量
+ *
+ * 约束：
+ * - 不直接调用 createForgetMarker（由 forgetByQuery 内部处理）
+ * - 不自己写 audit（MemoryStore.forgetByQuery 内部处理）
+ * - MemoryStore.forgetByQuery 是幂等的（找不到 = 0，不报错）
+ * - 返回 forgottenCount === 0 时仍为 success=true（"已经没有了"也是成功）
+ */
+export function createMemoryForgetHandler(ctx: MemoryForgetContext): ActionHandler {
+  return {
+    name: 'memory.forget',
+    action: 'memory.forget',
+    async execute(decision: Decision): Promise<ActionResult> {
+      try {
+        const query = tryParseForgetQuery(decision.reason)
+        if (!query) {
+          return failResult(decision, `memory.forget: cannot parse reason: ${decision.reason}`)
+        }
+
+        const forgottenCount = await ctx.memory.forgetByQuery(query)
+        return {
+          success: true,
+          action: 'memory.forget',
+          decisionId: decision.decisionId,
+          executedAt: Date.now(),
+          metadata: {
+            forgottenCount,
+            query,
+          },
+        }
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        ctx.logger?.warn('[action:memory.forget] 执行失败: %s', detail)
+        return failResult(decision, `memory.forget failed: ${detail}`)
+      }
+    },
+  }
+}
+
+// ── JSON reason 解析辅助 ───────────────────────────────────────────────
+
+interface RememberParse {
+  subject?: string
+  type?: import('../types/memory.js').FactType
+  value?: string
+  confidence?: number
+}
+
+interface ForgetQueryParse {
+  subject?: string
+  type?: import('../types/memory.js').FactType
+  subjectPrefix?: string
+}
+
+/**
+ * 解析 Decision.reason 中的 remember 参数。
+ * 期望 JSON: { subject, type?, value?, confidence? }
+ * 如果 reason 本身不是 JSON，尝试提取。
+ */
+function tryParseRememberReason(reason: string): RememberParse | null {
+  try {
+    const parsed = JSON.parse(reason)
+    if (typeof parsed === 'object' && parsed !== null) {
+      return {
+        subject: String(parsed.subject ?? ''),
+        type: parsed.type,
+        value: parsed.value !== undefined ? String(parsed.value) : undefined,
+        confidence: parsed.confidence !== undefined ? Number(parsed.confidence) : undefined,
+      }
+    }
+  } catch {
+    // 不是 JSON，尝试提取
+  }
+  // 兜底：如果 reason 包含 key=value 模式
+  const match = reason.match(/"subject"\s*:\s*"([^"]+)"/)
+  if (match) {
+    return { subject: match[1] }
+  }
+  return null
+}
+
+/**
+ * 解析 Decision.reason 中的 forget 查询参数。
+ * 期望 JSON: { subject?, type?, subjectPrefix? }
+ */
+function tryParseForgetQuery(reason: string): ForgetQueryParse | null {
+  try {
+    const parsed = JSON.parse(reason)
+    if (typeof parsed === 'object' && parsed !== null) {
+      return {
+        subject: parsed.subject !== undefined ? String(parsed.subject) : undefined,
+        type: parsed.type,
+        subjectPrefix: parsed.subjectPrefix !== undefined ? String(parsed.subjectPrefix) : undefined,
+      }
+    }
+  } catch {
+    // 不是 JSON
+  }
+  // 兜底：直接用 reason 作为 subject
+  return { subject: reason.trim() }
+}
+
 /**
  * 工厂函数：创建 ActionExecutor 实例
  *

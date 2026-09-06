@@ -109,6 +109,28 @@ export interface OrcaInputAdapterConfig {
   refreshMs?: number
 }
 
+export interface OrcaMemoryConfig {
+  /** 是否启用 MemoryStore（默认 true） */
+  enabled: boolean
+  /** Memory 数据目录（默认 appRoot/data/memory） */
+  dataDir: string
+  /**
+   * ForgetMarker fingerprint salt（必须稳定，重启后不变才能跨进程抑制）。
+   * 建议使用随机字符串并永久保存到 .env。
+   */
+  fingerprintSalt: string
+  /** LongMemoryFact.active 检索结果上限（默认 100） */
+  maxActiveFacts: number
+  /** Candidate confidence 晋升阈值（默认 0.7） */
+  promoteThreshold: number
+  /** Phase 5.4.A：是否启用 MemoryAttentionAdapter（默认 true） */
+  attentionEnabled: boolean
+  /** Phase 5.4.A：MemoryAttentionAdapter 轮询间隔（毫秒，默认 60000） */
+  attentionPollIntervalMs: number
+  /** Phase 5.4.A：MemoryAttentionAdapter 每次最多生成的 AttentionItems 数（默认 5） */
+  attentionTopK: number
+}
+
 export interface OrcaConfig {
   host: string
   port: number
@@ -124,6 +146,8 @@ export interface OrcaConfig {
   chatBindings: Record<string, string>
   /** Orca Persistent Context Runtime（Phase 0+1，默认关闭） */
   runtime: OrcaRuntimeConfig
+  /** Phase 5.0 LongMemory MemoryStore */
+  memory: OrcaMemoryConfig
 }
 
 const here = dirname(fileURLToPath(import.meta.url)) // app-cordis/src
@@ -241,6 +265,23 @@ export function getConfig(): OrcaConfig {
         // 默认禁用（Phase 4.B 用户决策：act/notify 默认是 stub，启用前应明确注册 handler）
         enabled: process.env.ORCA_ACTION_ENABLED === '1',
       },
+    },
+    memory: {
+      // 默认启用（Phase 5.0）
+      enabled: process.env.ORCA_MEMORY_ENABLED !== '0',
+      dataDir: process.env.ORCA_MEMORY_DIR || resolve(appRoot, 'data', 'memory'),
+      /**
+       * ForgetMarker fingerprint salt。
+       * 重要：必须稳定（跨进程重启不随机），才能保证 restart 后 ForgetMarker 仍能 suppress。
+       * 建议：在 .env 中设置随机字符串，如 `openssl rand -hex 32`
+       */
+      fingerprintSalt: process.env.ORCA_MEMORY_SALT || 'CHANGE-ME-USE-RANDOM-SALT-IN-PROD',
+      maxActiveFacts: Number(process.env.ORCA_MEMORY_MAX_ACTIVE_FACTS ?? 100),
+      promoteThreshold: Number(process.env.ORCA_MEMORY_PROMOTE_THRESHOLD ?? 0.7),
+      // Phase 5.4.A
+      attentionEnabled: process.env.ORCA_MEMORY_ATTENTION_ENABLED !== '0',
+      attentionPollIntervalMs: Number(process.env.ORCA_MEMORY_ATTENTION_POLL_INTERVAL_MS ?? 60_000),
+      attentionTopK: Number(process.env.ORCA_MEMORY_ATTENTION_TOP_K ?? 5),
     },
   }
 }

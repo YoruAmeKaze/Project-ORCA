@@ -1,6 +1,6 @@
 # Project Orca — Agent 启动上下文（AGENT.md）
 
-> **给新会话/新代理的启动引导**：开工前先通读本文档，再按需深读具体文件。本文档是当前代码（**app-cordis v0.6.0 + Phase 4.E 已完成**）的权威快照。
+> **给新会话/新代理的启动引导**：开工前先通读本文档，再按需深读具体文件。本文档是当前代码（**app-cordis v0.6.4 + Phase 5.4.B**）+ 设计稿（**Phase 5.4 D-AGENT-19 + guide/orca-memory-consumption-design.md**）的权威快照。
 > 与 `README.md`（对外概述）、`dev-log.md`（历史日志）、`TODO.md`（待办）配合使用；冲突时**以本文档 + 源码为准**。
 > **维护规则（硬性，见 `guide/decisions.md` D-VER-04）**：每次代码有实质变更（新机制、版本升级），**提交前必须同步本文档**——改目录结构/机制/配置键/版本号/待办中任一项即必改对应板块；dev-log 条目末尾标注"AGENT.md 已同步"。代码改了但本文档停在旧状态 = 违规提交。
 
@@ -31,7 +31,7 @@ npm start                         # node dist/index.js；或 npm run dev（tsx w
 
 ---
 
-## 2. 当前架构（app-cordis v0.6.0 + Phase 4.E）
+## 2. 当前架构（app-cordis v0.6.0 + Phase 5.3）
 
 ```
 飞书 webhook → feishu-channel（ctx.emit feishu/message + feishu/image，p2p/群聊带 chat_id）
@@ -43,9 +43,12 @@ npm start                         # node dist/index.js；或 npm run dev（tsx w
         → pc/calendar/phone adapters（mock，默认 disabled）
         → AttentionEngine（Phase 3：规则评估 → dedup → throttle）→ emit 'orca/attention'
         → DecisionEngine（Phase 4.A：纯决策层，AttentionItem → Decision）→ emit 'orca/decision'
-        → ActionExecutor（Phase 4.B + 4.D：registry + builtin handlers + deferred store + scheduler consume）→ emit 'orca/action-result'
+        → ActionExecutor（Phase 4.B + 4.D + Phase 5.2：registry + builtin handlers + deferred store + scheduler consume + memory.remember/forget）→ emit 'orca/action-result'
         → NotifyHandler（Phase 4.C：EventBus.get(id) 反查 → FeishuClient.sendToChat）
         → Phase 4.E：deferred-scheduler 按 chatId 分组合并 → emit merged notify Decision（上限 5 条）
+  → MemoryStore（Phase 5.0：LongMemory mutation authority；JSONL + 内存索引；提供 queryFacts/getFact/upsertFact/supersedeFact/mergeFacts/compressFactEvidence/forgetFact/forgetByQuery/createForgetMarker/queryForgetMarkers/queryAudit + Candidate promote/reject/expire）
+  → EpisodeEngine（Phase 5.1：message.burst + state.transition；写入 episodes.jsonl；纯规则无 LLM；EventBus 事件 + WorldState 变化驱动）
+  → ReflectionEngine（Phase 5.3：deterministic rule-based；Episode → MemoryCandidate → MemoryStore.promoteCandidate；纯规则无 LLM；subject-only ForgetMarker privacy gate）
 ```
 
 设计原则（详见 `guide/orca-cordis-migration-plan.md`）：**纯 Cordis 自写飞书通道（B 方案）**；信息获取用 CEO-员工-档案室模型（`guide/orca-info-agent-framework.md`）；Persistent Context Runtime 分阶段演进（EventBus → WorldState → Attention → Decision）。
@@ -70,11 +73,11 @@ app-cordis/                    # ★ Cordis/TypeScript 版（唯一主线）
 │   │   ├── context.ts         # Cordis Context 类型增强（feishu/llm/vision/sessions/info*/eventBus/worldState/attention/decision）
 │   │   ├── session.ts         # SessionStore：内存会话
 │   │   ├── agents/            # 信息获取框架：types/registry（闭集）/store（档案室 JSONL）/executor（Pull）/router（R0+R1）/builtins/food-log.ts（food-agent）
-│   │   ├── services/          # feishu / llm（DeepSeek）/ vision（Qwen VL）/ eventBus / worldState / attention / attention-config / decision / action
-│   │   ├── plugins/           # feishu-channel / agent / info-agents / info-receiver / image-router / food-image / dashboard / orca-runtime / world-state-updater / attention-engine / decision-engine / action-executor / input-adapters/{feishu,pc,calendar,phone}-adapter
-│   │   ├── types/             # event.ts（OrcaEvent）/ worldState.ts / attention.ts / decision.ts / action.ts
+│   │   ├── services/          # feishu / llm（DeepSeek）/ vision（Qwen VL）/ eventBus / worldState / attention / attention-config / decision / action / memoryStore（Phase 5.0）/ episodeEngine（Phase 5.1）/ reflectionEngine（Phase 5.3）
+│   │   ├── plugins/           # feishu-channel / agent / info-agents / info-receiver / image-router / food-image / dashboard / orca-runtime / world-state-updater / attention-engine / decision-engine / action-executor / episode-engine（Phase 5.1）/ reflection-engine（Phase 5.3）/ input-adapters/{feishu,pc,calendar,phone}-adapter
+│   │   ├── types/             # event.ts（OrcaEvent）/ worldState.ts / attention.ts / decision.ts / action.ts / memory.ts（Phase 5.0+5.1：LongMemoryFact / MemoryCandidate / AuditEvent / ForgetMarker / Episode / MemoryStore 接口）
 │   │   └── data/              # records/ 档案室 JSONL + images/ 图片落盘（gitignore）
-│   └── scripts/               # smoke-info-agent / smoke-world-state / smoke-attention / smoke-decision / smoke-action / recognize-food / list-food
+│   └── scripts/               # smoke-info-agent / smoke-world-state / smoke-attention / smoke-decision / smoke-action / smoke-memory（Phase 5.0） / smoke-episode（Phase 5.1） / smoke-memory-handler（Phase 5.2） / smoke-reflection（Phase 5.3） / smoke-d-agent-18（Phase 5.3.1） / smoke-memory-attention（Phase 5.4.A） / smoke-memory-event-bridge（Phase 5.4.B） / recognize-food / list-food
 guide/                         # 设计文档（memory-pack / decisions / orca-cordis-migration-plan / orca-info-agent-framework / orca-iphone-channel）
 AGENT.md                       # ★ 本文档
 dev-log.md / TODO.md / README.md
@@ -99,6 +102,10 @@ dev-log.md / TODO.md / README.md
 - **Attention**（services/attention.ts + plugins/attention-engine.ts，Phase 3）：纯规则评估（5 条内置规则）→ dedup（窗口去重）→ throttle（source cooldown + hourly cap）→ emit `'orca/attention'`；**rule-registry**：Engine 与规则解耦，支持热更新
 - **Decision**（services/decision.ts + plugins/decision-engine.ts，Phase 4.A）：**纯决策层**——AttentionItem → Decision 1:1 映射；不重新判断 priority / 不重新评估 Attention 规则 / 不执行 action / 不持久化；emit `'orca/decision'`。AttentionItem 新增 `id: string`（randomUUID，Decision back-trace 用）。
 - **Action**（services/action.ts + plugins/action-executor.ts + plugins/deferred-scheduler.ts，Phase 4.B + 4.C + 4.D + 4.E）：**执行层**——Decision → ActionResult 1:1；ActionHandlerRegistry 索引 handler；内置 handler（noop/remember/defer/notify-stub/act-stub）+ Phase 4.C 真实 notify handler（依赖 EventBus.get + FeishuClient.sendToChat）+ DeferredActionStore（仅 in-memory；Phase 4.D 增加 `consume(pendingId)` 原子删除）；emit `'orca/action-result'`。**关键安全约束**：act handler 默认 stub，禁止任意 shell / JS / 插件调用；ORCA_ACTION_ENABLED 默认 false。Phase 4.D：deferredScheduler plugin 每 30s tick 一次；user.status in {busy, sleeping} 时保留 pending；awake/away 时 consume pending + emit 'orca/decision'（defer 翻译为 no_action 防循环）。**Phase 4.E：chatId 分组合并**——同 chatId 多条 pending 合并为单条 notify Decision（`MERGED_DECISION_RULE_ID='deferred-merged'`，priority 取最高，reason 多行摘要含 `- [source] priority: reason`，`MAX_MERGED_ITEMS=5` 超出 truncate）；单条 pending 保持原 Decision 语义；无 eventBus / 无法反查 chatId 的 entry 单独 emit（不误合并）。
+- **Memory**（services/memoryStore.ts + types/memory.ts，Phase 5.0）：**LongMemory mutation authority**——所有 LongMemory 写必须经过 MemoryStore，不允许 Reflection 直接修改 JSONL 或 in-memory 对象。持久化：JSONL（long.jsonl / candidates.jsonl / markers.jsonl / audit.jsonl / episodes.jsonl）+ 内存 Map 索引（同 D-AGENT-09 JsonlInfoRecordStore 模式，lazy load on first access）。`upsertFact`：identity=(type, subject)，同 identity 原地更新不创建新 id。`supersedeFact`/`mergeFacts`/`compressFactEvidence`：所有写操作产生 AuditEvent。`forgetFact`：**forget operation is owned and orchestrated by MemoryStore; marker creation and fact purge are performed within the MemoryStore operation**（注意：JSONL 是按顺序写的，并非数据库级 transaction；写入顺序固定为 createForgetMarker → persistFact → rejectCandidates → appendAudit，已尽量减少不一致窗口）。`createForgetMarker`：幂等，相同 type+subject 返回已有 marker（fingerprint = sha256(salt + lower(subject)).slice(0,16)）。`queryAudit`：never exposes value content（prevValue/newValue 字段不存在）。Candidate API：`appendCandidate` / `queryCandidates` / `promoteCandidate` / `rejectCandidate` / `expireCandidates`。**Episode API（Phase 5.1）**：`appendEpisode` / `queryEpisodes` / `getTodayEpisodes` / `getRecentEpisodes` / `pruneExpiredEpisodes`。**Privacy API（Phase 5.3）**：`isSubjectSuppressed(subject)` — subject-only ForgetMarker 抑制检查（不依赖 type），作为 ReflectionEngine 的 privacy gate。`isSuppressed(type, subject)` 保留为 type-scoped 检查。**配置**：`ORCA_MEMORY_DIR`（默认 `appRoot/data/memory`）、`ORCA_MEMORY_SALT`（**必须稳定**，否则 restart 后 fingerprint 不一致导致 ForgetMarker 失效）、`ORCA_MEMORY_MAX_ACTIVE_FACTS`、`ORCA_MEMORY_PROMOTE_THRESHOLD`。
+- **EpisodeEngine**（services/episodeEngine.ts + plugins/episode-engine.ts，Phase 5.1）：**Short Memory 生成引擎**——监听 EventBus 事件和 WorldState 变化，生成 Episode 写入 MemoryStore。两类 Episode（确定性规则，无 LLM）：`message.burst`（同 sender 在 90s 内发送 ≥3 条消息，产生一条摘要 Episode，sourceEventIds 保留全部消息 id）和 `state.transition`（WorldState user.status 状态转换，如 away→active / sleeping→active，产生一条摘要 Episode，importance=high 当 sleeping→active/busy）。Burst 追踪：内存 Map（senderId → session），session 达到阈值后标记 done 防止重复生成；session 计数满后重置（下一个 burst 可重新计数）。`episodeEnginePlugin` 订阅 `orca/event`（EventBus）和 `orca/state_changed`（WorldState），挂载在 Runtime 之后。
+- **ActionHandler（Phase 5.2）**（services/action.ts + plugins/action-executor.ts）：两个新增 handler——`memory.remember`（`Decision.reason` 解析 JSON → `MemoryStore.upsertFact(source='user-explicit')`，upsert 语义同 Phase 5.0）和 `memory.forget`（`Decision.reason` 解析 JSON → `MemoryStore.forgetByQuery`，forget 操作由 MemoryStore own 和 orchestrate：marker 创建与 fact 清除都在 MemoryStore 操作内完成，**禁止 handler 直接调用 createForgetMarker**）。`forgetByQuery` 返回删除数量（0 也为 success=true）；`memory.remember/forget` 注册到 `ActionExecutor.registry`，通过 `ctx.on('orca/decision')` 事件流驱动。
+- **ReflectionEngine（Phase 5.3）**（services/reflectionEngine.ts + plugins/reflection-engine.ts）：**deterministic rule-based Reflection**——读取最近 Episode，运行确定性 pattern → 生成 MemoryCandidate → 检查 subject-only ForgetMarker privacy gate + user-explicit fact 冲突 → 在 confidence 阈值以上调用 `MemoryStore.promoteCandidate`。Rule A：同一 sender 在最近 30 条 Episode 中出现 ≥3 次 `message.burst` → candidate (type=`behavioral_pattern`, subject=sender, value=`high_burst_frequency`)。confidence 公式：count=3→0.70, count=4→0.75, count=5→0.80, count=6+→min(0.85+(count-6)*0.05, 0.95)。proposer ≠ mutator：ReflectionEngine 只调 MemoryStore API；**不**直接改 LongMemoryFact / JSONL。Privacy gate：`isSubjectSuppressed(subject)`（subject-only；忽略 type）— user forget 任何 type 的 fact 后，Reflection 不复活该 subject。User-explicit 冲突：若已存在 user-explicit active fact for `(type, subject)`，candidate 被 `rejectCandidate('user-explicit-fact-exists')`。
 
 ### 4.4 关键事件（ctx.emit / ctx.on）
 | 事件 | 载荷 | 产生者 |
@@ -127,6 +134,10 @@ dev-log.md / TODO.md / README.md
 | 注意力评估 | `services/attention.ts` | 纯规则 → dedup → throttle |
 | 决策层（Phase 4.A） | `services/decision.ts` + `plugins/decision-engine.ts` | 纯函数：AttentionItem → Decision（不执行 action） |
 | 执行层（Phase 4.B + 4.C + 4.D + 4.E） | `services/action.ts` + `plugins/action-executor.ts` + `plugins/deferred-scheduler.ts` | Decision → ActionResult（registry + builtin handlers + deferred store；Phase 4.C 真实 notify handler；Phase 4.D scheduler consume + emit；Phase 4.E chatId 分组合并） |
+| LongMemory（Phase 5.0） | `services/memoryStore.ts` + `types/memory.ts` | JsonlMemoryStore：queryFacts/getFact/upsertFact/supersedeFact/mergeFacts/compressFactEvidence/forgetFact/forgetByQuery/createForgetMarker/queryForgetMarkers/queryAudit + Candidate API + Episode API；AuditEvent 无 prevValue/newValue（v1.1） |
+| Episode（Phase 5.1） | `services/episodeEngine.ts` + `plugins/episode-engine.ts` | message.burst（90s 窗口 ≥3 条）+ state.transition（WorldState user.status 转换）；纯规则无 LLM；episodes.jsonl 持久化 |
+| ActionHandler（Phase 5.2） | `services/action.ts` + `plugins/action-executor.ts` | memory.remember（Decision.reason → upsertFact）+ memory.forget（Decision.reason → forgetByQuery）；forget 操作由 MemoryStore own |
+| ReflectionEngine（Phase 5.3） | `services/reflectionEngine.ts` + `plugins/reflection-engine.ts` | Episode → Candidate → LongMemory；deterministic rule only；subject-only ForgetMarker privacy gate；user-explicit 冲突保护 |
 | 调试 | `plugins/dashboard.ts` | /dashboard HTML + /api/status + /api/events + /api/world-state + /api/attention + /debug/publish-event |
 
 > Python 版能力（桌面控制、瑞幸点单、联网搜索、截图）已在 Python 版删除时一并移除；如需迁移为 InfoAgent，见 `guide/orca-cordis-migration-plan.md`。
@@ -159,6 +170,11 @@ dev-log.md / TODO.md / README.md
 | ORCA_ATTENTION_ENABLED | 1 | Attention Engine（纯评估，安全默认） |
 | ORCA_DECISION_ENABLED | 1 | Decision Engine（Phase 4.A 纯决策层，安全默认） |
 | ORCA_ACTION_ENABLED | 0 | Action Executor（Phase 4.B 执行层；默认禁用，启用前需明确注册 handler） |
+| ORCA_MEMORY_ENABLED | 1 | MemoryStore（Phase 5.0；默认启用） |
+| ORCA_MEMORY_DIR | appRoot/data/memory | Memory JSONL 数据目录 |
+| ORCA_MEMORY_SALT | CHANGE-ME-… | ForgetMarker fingerprint salt（**必须稳定**，建议 `openssl rand -hex 32` 生成） |
+| ORCA_MEMORY_MAX_ACTIVE_FACTS | 100 | LongMemoryFact.active 检索结果上限 |
+| ORCA_MEMORY_PROMOTE_THRESHOLD | 0.7 | Candidate confidence 晋升阈值 |
 
 > 注意：`ORCA_*_ENABLED` 类必须严格写 `1`（`true`/`yes`/`on` 不生效）；.env 中行首 `#` 视为注释（曾有用户复制 .env.example 带 `#` 导致不生效的坑）。
 
@@ -186,15 +202,25 @@ dev-log.md / TODO.md / README.md
 - **Phase 4.C（2026-08-27）**：Orca 第一个真实 Action——NotifyHandler。EventBus.get(id) 按 eventId 反查原始 OrcaEvent（O(n) 线性扫描，仅作用于 sliding window；找不到返回 undefined）；NotifyHandler 验证 decision.eventId / event.source==='feishu' / event.data.chatId；dryRun 复用现有 OrcaConfig.dryRun；调用 FeishuClient.sendToChat 发送 `[Orca] ${priority}\n${reason}\n\n源消息: ${text.slice(0,200)}`。**严格分层**：Decision / DecisionEngine 不感知 Feishu；NotifyHandler 是 Feishu-aware 的；FeishuEventData 用 type guard narrow（不使用 any）。R15 smoke 54 用例覆盖 EventBus.get / state-only / source 校验 / Feishu context / dryRun / 真实发送 / 失败处理 / EventBus 集成 / 决策追踪。
 - **Phase 4.D（2026-08-27）**：DeferredActionStore scheduler——30s tick；user.status in {busy, sleeping} 时保留 pending；awake/away 时 consume pending + emit 'orca/decision'（defer→no_action 翻译防循环；不调 defer handler 避免 re-defer 死循环）；scheduler 不修改 Decision/Attention/WorldState；不调 ActionHandler；不调 store.clear()（store 生命周期独立于 scheduler）；disposed=true 后 tick 短路。DeferredActionStore.consume(pendingId) 原子删除能力（同一 pendingId 只能被 consume 一次；consume 后从 store 消失）。R17 smoke 72 用例覆盖 busy/sleeping/awake/eligibility/consume/def→no_action 翻译/dispose race/store 生命周期/E2E plugin-level。
 - **Phase 4.E（2026-08-27）**：Deferred Notification Aggregation——同 chatId 多条 pending 合并为单条 notify Decision（`groupPendingByChatId` / `createMergedDecision` / `composeMergedReason` 纯函数；merged.priority 取 group 最高；merged.reason = `你有 N 条待处理信息` + 每行 `- [source] priority: reason` + 超出 `MAX_MERGED_ITEMS=5` 时 `还有 X 条未展示`；ruleId=`deferred-merged`；merged 保留 first.eventId 供 NotifyHandler 反查 chatId）。单条 pending 保持原 Decision 语义；无 eventBus / 无法反查 chatId 的 entry 单独 emit（不误合并）；scheduler 不做 ruleId 去重（由 Attention 层负责）。R18 smoke 61 用例覆盖分组 / 文本格式 / priority 选择 / Decision 字段 / executeTick 合并路径 / E2E NotifyHandler 发送 / 循环防护。**未引入** ActionPlan / Decision metadata schema / 新 Action 类型 / Store API 变更。
-- **Python 版删除（2026-08-27）**：v2.3.0 全部源码移除，app-cordis 成为唯一主线
+- **Phase 5.1（2026-08-27）**：Episode Engine MVP——Short Memory 生成。`src/types/memory.ts`：新增 Episode 接口（id / category / kind / summary / ts / entities / sourceEventIds / importance / ttlDays / state）+ EpisodeQuery。`src/services/episodeEngine.ts`：`EpisodeEngine` 类 + `createEpisodeEngine` 工厂；纯规则（无 LLM）；Burst 检测（senderId session Map + 90s 窗口 + ≥3 触发）+ 状态转换摘要（transitionSummary + transitionImportance）。`src/plugins/episode-engine.ts`：`episodeEnginePlugin`；订阅 `orca/event` + `orca/state_changed`；返回 dispose 钩子。Episode 持久化：5 个 JSONL 文件（新增 episodes.jsonl）+ `appendEpisode`/`queryEpisodes`/`getTodayEpisodes`/`getRecentEpisodes`/`pruneExpiredEpisodes`；TTL 7 天自动 prune。`index.ts`：plugin 在 Runtime 之后装配。R20 smoke 45 用例覆盖 Episode CRUD + message.burst 生成/防重复 + state.transition 生成 + TTL prune + restart reload + today/recent/过滤查询。**未引入**：ReflectionService / MemoryCandidate 自动生成 / LongMemory promote / LLM 摘要。
+
+- **Phase 5.2（2026-08-27）**：memory.remember / memory.forget ActionHandler。`src/services/action.ts`：新增 `createMemoryRememberHandler`（`Decision.reason` JSON → `upsertFact(source='user-explicit')`，upsert 语义同 Phase 5.0）和 `createMemoryForgetHandler`（`Decision.reason` JSON → `forgetByQuery`，forget operation 由 MemoryStore own and orchestrate；marker 创建与 fact purge 都在 MemoryStore 操作内完成；禁止 handler 直接调用 `createForgetMarker`）。**注意**：JSONL 不是数据库级 transaction，写入顺序固定为 `createForgetMarker → persistFact → rejectCandidates → appendAudit`，已尽量减少不一致窗口。`src/plugins/action-executor.ts`：注册两个 memory handler（依赖 `ctx.memory`）；`ctx.on('orca/decision')` 事件流驱动。R21 smoke 51 用例（H1~H14）覆盖 remember 创建/upsert/ActionResult + forget 删除/ForgetMarker幂等/audit隐私/restart持久化/not-found/批量删除/subjectPrefix + 集成 Decision→Executor→handler。**旧 `remember` handler（Phase 4.B）保留不变**，写入 `infoStore`（decision-action/decision-remember），与 Phase 5.2 的 `memory.remember` 路径并存。**未引入**：Reflection / Episode→Candidate / Candidate→LongMemory 自动 promote / LLM。
+- **Phase 5.3（2026-08-27）**：Reflection Engine MVP——Episode → Candidate → LongMemory。`src/services/reflectionEngine.ts`：`createReflectionEngine` 工厂 + `ReflectionEngine` 实例；纯规则无 LLM。Rule A（Repeated Entity Burst）：同一 sender 在最近 30 条 Episode 中出现 ≥3 次 `message.burst` → candidate (type=`behavioral_pattern`, subject=sender, value=`high_burst_frequency`)。confidence 公式：count=3→0.70, count=4→0.75, count=5→0.80, count=6+→min(0.85+(count-6)*0.05, 0.95)。privacy gate：`isSubjectSuppressed(subject)`（subject-only；忽略 type）—— user-explicit fact 被 forget 后，Reflection 不复活该 subject。User-explicit 冲突：若已存在 user-explicit active fact for `(type, subject)`，candidate 被 `rejectCandidate('user-explicit-fact-exists')`。dedup：queryCandidates 返回的 non-expired candidate 视为已处理。`src/services/memoryStore.ts`：新增 `queryCandidates(q)` + `isSubjectSuppressed(subject)` API。`src/types/memory.ts`：FactType 新增 `behavioral_pattern` / `state_pattern`。`src/plugins/reflection-engine.ts`：plugin；提供 `ctx.reflection` service；仅手动 reflect（`reflectNow()` / `reflectRecent(n)`）。`index.ts`：plugin 在 EpisodeEngine 之后装配。R22 smoke 58 用例（R1~R12）覆盖 1/3+ Episode 行为 + confidence 公式 + evidenceEpisodeIds + promote + expire + ForgetMarker suppression（subject-only）+ privacy regression（forget→Episode→Reflection 不复活）+ duplicate promote 安全 + user-explicit 冲突 + restart 持久化。**未引入**：LLM / Episode→Candidate 自动 scheduler / Memory→Attention/Decision/WorldState。
+
+- **Phase 5.3.1（2026-08-27）**：D-AGENT-18 Memory Contract Hardening——三个 contract 缺口收口，不重做 Memory 架构。**①CandidateQuery 正式纳入 contract**：`CandidateQuery{state?, type?, subject?, limit?}` 含 `limit`（默认 100，上限 1000，按 createdAt 降序截断）；`guide/orca-memory-design.md` §3.2 正式定义。**②isSubjectSuppressed 正式确认**：subject-level 抑制 API 与 type-scoped `isSuppressed(type, subject)` 并存；Reflection promotion 必须使用 subject-level；`guide/orca-memory-design.md` §3.5 + §4.6 正式定义；`guide/decisions.md` D-AGENT-18 §18-02 正式落定。**③User-explicit protection 下沉到 MemoryStore**：`MemoryStore.promoteCandidate()` 内部强制 invariant——若 `isSubjectSuppressed(subject)` 为 true 或已存在 user-explicit active fact for `(type, subject)`，则 candidate 被拒绝（state=rejected）；任何 future 调用 `promoteCandidate()` 的 subsystem 自动受到保护；ReflectionEngine 层 guard 仅作 early-exit 优化。**④Rule A 定位收敛**：Rule A 仅用于验证 Reflection pipeline 的 deterministic candidate generation，不作为成熟行为推断，不扩展为 personality inference。`src/services/memoryStore.ts`：promoteCandidate 内部新增 subject-level suppression gate + user-explicit 冲突检查。`src/types/memory.ts`：CandidateQuery 新增 `limit` 字段。`guide/orca-memory-design.md` 升级为 v1.2。`guide/decisions.md` 新增 D-AGENT-18。R23 smoke 44 用例（C1~C8）覆盖 queryCandidates(state/type/subject/limit) + subject-level suppression + forget subject→candidate type B→promote 被拒 + user-explicit fact→reflection candidate→MemoryStore.promoteCandidate 直接拒绝 + 绕过 ReflectionEngine guard 仍被 MemoryStore 拒绝 + 普通 reflection fact 正常 promote + restart 持久化 + 零回归。**未引入**：LLM / vector DB / embedding / new priority system / database abstraction / personality inference。
+
+- **Phase 5.4.A（2026-08-27）**：MemoryAttentionAdapter 基础——Memory → Attention 的唯一桥接层（第一版 MVP）。`src/services/memoryAttentionAdapter.ts`：`createMemoryAttentionAdapter` 工厂 + `MemoryAttentionAdapter` 实例；轮询 MemoryStore 生成 `type='memory.insight'` 的 AttentionItems。`factToAttentionItem(fact)`：将 LongMemoryFact 映射为 AttentionItem；priority 从 confidence 计算（≥0.9=urgent, ≥0.8=high, ≥0.7=normal, else=low）；`action='remember_only'`；metadata 包含 `factId / memoryType / memorySource / confidence / createdAt / updatedAt`。去重：`seenFacts: Map<factId, updatedAt>`，同一 `updatedAt` 不重新生成。TopK 默认 5。`src/plugins/memory-attention-adapter.ts`：Cordis plugin；依赖 `ctx.memory`；通过 `ctx.emit('orca/attention', item)` 注入事件流；`disposed` 闸门。配置键：`ORCA_MEMORY_ATTENTION_ENABLED`（默认 true）/ `ORCA_MEMORY_ATTENTION_POLL_INTERVAL_MS`（默认 60000）/ `ORCA_MEMORY_ATTENTION_TOP_K`（默认 5）。`src/config.ts`：`OrcaMemoryConfig` 新增 `attentionEnabled` / `attentionPollIntervalMs` / `attentionTopK`。R24 smoke 36 用例（M1~M7）覆盖 active fact → AttentionItem 生成 / superseded 不生成 / forget 后不生成 / duplicate tick 去重 / confidence metadata 正确 / TopK 限制 / factToAttentionItem 单测。**未引入**：Memory type → AttentionItem action 映射（统一 remember_only）/ preference 直接触发 notify / 修改 EventBus / ReflectionEngine 参与。
+
+- **Phase 5.4.B（2026-08-27）**：Memory Event Bridge——MemoryStore mutation event 驱动 MAA。`src/types/memory.ts`：`MemoryChangedEvent` 接口（`type: MemoryEventType` / `factId / subject / factType / timestamp / newFactId?`）+ `MemoryEventType` 枚举（`fact.created | fact.updated | fact.superseded | fact.merged | fact.forgotten`）+ `OrcaMemoryConfig.eventEmitter` 可选注入。`src/services/memoryStore.ts`：4 个 mutation 函数均 emit 相应事件（`upsertFact` → created/updated；`supersedeFact` → created+superseded；`mergeFacts` → merged×n+updated；`forgetFact` → forgotten）。`src/index.ts`：MemoryStore 构造时传入 `eventEmitter: (e) => ctx.emit('memory_changed', e)`。`src/services/memoryAttentionAdapter.ts`：`onMemoryChanged(event)` 处理函数；invalidate 类型（superseded/merged/forgotten）直接删除 `seenFacts`；create/update 类型异步查询当前 fact 状态并 emit AttentionItem；`MemoryAttentionAdapter` 接口新增 `onMemoryChanged`。`src/plugins/memory-attention-adapter.ts`：`ctx.on('memory_changed', ...)` 订阅并转发给 adapter；dispose 时 unsubscribe。R25 smoke 39 用例（EB1~EB7）覆盖 event → AttentionItem 生成 / update 刷新 / forget 消失 / supersede 旧fact失效 / dedup 正确性 / merge 失效 / payload 完整性。**未引入**：Memory 直接产生 Action / 修改 AttentionEngine/DecisionEngine/WorldState / 新存储。**342/342 smoke PASS**。
 
 ### 8.2 待办（TODO.md）
+- **Phase 6 设计稿（2026-08-27）**：Memory-aware CEO Context——`guide/orca-memory-consumption-design.md` §12 + D-AGENT-20。CEO Context 四元组：input / worldState / info / memory；R3 层注入 memoryFacts，按 subject 匹配 → type 过滤 → 全局查询三优先级；Top-K=10，字符限制每条 ≤ 80 / R3 总计 ≤ 500；Token 预算 500 token 固定配额；MemoryCache（Phase 6.B 可选，TTL 5 分钟，`memory_changed` 事件失效）；不引入 embedding / SQLite / vector DB；MAA 与 CEO 查询双通道独立互补。**未实现代码**。
 - **Phase 4.F**：ActionPlan 拆分（payload / channel / target）；真实 act handler（最小权限 + 白名单校验）；支持 bark / 邮件等其他通知渠道（NotifyHandler 按 event.source 分支扩展）；urgency=2 推送门控
 - 迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull）
 - 会话持久化（jsonl）；独立飞书 bot 的 app_id 路由（远期）
 - 飞书事件订阅加密模式支持（技术债）
 
-### 8.3 关键架构约束（Phase 3.A + Phase 4.A + Phase 4.B + Phase 4.D + Phase 4.E 确定，Attention/Decision/Action 必读）
+### 8.3 关键架构约束（Phase 3.A + Phase 4.A + Phase 4.B + Phase 4.D + Phase 4.E + Phase 5.0 确定，Attention/Decision/Action/Memory 必读）
 - **Attention Rule predicate 判断"事件发生前状态"必须用 `prevState`**；`state` 是事件处理后（reducer 已应用）的世界。
 - 错误示范：`predicate: ({ state }) => state.user.status === 'away'`（reducer 改 awake 后永远不触发）；正确：`predicate: ({ prevState }) => prevState?.user.status === 'away'`。
 - `prevState` 在 state-only 触发时为 `undefined`；event 触发时由 `ws.getPrevState()` 提供。
@@ -211,6 +237,10 @@ dev-log.md / TODO.md / README.md
 - **EventBus.get(id)**（Phase 4.C 最小增量）：按 id 反查 sliding window 中的事件（O(n) 线性扫描；找不到返回 undefined）。仅作用于现有 sliding window（不改 windowSize；不持久化；超 windowSize 的最老事件已被丢弃 → 返回 undefined）。**不**把 EventBus 改造成永久事件数据库。
 - **NotifyHandler（Phase 4.C Orca 第一个真实 Action）**：Feishu-aware（持有 FeishuClient 依赖）；Decision / Attention / DecisionEngine 不感知 Feishu。输入 Decision → 顺序判断：eventId undefined / eventBus.get 找不到 / source !== 'feishu' / FeishuEventData type guard 失败 → 全部 success=false + 明确 error（绝不伪装成功）。dryRun=true → 仅日志不发送；dryRun=false → feishu.sendToChat。文本格式：`[Orca] ${priority}\n${reason}\n\n源消息: ${text.slice(0,200)}`（第一版最小化；不引入模板系统 / 卡片 DSL / i18n / LLM 生成）。`createNotifyHandler({ feishu, eventBus, dryRun, logger? })` 工厂。
 - **ORCA_ACTION_ENABLED 默认 false**（用户决策：act handler 暂无显式注册时不应执行任何副作用；启用前应明确注册 handler）。
+- **MemoryStore 是 LongMemory 的唯一 mutation authority（Phase 5.0）**：Reflection 永远不直接修改 JSONL 或 in-memory LongMemoryFact 对象；所有写必须经过 MemoryStore API。`upsertFact` identity = (type, subject)，同 identity 原地更新保持原 id。`forgetFact` **owned by MemoryStore**：forget operation 是 MemoryStore 内部编排，marker 创建与 fact purge 在 MemoryStore 操作内按固定顺序完成（JSONL 非数据库 transaction；写入顺序已尽量减少不一致窗口）。
+- **ForgetMarker fingerprint salt 必须稳定**：`ORCA_MEMORY_SALT` 必须跨进程重启保持不变；随机 salt 导致 restart 后 fingerprint 不一致，ForgetMarker 无法 suppress 新事实。
+- **AuditEvent 不保存 prevValue / newValue（v1.1）**：仅通过 `changedFields[]` 表达字段变化；`forgotten` kind 的 `changedFields = undefined`。
+- **memory.remember / memory.forget ActionHandler**：Phase 5.2 才实现；当前 `createRememberHandler` 写的是 `infoStore`（Phase 4.B），与 D-AGENT-16-03 四态 decision 的 remember_only 存在历史冲突（见 `guide/orca-memory-design.md` v1.1 §10.2-A），Phase 5.0 不修改现有 handler。
 
 ---
 
@@ -247,4 +277,4 @@ dev-log.md / TODO.md / README.md
 
 ---
 
-*维护者：ka。本文档与代码同步于 **app-cordis v0.6.0 + Phase 4.E（2026-08-27，Python 版已删除）**。*
+*维护者：ka。本文档与代码同步于 **app-cordis v0.6.4 + Phase 5.4.B（2026-08-27）**；设计稿 **Phase 5.4 D-AGENT-19 + guide/orca-memory-consumption-design.md（2026-08-27）**。*

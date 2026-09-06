@@ -20,6 +20,10 @@ import { deferredScheduler } from './plugins/deferred-scheduler.js'
 import { pcAdapter } from './plugins/input-adapters/pc-adapter.js'
 import { calendarAdapter } from './plugins/input-adapters/calendar-adapter.js'
 import { phoneAdapter } from './plugins/input-adapters/phone-adapter.js'
+import { createMemoryStore } from './services/memoryStore.js'
+import { episodeEnginePlugin } from './plugins/episode-engine.js'
+import { memoryAttentionAdapter } from './plugins/memory-attention-adapter.js'
+import { reflectionEnginePlugin } from './plugins/reflection-engine.js'
 
 loadOrcaEnv()
 const config = getConfig()
@@ -48,6 +52,17 @@ ctx.provide('feishu', new FeishuClient(config.feishu))
 ctx.provide('llm', new LlmClient(config.llm))
 ctx.provide('vision', new VisionClient(config.qwen))
 ctx.provide('sessions', new SessionStore(config.historyTurns))
+// Phase 5.0：MemoryStore（LongMemory mutation authority；所有写必须经过此接口）
+if (config.memory.enabled) {
+  // Phase 5.4.B: 将 ctx.emit 绑定为 memory_changed 事件发射器
+  ctx.provide('memory', createMemoryStore({
+    ...config.memory,
+    eventEmitter: (event) => ctx.emit('memory_changed', event),
+  }))
+  ctx.logger.info('[orca-cordis] MemoryStore 已启用（dataDir=%s）', config.memory.dataDir)
+} else {
+  ctx.logger.info('[orca-cordis] MemoryStore 未启用（ORCA_MEMORY_ENABLED=0 关闭）')
+}
 
 // 插件装配
 ctx.plugin(feishuChannel, config)
@@ -103,13 +118,24 @@ if (config.runtime.enabled) {
     phoneAdapter(ctx, config)
     ctx.logger.info('[orca-cordis] Phone adapter 已启用（mock）')
   }
+  // Phase 5.1：EpisodeEngine（依赖 EventBus + WorldState，仅在 Runtime 启用时挂载）
+  if (config.memory.enabled) {
+    ctx.plugin(episodeEnginePlugin)
+    ctx.logger.info('[orca-cordis] EpisodeEngine 已启用（Phase 5.1：message.burst + state.transition）')
+    // Phase 5.3：ReflectionEngine（依赖 ctx.memory）
+    ctx.plugin(reflectionEnginePlugin)
+    ctx.logger.info('[orca-cordis] ReflectionEngine 已启用（Phase 5.3：deterministic rule only）')
+    // Phase 5.4.A：MemoryAttentionAdapter（依赖 ctx.memory；通过 ctx.emit 注入 AttentionItems）
+    ctx.plugin(memoryAttentionAdapter)
+    ctx.logger.info('[orca-cordis] MemoryAttentionAdapter 已挂载（Phase 5.4.A：Memory → Attention）')
+  }
 } else {
   ctx.logger.info('[orca-cordis] Persistent Context Runtime 未启用（ORCA_RUNTIME_ENABLED=1 启用）')
 }
 ctx.plugin(agent, config)
 
 ctx.logger.info(
-  '[orca-cordis] Phase 4.D 骨架已启动 host=%s port=%d model=%s dryRun=%s',
+  '[orca-cordis] Phase 5.4.A 骨架已启动 host=%s port=%d model=%s dryRun=%s',
   config.host,
   config.port,
   config.llm.model,
