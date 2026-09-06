@@ -458,12 +458,13 @@ async function pollFor(predicate, timeoutMs = 1000) {
 
 // ────────────────────────────────────────────────────────────
 // R17.14  多个 pending → 处理顺序符合 store.list() 顺序（按 queuedAt 升序）
+// Phase 4.E 更新：executeTick 不提供 eventBus 时无法反查 chatId → 每条独立 emit（不合并）
 // ────────────────────────────────────────────────────────────
 {
   const store = createDeferredActionStore()
   const ws = mkWorldState('awake')
 
-  // enqueue 3 条（依次入队）
+  // enqueue 3 条（依次入队；不提供 eventBus → 各自独立 emit）
   const d1 = mkDecision({ action: 'no_action', decisionId: 'dec_r17_14_001' })
   const d2 = mkDecision({ action: 'no_action', decisionId: 'dec_r17_14_002' })
   const d3 = mkDecision({ action: 'no_action', decisionId: 'dec_r17_14_003' })
@@ -474,12 +475,15 @@ async function pollFor(predicate, timeoutMs = 1000) {
   const emitted = []
   executeTick(store, ws, (d) => emitted.push(d))
 
-  check('R17.14.1: emit 3 次', emitted.length === 3)
+  // 不提供 eventBus → 无法反查 chatId → 每条独立 emit（不合并；保持 Phase 4.D 语义）
+  check('R17.14.1: 无 eventBus → 3 条独立 emit（不合并）', emitted.length === 3)
   check('R17.14.2: emit 顺序 = enqueue 顺序（queuedAt 升序）',
     emitted[0]?.decisionId === 'dec_r17_14_001' &&
     emitted[1]?.decisionId === 'dec_r17_14_002' &&
     emitted[2]?.decisionId === 'dec_r17_14_003')
-  check('R17.14.3: 处理后 store 为空', store.size() === 0)
+  check('R17.14.3: 各 emit 保持原 action（no_action）',
+    emitted.every((d) => d.action === 'no_action'))
+  check('R17.14.4: 处理后 store 为空（全部 consume）', store.size() === 0)
 }
 
 // ────────────────────────────────────────────────────────────

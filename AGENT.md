@@ -1,6 +1,6 @@
 # Project Orca — Agent 启动上下文（AGENT.md）
 
-> **给新会话/新代理的启动引导**：开工前先通读本文档，再按需深读具体文件。本文档是当前代码（**app-cordis v0.6.0 + Phase 4.D 已完成**）的权威快照。
+> **给新会话/新代理的启动引导**：开工前先通读本文档，再按需深读具体文件。本文档是当前代码（**app-cordis v0.6.0 + Phase 4.E 已完成**）的权威快照。
 > 与 `README.md`（对外概述）、`dev-log.md`（历史日志）、`TODO.md`（待办）配合使用；冲突时**以本文档 + 源码为准**。
 > **维护规则（硬性，见 `guide/decisions.md` D-VER-04）**：每次代码有实质变更（新机制、版本升级），**提交前必须同步本文档**——改目录结构/机制/配置键/版本号/待办中任一项即必改对应板块；dev-log 条目末尾标注"AGENT.md 已同步"。代码改了但本文档停在旧状态 = 违规提交。
 
@@ -31,7 +31,7 @@ npm start                         # node dist/index.js；或 npm run dev（tsx w
 
 ---
 
-## 2. 当前架构（app-cordis v0.6.0 + Phase 4.D）
+## 2. 当前架构（app-cordis v0.6.0 + Phase 4.E）
 
 ```
 飞书 webhook → feishu-channel（ctx.emit feishu/message + feishu/image，p2p/群聊带 chat_id）
@@ -45,6 +45,7 @@ npm start                         # node dist/index.js；或 npm run dev（tsx w
         → DecisionEngine（Phase 4.A：纯决策层，AttentionItem → Decision）→ emit 'orca/decision'
         → ActionExecutor（Phase 4.B + 4.D：registry + builtin handlers + deferred store + scheduler consume）→ emit 'orca/action-result'
         → NotifyHandler（Phase 4.C：EventBus.get(id) 反查 → FeishuClient.sendToChat）
+        → Phase 4.E：deferred-scheduler 按 chatId 分组合并 → emit merged notify Decision（上限 5 条）
 ```
 
 设计原则（详见 `guide/orca-cordis-migration-plan.md`）：**纯 Cordis 自写飞书通道（B 方案）**；信息获取用 CEO-员工-档案室模型（`guide/orca-info-agent-framework.md`）；Persistent Context Runtime 分阶段演进（EventBus → WorldState → Attention → Decision）。
@@ -97,7 +98,7 @@ dev-log.md / TODO.md / README.md
 - **WorldState**（services/worldState.ts + plugins/world-state-updater.ts）：4 块（user/device/time/extensions）；reducer 注册表 key = `${source}:${type}`；字段级变化检测才 emit `'orca/state_changed'`；time tick 推导 away（仅 awake→away 单向，严格 30min）
 - **Attention**（services/attention.ts + plugins/attention-engine.ts，Phase 3）：纯规则评估（5 条内置规则）→ dedup（窗口去重）→ throttle（source cooldown + hourly cap）→ emit `'orca/attention'`；**rule-registry**：Engine 与规则解耦，支持热更新
 - **Decision**（services/decision.ts + plugins/decision-engine.ts，Phase 4.A）：**纯决策层**——AttentionItem → Decision 1:1 映射；不重新判断 priority / 不重新评估 Attention 规则 / 不执行 action / 不持久化；emit `'orca/decision'`。AttentionItem 新增 `id: string`（randomUUID，Decision back-trace 用）。
-- **Action**（services/action.ts + plugins/action-executor.ts，Phase 4.B + 4.C + 4.D）：**执行层**——Decision → ActionResult 1:1；ActionHandlerRegistry 索引 handler；内置 handler（noop/remember/defer/notify-stub/act-stub）+ Phase 4.C 真实 notify handler（依赖 EventBus.get + FeishuClient.sendToChat）+ DeferredActionStore（仅 in-memory；Phase 4.D 增加 `consume(pendingId)` 原子删除）；emit `'orca/action-result'`。**关键安全约束**：act handler 默认 stub，禁止任意 shell / JS / 插件调用；ORCA_ACTION_ENABLED 默认 false。Phase 4.D：deferredScheduler plugin 每 30s tick 一次；user.status in {busy, sleeping} 时保留 pending；awake/away 时 consume pending + emit 'orca/decision'（defer 翻译为 no_action 防循环）。
+- **Action**（services/action.ts + plugins/action-executor.ts + plugins/deferred-scheduler.ts，Phase 4.B + 4.C + 4.D + 4.E）：**执行层**——Decision → ActionResult 1:1；ActionHandlerRegistry 索引 handler；内置 handler（noop/remember/defer/notify-stub/act-stub）+ Phase 4.C 真实 notify handler（依赖 EventBus.get + FeishuClient.sendToChat）+ DeferredActionStore（仅 in-memory；Phase 4.D 增加 `consume(pendingId)` 原子删除）；emit `'orca/action-result'`。**关键安全约束**：act handler 默认 stub，禁止任意 shell / JS / 插件调用；ORCA_ACTION_ENABLED 默认 false。Phase 4.D：deferredScheduler plugin 每 30s tick 一次；user.status in {busy, sleeping} 时保留 pending；awake/away 时 consume pending + emit 'orca/decision'（defer 翻译为 no_action 防循环）。**Phase 4.E：chatId 分组合并**——同 chatId 多条 pending 合并为单条 notify Decision（`MERGED_DECISION_RULE_ID='deferred-merged'`，priority 取最高，reason 多行摘要含 `- [source] priority: reason`，`MAX_MERGED_ITEMS=5` 超出 truncate）；单条 pending 保持原 Decision 语义；无 eventBus / 无法反查 chatId 的 entry 单独 emit（不误合并）。
 
 ### 4.4 关键事件（ctx.emit / ctx.on）
 | 事件 | 载荷 | 产生者 |
@@ -125,7 +126,7 @@ dev-log.md / TODO.md / README.md
 | 世界状态 | `services/worldState.ts` | 用户/设备/时间实时视图 |
 | 注意力评估 | `services/attention.ts` | 纯规则 → dedup → throttle |
 | 决策层（Phase 4.A） | `services/decision.ts` + `plugins/decision-engine.ts` | 纯函数：AttentionItem → Decision（不执行 action） |
-| 执行层（Phase 4.B + 4.C + 4.D） | `services/action.ts` + `plugins/action-executor.ts` + `plugins/deferred-scheduler.ts` | Decision → ActionResult（registry + builtin handlers + deferred store；Phase 4.C 真实 notify handler；Phase 4.D scheduler consume + emit） |
+| 执行层（Phase 4.B + 4.C + 4.D + 4.E） | `services/action.ts` + `plugins/action-executor.ts` + `plugins/deferred-scheduler.ts` | Decision → ActionResult（registry + builtin handlers + deferred store；Phase 4.C 真实 notify handler；Phase 4.D scheduler consume + emit；Phase 4.E chatId 分组合并） |
 | 调试 | `plugins/dashboard.ts` | /dashboard HTML + /api/status + /api/events + /api/world-state + /api/attention + /debug/publish-event |
 
 > Python 版能力（桌面控制、瑞幸点单、联网搜索、截图）已在 Python 版删除时一并移除；如需迁移为 InfoAgent，见 `guide/orca-cordis-migration-plan.md`。
@@ -183,16 +184,17 @@ dev-log.md / TODO.md / README.md
 - **Phase 4.B（2026-08-27）**：Action Executor 执行层——ActionHandlerRegistry + 5 个 builtin handler（noop/remember/defer/notify-stub/act-stub）+ DeferredActionStore（仅 in-memory）+ orca/action-result 事件；ORCA_ACTION_ENABLED 默认 false（**安全默认**）。R14 smoke 86 用例（85 + Phase 4.B Review 修复 dispose race）覆盖 5 个 action 行为 + registry 生命周期 + 真实 infoStore 写入 + pending store + EventBus 集成 + dispose + act 安全边界（禁止任意 shell）。
 - **Phase 4.B Review（2026-08-27，commit 1b20710）**：修复 dispose race condition（plugin dispose 后 in-flight execute 完成时不应 emit / log）。新增 R14.10.2 反向验证：移除 disposed 闸门后失败，恢复后通过。
 - **Phase 4.C（2026-08-27）**：Orca 第一个真实 Action——NotifyHandler。EventBus.get(id) 按 eventId 反查原始 OrcaEvent（O(n) 线性扫描，仅作用于 sliding window；找不到返回 undefined）；NotifyHandler 验证 decision.eventId / event.source==='feishu' / event.data.chatId；dryRun 复用现有 OrcaConfig.dryRun；调用 FeishuClient.sendToChat 发送 `[Orca] ${priority}\n${reason}\n\n源消息: ${text.slice(0,200)}`。**严格分层**：Decision / DecisionEngine 不感知 Feishu；NotifyHandler 是 Feishu-aware 的；FeishuEventData 用 type guard narrow（不使用 any）。R15 smoke 54 用例覆盖 EventBus.get / state-only / source 校验 / Feishu context / dryRun / 真实发送 / 失败处理 / EventBus 集成 / 决策追踪。
-- **Phase 4.D（2026-08-27）**：DeferredActionStore scheduler——30s tick；user.status in {busy, sleeping} 时保留 pending；awake/away 时 consume pending + emit 'orca/decision'（defer→no_action 翻译防循环；不调 defer handler 避免 re-defer 死循环）；scheduler 不修改 Decision/Attention/WorldState；不调 ActionHandler；不调 store.clear()（store 生命周期独立于 scheduler）；disposed=true 后 tick 短路。DeferredActionStore.consume(pendingId) 原子删除能力（同一 pendingId 只能被 consume 一次；consume 后从 store 消失）。R17 smoke 71 用例覆盖 busy/sleeping/awake/eligibility/consume/def→no_action 翻译/dispose race/store 生命周期/E2E plugin-level。
+- **Phase 4.D（2026-08-27）**：DeferredActionStore scheduler——30s tick；user.status in {busy, sleeping} 时保留 pending；awake/away 时 consume pending + emit 'orca/decision'（defer→no_action 翻译防循环；不调 defer handler 避免 re-defer 死循环）；scheduler 不修改 Decision/Attention/WorldState；不调 ActionHandler；不调 store.clear()（store 生命周期独立于 scheduler）；disposed=true 后 tick 短路。DeferredActionStore.consume(pendingId) 原子删除能力（同一 pendingId 只能被 consume 一次；consume 后从 store 消失）。R17 smoke 72 用例覆盖 busy/sleeping/awake/eligibility/consume/def→no_action 翻译/dispose race/store 生命周期/E2E plugin-level。
+- **Phase 4.E（2026-08-27）**：Deferred Notification Aggregation——同 chatId 多条 pending 合并为单条 notify Decision（`groupPendingByChatId` / `createMergedDecision` / `composeMergedReason` 纯函数；merged.priority 取 group 最高；merged.reason = `你有 N 条待处理信息` + 每行 `- [source] priority: reason` + 超出 `MAX_MERGED_ITEMS=5` 时 `还有 X 条未展示`；ruleId=`deferred-merged`；merged 保留 first.eventId 供 NotifyHandler 反查 chatId）。单条 pending 保持原 Decision 语义；无 eventBus / 无法反查 chatId 的 entry 单独 emit（不误合并）；scheduler 不做 ruleId 去重（由 Attention 层负责）。R18 smoke 61 用例覆盖分组 / 文本格式 / priority 选择 / Decision 字段 / executeTick 合并路径 / E2E NotifyHandler 发送 / 循环防护。**未引入** ActionPlan / Decision metadata schema / 新 Action 类型 / Store API 变更。
 - **Python 版删除（2026-08-27）**：v2.3.0 全部源码移除，app-cordis 成为唯一主线
 
 ### 8.2 待办（TODO.md）
-- **Phase 4.E**：ActionPlan 拆分（payload / channel / target）；真实 act handler（最小权限 + 白名单校验）；支持 bark / 邮件等其他通知渠道（NotifyHandler 按 event.source 分支扩展）；urgency=2 推送门控；合并通知语义（defer→notify 翻译；消息合并策略）
+- **Phase 4.F**：ActionPlan 拆分（payload / channel / target）；真实 act handler（最小权限 + 白名单校验）；支持 bark / 邮件等其他通知渠道（NotifyHandler 按 event.source 分支扩展）；urgency=2 推送门控
 - 迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull）
 - 会话持久化（jsonl）；独立飞书 bot 的 app_id 路由（远期）
 - 飞书事件订阅加密模式支持（技术债）
 
-### 8.3 关键架构约束（Phase 3.A + Phase 4.A + Phase 4.B + Phase 4.D 确定，Attention/Decision/Action 必读）
+### 8.3 关键架构约束（Phase 3.A + Phase 4.A + Phase 4.B + Phase 4.D + Phase 4.E 确定，Attention/Decision/Action 必读）
 - **Attention Rule predicate 判断"事件发生前状态"必须用 `prevState`**；`state` 是事件处理后（reducer 已应用）的世界。
 - 错误示范：`predicate: ({ state }) => state.user.status === 'away'`（reducer 改 awake 后永远不触发）；正确：`predicate: ({ prevState }) => prevState?.user.status === 'away'`。
 - `prevState` 在 state-only 触发时为 `undefined`；event 触发时由 `ws.getPrevState()` 提供。
@@ -245,4 +247,4 @@ dev-log.md / TODO.md / README.md
 
 ---
 
-*维护者：ka。本文档与代码同步于 **app-cordis v0.6.0 + Phase 4.D（2026-08-27，Python 版已删除）**。*
+*维护者：ka。本文档与代码同步于 **app-cordis v0.6.0 + Phase 4.E（2026-08-27，Python 版已删除）**。*
