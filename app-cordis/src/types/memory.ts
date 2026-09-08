@@ -158,9 +158,9 @@ export interface ForgetMarker {
  */
 export interface Episode {
   id: string
-  category: 'message' | 'state'
-  /** message.burst | state.transition */
-  kind: 'message.burst' | 'state.transition'
+  category: 'message' | 'state' | 'communication'
+  /** message.burst | state.transition | im.burst */
+  kind: 'message.burst' | 'state.transition' | 'im.burst'
   /** 确定性规则生成；MVP 不调用 LLM */
   summary: string
   ts: number
@@ -178,8 +178,8 @@ export interface Episode {
 // ── Episode Query ───────────────────────────────────────────────────────
 
 export interface EpisodeQuery {
-  category?: 'message' | 'state'
-  kind?: 'message.burst' | 'state.transition'
+  category?: 'message' | 'state' | 'communication'
+  kind?: 'message.burst' | 'state.transition' | 'im.burst'
   /** ts >= today 00:00 UTC */
   today?: boolean
   /** 按 ts 降序，返回最多 limit 条 */

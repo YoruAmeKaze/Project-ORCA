@@ -6,6 +6,8 @@ import type { FeishuMessageEvent } from './feishu-channel.js'
 import type { InfoRecord } from '../agents/types.js'
 import type { InfoAgentRegistry } from '../agents/registry.js'
 import type { JsonlInfoRecordStore } from '../agents/store.js'
+import type { ContextAssembler } from '../types/context.js'
+import type { WorldState } from '../types/worldState.js'
 
 /** 饮食类问题关键词（R0 查档触发，命中档案即复用，不重复调视觉模型） */
 const FOOD_QUERY_RE = /(卡路里|热量|千卡|kcal|吃了|摄入|饮食|早饭|午饭|晚饭|早餐|午餐|晚餐|吃)/i
@@ -63,7 +65,16 @@ export async function handleDeleteIntent(text: string, store: JsonlInfoRecordSto
  */
 export function agent(ctx: Context, config: OrcaConfig) {
   ctx.on('feishu/message', async (msg: FeishuMessageEvent) => {
-    const { feishu, llm, sessions } = ctx
+    const { feishu, llm, sessions, worldState, contextAssembler } = ctx as {
+      feishu: { sendToChat(chatId: string, text: string): Promise<void> }
+      llm: { chat(messages: ChatMessage[]): Promise<string> }
+      sessions: { push(id: string, turn: { role: string; content: string }): void; get(id: string): { role: string; content: string }[] }
+      worldState?: { getState(): WorldState }
+      contextAssembler?: ContextAssembler
+      infoAgents: InfoAgentRegistry
+      infoStore: JsonlInfoRecordStore
+      logger: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void }
+    }
     try {
       // CEO 前置 0：删除命令（确定性执行，不进 LLM、不进历史）
       const deleteReply = await handleDeleteIntent(msg.text, ctx.infoStore)
@@ -77,12 +88,30 @@ export function agent(ctx: Context, config: OrcaConfig) {
 
       // CEO 前置：R0 查档案（D-AGENT-10）+ 待汇报队列（D-AGENT-11，urgency=1）
       const archive = await buildArchiveContext(ctx.infoAgents, ctx.infoStore, msg.text)
-      const system = personaPrompt() + (archive.context ? `\n\n${archive.context}` : '')
+
+      // Phase 6.B：Memory context via ContextAssembler
+      let memoryContext = ''
+      if (contextAssembler && worldState) {
+        try {
+          const ws = worldState.getState()
+          const result = await contextAssembler.assemble(msg.text, ws)
+          // 只注入 memory facts 部分（summary 已包含 WorldState+R2+R3；这里只追加 R3）
+          if (result.memoryFacts.length > 0) {
+            const memLines = result.memoryFacts.map((f) => f.formatted)
+            memoryContext = `\n\n【长期记忆】以下事实来自你的长期记忆（直接引用，无需核实）：\n${memLines.join('\n')}`
+          }
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err)
+          ctx.logger.warn('[agent] ContextAssembler assemble failed: %s（不影响主流程）', detail)
+        }
+      }
+
+      const system = personaPrompt() + (archive.context ? `\n\n${archive.context}` : '') + memoryContext
 
       const history = sessions.get(msg.sessionId)
       const messages: ChatMessage[] = [
         { role: 'system', content: system },
-        ...history.map((turn) => ({ role: turn.role, content: turn.content })),
+        ...history.map((turn) => ({ role: turn.role as ChatMessage['role'], content: turn.content })),
       ]
       const reply = await llm.chat(messages)
       sessions.push(msg.sessionId, { role: 'assistant', content: reply })
@@ -115,19 +144,41 @@ export function agent(ctx: Context, config: OrcaConfig) {
   ctx.on('dashboard/message', async (payload: { text: string; id: string }) => {
     const DASHBOARD_SESSION = 'dashboard'
     try {
-      const { eventBus, llm, sessions, infoAgents, infoStore } = ctx as {
+      const { eventBus, llm, sessions, infoAgents, infoStore, worldState, contextAssembler } = ctx as {
         eventBus: { publish(input: { source: string; type: string; data: Record<string, unknown>; priority?: number }): void }
         llm: { chat(messages: { role: string; content: string }[]): Promise<string> }
         sessions: { push(id: string, turn: { role: string; content: string }): void; get(id: string): { role: string; content: string }[] }
         infoAgents: { list(): { meta: { name: string; recordTypes?: string[] } }[] }
         infoStore: { query(opts: { namespaces?: string[]; types?: string[]; limit?: number }): Promise<unknown[]> }
+        worldState?: { getState(): WorldState }
+        contextAssembler?: ContextAssembler
         logger: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void }
       }
       const archive = await buildArchiveContext(infoAgents as Parameters<typeof buildArchiveContext>[0], infoStore as Parameters<typeof buildArchiveContext>[1], payload.text)
-      const system = personaPrompt() + (archive.context ? `\n\n${archive.context}` : '')
+
+      // Phase 6.B：Memory context via ContextAssembler
+      let memoryContext = ''
+      if (contextAssembler && worldState) {
+        try {
+          const ws = worldState.getState()
+          const result = await contextAssembler.assemble(payload.text, ws)
+          if (result.memoryFacts.length > 0) {
+            const memLines = result.memoryFacts.map((f) => f.formatted)
+            memoryContext = `\n\n【长期记忆】以下事实来自你的长期记忆（直接引用，无需核实）：\n${memLines.join('\n')}`
+          }
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err)
+          ctx.logger.warn('[dashboard-chat] ContextAssembler failed: %s', detail)
+        }
+      }
+
+      const system = personaPrompt() + (archive.context ? `\n\n${archive.context}` : '') + memoryContext
       sessions.push(DASHBOARD_SESSION, { role: 'user', content: payload.text })
       const history = sessions.get(DASHBOARD_SESSION)
-      const messages = [{ role: 'system', content: system }, ...history.map((t) => ({ role: t.role, content: t.content }))]
+      const messages: ChatMessage[] = [
+        { role: 'system', content: system },
+        ...history.map((t) => ({ role: t.role as ChatMessage['role'], content: t.content })),
+      ]
       const reply = await llm.chat(messages)
       sessions.push(DASHBOARD_SESSION, { role: 'assistant', content: reply })
       ctx.logger.info('[dashboard-chat] 回复: %s', reply.slice(0, 80))
@@ -192,4 +243,4 @@ function summarizePayload(payload: unknown): string {
   return s.length > 80 ? `${s.slice(0, 80)}…` : s
 }
 
-agent.inject = ['feishu', 'llm', 'sessions', 'infoAgents', 'infoStore', 'eventBus']
+agent.inject = ['feishu', 'llm', 'sessions', 'infoAgents', 'infoStore', 'eventBus', 'worldState', 'contextAssembler']

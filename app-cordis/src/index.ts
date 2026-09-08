@@ -4,7 +4,7 @@ import { getConfig, loadOrcaEnv } from './config.js'
 import { FeishuClient } from './services/feishu.js'
 import { LlmClient } from './services/llm.js'
 import { VisionClient } from './services/vision.js'
-import { SessionStore } from './session.js'
+import { JsonlSessionStore } from './services/sessionStore.js'
 import { feishuChannel } from './plugins/feishu-channel.js'
 import { agent } from './plugins/agent.js'
 import { infoAgents } from './plugins/info-agents.js'
@@ -20,6 +20,11 @@ import { deferredScheduler } from './plugins/deferred-scheduler.js'
 import { pcAdapter } from './plugins/input-adapters/pc-adapter.js'
 import { calendarAdapter } from './plugins/input-adapters/calendar-adapter.js'
 import { phoneAdapter } from './plugins/input-adapters/phone-adapter.js'
+import { schedulerAdapter } from './plugins/input-adapters/scheduler-adapter.js'
+import { imAdapter } from './plugins/input-adapters/im-adapter.js'
+import { imObservationAdapter } from './plugins/im-observation-adapter.js'
+import { scheduledRuleRegistry } from './plugins/scheduled-rule-registry.js'
+import { createScheduledRulesFromConfig } from './rules/scheduled/factory.js'
 import { createMemoryStore } from './services/memoryStore.js'
 import { episodeEnginePlugin } from './plugins/episode-engine.js'
 import { memoryAttentionAdapter } from './plugins/memory-attention-adapter.js'
@@ -51,7 +56,7 @@ ctx.logger.exporter(logExporter)
 ctx.provide('feishu', new FeishuClient(config.feishu))
 ctx.provide('llm', new LlmClient(config.llm))
 ctx.provide('vision', new VisionClient(config.qwen))
-ctx.provide('sessions', new SessionStore(config.historyTurns))
+ctx.provide('sessions', new JsonlSessionStore(config.historyTurns, config.sessionsDir))
 // Phase 5.0：MemoryStore（LongMemory mutation authority；所有写必须经过此接口）
 if (config.memory.enabled) {
   // Phase 5.4.B: 将 ctx.emit 绑定为 memory_changed 事件发射器
@@ -64,10 +69,34 @@ if (config.memory.enabled) {
   ctx.logger.info('[orca-cordis] MemoryStore 未启用（ORCA_MEMORY_ENABLED=0 关闭）')
 }
 
+// Phase 6.A：ContextAssembler（CEO Context Assembly）
+import { createContextAssembler } from './services/contextAssembler.js'
+import type { JsonlInfoRecordStore } from './agents/store.js'
+if (config.contextAssembler.enabled) {
+  const memory = ctx.get('memory')
+  const infoStore = ctx.get('infoStore') as JsonlInfoRecordStore | undefined
+  if (memory && infoStore) {
+    ctx.provide('contextAssembler', createContextAssembler(memory, infoStore, config.contextAssembler, {
+      info: ctx.logger.info.bind(ctx.logger),
+      warn: ctx.logger.warn.bind(ctx.logger),
+    }))
+    ctx.logger.info('[orca-cordis] Phase 6.A ContextAssembler 已启用（memoryTopK=%d, budgetChars=%d）',
+      config.contextAssembler.memoryTopK, config.contextAssembler.memoryBudgetChars)
+  } else {
+    ctx.logger.warn('[orca-cordis] ContextAssembler 跳过：memory=%s, infoStore=%s（需 MemoryStore + InfoRecordStore 均启用）',
+      !!memory, !!infoStore)
+  }
+}
+
 // 插件装配
 ctx.plugin(feishuChannel, config)
 ctx.plugin(infoAgents, config) // 信息获取框架（InfoAgent 注册表 + 档案室）
 ctx.plugin(infoReceiver, config) // 外部 App Push 通道（POST /info/records）
+
+// Phase 7.1A：RuntimeAdapters 统一生命周期管理（GPT Review Phase 7.0）
+// 在 if (runtime.enabled) 外部声明，以便在 shutdown handler 中引用
+const runtimeAdapters: { stop(): void | Promise<void> }[] = []
+
 ctx.plugin(imageRouter, config) // 图片事件路由层（D-AGENT-15：chat_id → agent 工位分配；food 管线由路由接收）
 ctx.plugin(dashboard, config)    // Orca 仪表盘（状态监控 UI）
 // Orca Persistent Context Runtime（默认关闭；ORCA_RUNTIME_ENABLED=1 启用，挂载在 agent 之前以便订阅 feishu 事件）
@@ -105,19 +134,61 @@ if (config.runtime.enabled) {
   } else {
     ctx.logger.info('[orca-cordis] Attention Engine 未启用（ORCA_ATTENTION_ENABLED=0 关闭）')
   }
+
+  // Phase 7.1A：RuntimeAdapters（GPT Review Phase 7.0）
+  // 统一 { start(), stop() } 接口，统一生命周期管理
+  // 所有事件通过 EventBus → WorldStateUpdater 路径
+
+  // Scheduler adapter（emit scheduler:tick/briefing:due/reflection:due/reminder:due）
+  const schedulerRuntimeAdapter = schedulerAdapter(ctx, config)
+  if (config.runtime.scheduler.enabled) {
+    runtimeAdapters.push(schedulerRuntimeAdapter)
+    ctx.logger.info('[orca-cordis] Scheduler adapter 已启用（Phase 7.1A）')
+  }
+
   // Phase 2.D：mock 输入 adapter（pc/calendar/phone），全部默认 disabled
   if (config.runtime.pc.enabled) {
-    pcAdapter(ctx, config)
+    const pcRuntimeAdapter = pcAdapter(ctx, config)
+    runtimeAdapters.push(pcRuntimeAdapter)
     ctx.logger.info('[orca-cordis] PC adapter 已启用（mock）')
   }
   if (config.runtime.calendar.enabled) {
-    calendarAdapter(ctx, config)
+    const calendarRuntimeAdapter = calendarAdapter(ctx, config)
+    runtimeAdapters.push(calendarRuntimeAdapter)
     ctx.logger.info('[orca-cordis] Calendar adapter 已启用（mock）')
   }
   if (config.runtime.phone.enabled) {
-    phoneAdapter(ctx, config)
+    const phoneRuntimeAdapter = phoneAdapter(ctx, config)
+    runtimeAdapters.push(phoneRuntimeAdapter)
     ctx.logger.info('[orca-cordis] Phone adapter 已启用（mock）')
   }
+
+  // IM Bridge（IM-1.0 Phase；mock 模式）
+  if (config.runtime.im.enabled) {
+    const imRuntimeAdapter = imAdapter(ctx, config)
+    runtimeAdapters.push(imRuntimeAdapter)
+    ctx.logger.info('[orca-cordis] IM adapter 已启用（IM-1.0，platform=%s）', config.runtime.im.platform)
+  } else {
+    ctx.logger.info('[orca-cordis] IM adapter 未启用（ORCA_IM_ENABLED=0 或未配置；IM-1.0 仅 mock）')
+  }
+
+  // IM Observation（IM-1.5A Phase；订阅 EventBus im.* 事件，生成 CommunicationSignal）
+  ctx.plugin(imObservationAdapter, config)
+
+  // Phase 7.1B：ScheduledRuleRegistry（订阅 scheduler:tick，评估 rules，发射 business events）
+  ctx.plugin(scheduledRuleRegistry)
+  // Phase 7.2：Rule Factory——根据配置注册 enabled 的规则
+  const scheduledRules = createScheduledRulesFromConfig(config.runtime.scheduler?.scheduledRules)
+  if (scheduledRules.length > 0) {
+    const registry = ctx.get('scheduledRuleRegistry')
+    if (registry) {
+      for (const rule of scheduledRules) {
+        registry.register(rule)
+      }
+      ctx.logger.info('[orca-cordis] ScheduledRules 已注册（Phase 7.2：%d 条）', scheduledRules.length)
+    }
+  }
+
   // Phase 5.1：EpisodeEngine（依赖 EventBus + WorldState，仅在 Runtime 启用时挂载）
   if (config.memory.enabled) {
     ctx.plugin(episodeEnginePlugin)
@@ -145,6 +216,15 @@ ctx.logger.info(
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     ctx.logger.info('收到 %s，正在退出…', signal)
+    // 停止所有 RuntimeAdapters
+    for (const adapter of runtimeAdapters) {
+      try {
+        adapter.stop()
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        ctx.logger.warn('[orca-cordis] RuntimeAdapter.stop() 异常: %s', detail)
+      }
+    }
     // 级联清理：root context 的 fiber.dispose()（fork 类型未声明，运行时存在则调用）
     const fiber = (ctx as unknown as { fiber?: { dispose?: () => Promise<void> } }).fiber
     const done = fiber?.dispose ? fiber.dispose() : Promise.resolve()

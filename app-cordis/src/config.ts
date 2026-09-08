@@ -30,6 +30,40 @@ export interface InfoReceiverConfig {
 }
 
 /**
+ * IM Observation 配置（IM-1.5A Phase）
+ */
+export interface OrcaIMObservationConfig {
+  /** 是否启用（默认 false） */
+  enabled: boolean
+  /** 突发检测窗口（毫秒），默认 60 分钟 */
+  burstWindowMs: number
+  /** 突发最小消息数，默认 3 */
+  burstMinCount: number
+  /** 是否写入 im.burst Episode（IM-2.0 范围，默认 false） */
+  emitEpisodes: boolean
+}
+
+/**
+ * IM Bridge Adapter 配置（IM-1.0 Phase）
+ */
+export interface OrcaIMConfig {
+  /** 是否启用（默认 false） */
+  enabled: boolean
+  /** 平台来源（'im.qq' | 'im.wechat'）*/
+  platform: 'im.qq' | 'im.wechat'
+  /** 适配器模式 */
+  mode: 'mock' | 'http' | 'ws'
+  /** Mock 模式消息模拟间隔（毫秒）；仅 mode=mock 使用 */
+  mockIntervalMs: number
+  /** QQ NapCatQQ HTTP Server 配置（mode=http 时使用）*/
+  qq?: {
+    httpHost: string
+    httpPort: number
+    accessToken?: string
+  }
+}
+
+/**
  * Orca Persistent Context Runtime 配置（Phase 0+1 最小版）。
  * ORCA_RUNTIME_ENABLED=1 才会挂载 orcaRuntime plugin（默认 0 关闭，零侵入）。
  */
@@ -40,6 +74,8 @@ export interface OrcaRuntimeConfig {
   eventWindowSize: number
   /** Phase 2.A WorldState 子配置 */
   worldState: OrcaWorldStateConfig
+  /** Phase 7.1A Scheduler adapter 配置（默认 enabled=false） */
+  scheduler: OrcaSchedulerConfig
   /** Phase 2.D PC adapter 配置（默认 enabled=false） */
   pc: OrcaInputAdapterConfig
   /** Phase 2.D Calendar adapter 配置（默认 enabled=false） */
@@ -52,6 +88,10 @@ export interface OrcaRuntimeConfig {
   decision: OrcaDecisionConfig
   /** Phase 4.B Action Executor 子配置 */
   action: OrcaActionConfig
+  /** IM Bridge Adapter 配置（IM-1.0 Phase；默认 enabled=false，mock 模式） */
+  im: OrcaIMConfig
+  /** IM Observation 配置（IM-1.5A Phase；默认 enabled=false） */
+  imObservation: OrcaIMObservationConfig
 }
 
 /**
@@ -100,6 +140,40 @@ export interface OrcaWorldStateConfig {
 }
 
 /**
+ * Scheduler Adapter 配置（Phase 7.1A：纯 Time Producer）
+ *
+ * Scheduler 是"纯时间信号生产者"，只产生 scheduler:tick 事件。
+ * 业务逻辑（briefing/reflection/reminder）由 ScheduledRuleRegistry（7.1B）订阅后决策。
+ */
+export interface OrcaSchedulerConfig {
+  /** 是否启用（默认 false） */
+  enabled: boolean
+  /** tick 心跳间隔（毫秒，默认 60000） */
+  tickMs?: number
+  /** Phase 7.2：Scheduled Rules 配置（按需启用） */
+  scheduledRules?: OrcaScheduledRulesConfig
+}
+
+/**
+ * Phase 7.2：Scheduled Rules 子配置
+ */
+export interface OrcaScheduledRulesConfig {
+  briefing?: OrcaScheduledRuleConfig
+  reflection?: OrcaScheduledRuleConfig
+  reminder?: OrcaScheduledRuleConfig
+}
+
+/**
+ * Phase 7.2：单个 Scheduled Rule 配置
+ */
+export interface OrcaScheduledRuleConfig {
+  /** 是否启用（默认 false） */
+  enabled?: boolean
+  /** 触发间隔（毫秒）；默认 4h（briefing）/ 24h（reflection）/ 1h（reminder） */
+  intervalMs?: number
+}
+
+/**
  * 输入 adapter 子配置（Phase 2.D，pc/calendar/phone 共用）。
  */
 export interface OrcaInputAdapterConfig {
@@ -131,6 +205,24 @@ export interface OrcaMemoryConfig {
   attentionTopK: number
 }
 
+/** Phase 6.A + Phase 6.C.1 ContextAssembler 配置 */
+export interface OrcaContextAssemblerConfig {
+  /** 是否启用（默认 true） */
+  enabled: boolean
+  /** Memory facts Top-K（默认 10） */
+  memoryTopK: number
+  /** 单条 fact 格式化后最大字符数（默认 80） */
+  memoryPerFactChars: number
+  /** Memory facts 总字符数预算（默认 500） */
+  memoryBudgetChars: number
+  /** InfoRecords 最近条目数（默认 3） */
+  infoRecordsLimit: number
+  /** Scoring preset（默认 'confidence'，Phase 6.C.1） */
+  scoringPreset: 'confidence' | 'source-confidence'
+  /** 是否启用 L3 语义冲突检测（默认 false，Phase 6.C.2） */
+  detectSemanticConflict: boolean
+}
+
 export interface OrcaConfig {
   host: string
   port: number
@@ -141,6 +233,8 @@ export interface OrcaConfig {
   historyTurns: number
   infoRecordsDir: string
   imagesDir: string
+  /** Phase 7.3 Session 持久化目录 */
+  sessionsDir: string
   infoReceiver: InfoReceiverConfig
   /** 会话绑定路由（D-AGENT-15）：chat_id → agent 名，未绑定会话 → 默认 Orca 主管线 */
   chatBindings: Record<string, string>
@@ -148,6 +242,8 @@ export interface OrcaConfig {
   runtime: OrcaRuntimeConfig
   /** Phase 5.0 LongMemory MemoryStore */
   memory: OrcaMemoryConfig
+  /** Phase 6.A ContextAssembler */
+  contextAssembler: OrcaContextAssemblerConfig
 }
 
 const here = dirname(fileURLToPath(import.meta.url)) // app-cordis/src
@@ -226,6 +322,7 @@ export function getConfig(): OrcaConfig {
     historyTurns: Number(process.env.ORCA_HISTORY_TURNS ?? 10),
     infoRecordsDir: process.env.INFO_RECORDS_DIR || resolve(appRoot, 'data', 'records'),
     imagesDir: process.env.IMAGES_DIR || resolve(appRoot, 'data', 'images'),
+    sessionsDir: process.env.ORCA_SESSIONS_DIR || resolve(appRoot, 'data', 'sessions'),
     infoReceiver: {
       port: Number(process.env.INFO_RECEIVER_PORT ?? 8101),
       tokens: receiverTokens,
@@ -240,6 +337,26 @@ export function getConfig(): OrcaConfig {
         // Phase 2.C：time tick 间隔（默认 60000ms）
         timeRefreshMs: Number(process.env.ORCA_WORLD_STATE_REFRESH_MS ?? 60_000),
       },
+      // Phase 7.1A：Scheduler adapter（纯 Time Producer）
+      scheduler: {
+        enabled: process.env.ORCA_SCHEDULER_ENABLED === '1',
+        tickMs: Number(process.env.ORCA_SCHEDULER_TICK_MS ?? 60_000),
+        // Phase 7.2：Scheduled Rules 配置
+        scheduledRules: {
+          briefing: {
+            enabled: process.env.ORCA_SCHEDULER_BRIEFING_ENABLED === '1',
+            intervalMs: Number(process.env.ORCA_SCHEDULER_BRIEFING_INTERVAL_MS ?? 4 * 60 * 60 * 1000),
+          },
+          reflection: {
+            enabled: process.env.ORCA_SCHEDULER_REFLECTION_ENABLED === '1',
+            intervalMs: Number(process.env.ORCA_SCHEDULER_REFLECTION_INTERVAL_MS ?? 24 * 60 * 60 * 1000),
+          },
+          reminder: {
+            enabled: process.env.ORCA_SCHEDULER_REMINDER_ENABLED === '1',
+            intervalMs: Number(process.env.ORCA_SCHEDULER_REMINDER_INTERVAL_MS ?? 60 * 60 * 1000),
+          },
+        },
+      },
       pc: {
         // 默认 disabled（Phase 2.D 第一版 mock，需要显式启用）
         enabled: process.env.ORCA_PC_ENABLED === '1',
@@ -252,6 +369,25 @@ export function getConfig(): OrcaConfig {
       phone: {
         enabled: process.env.ORCA_PHONE_ENABLED === '1',
         refreshMs: Number(process.env.ORCA_PHONE_REFRESH_MS ?? 300_000),
+      },
+      // IM Bridge（IM-1.0 Phase；默认 disabled，mock 模式）
+      im: {
+        enabled: process.env.ORCA_IM_ENABLED === '1',
+        platform: (process.env.ORCA_IM_PLATFORM === 'im.wechat' ? 'im.wechat' : 'im.qq') as 'im.qq' | 'im.wechat',
+        mode: (process.env.ORCA_IM_MODE as 'mock' | 'http' | 'ws') ?? 'mock',
+        mockIntervalMs: Number(process.env.ORCA_IM_MOCK_INTERVAL_MS ?? 5_000),
+        qq: {
+          httpHost: process.env.ORCA_IM_QQ_HTTP_HOST ?? '127.0.0.1',
+          httpPort: Number(process.env.ORCA_IM_QQ_PORT ?? 3000),
+          accessToken: process.env.ORCA_IM_QQ_ACCESS_TOKEN || undefined,
+        },
+      },
+      // IM Observation（IM-1.5A Phase；默认 disabled）
+      imObservation: {
+        enabled: process.env.ORCA_IM_OBSERVATION_ENABLED === '1',
+        burstWindowMs: Number(process.env.ORCA_IM_OBSERVATION_BURST_WINDOW_MS ?? 60 * 60 * 1000),
+        burstMinCount: Number(process.env.ORCA_IM_OBSERVATION_BURST_MIN_COUNT ?? 3),
+        emitEpisodes: process.env.ORCA_IM_OBSERVATION_EMIT_EPISODES === '1',
       },
       attention: {
         // 默认启用（Phase 3 第一版：纯评估不执行任何 action，安全默认）
@@ -282,6 +418,16 @@ export function getConfig(): OrcaConfig {
       attentionEnabled: process.env.ORCA_MEMORY_ATTENTION_ENABLED !== '0',
       attentionPollIntervalMs: Number(process.env.ORCA_MEMORY_ATTENTION_POLL_INTERVAL_MS ?? 60_000),
       attentionTopK: Number(process.env.ORCA_MEMORY_ATTENTION_TOP_K ?? 5),
+    },
+    // Phase 6.A + Phase 6.C.1 + Phase 6.C.2
+    contextAssembler: {
+      enabled: process.env.ORCA_MEMORY_CONTEXT_ENABLED !== '0',
+      memoryTopK: Number(process.env.ORCA_MEMORY_CONTEXT_TOP_K ?? 10),
+      memoryPerFactChars: Number(process.env.ORCA_MEMORY_CONTEXT_PER_FACT_CHARS ?? 80),
+      memoryBudgetChars: Number(process.env.ORCA_MEMORY_CONTEXT_BUDGET_CHARS ?? 500),
+      infoRecordsLimit: Number(process.env.ORCA_MEMORY_CONTEXT_INFO_RECORDS_LIMIT ?? 3),
+      scoringPreset: (process.env.ORCA_MEMORY_SCORING_PRESET as 'confidence' | 'source-confidence') ?? 'confidence',
+      detectSemanticConflict: process.env.ORCA_MEMORY_CONFLICT_DETECT_SEMANTIC === '1',
     },
   }
 }

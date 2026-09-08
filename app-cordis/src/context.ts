@@ -17,6 +17,7 @@ import type { WorldState } from './types/worldState.js'
 import type { AttentionItem } from './types/attention.js'
 import type { Decision } from './types/decision.js'
 import type { ActionResult } from './types/action.js'
+import type { ContextAssembler } from './types/context.js'
 
 /**
  * 向 Cordis Context 声明本项目提供的服务与用到的混合方法。
@@ -37,6 +38,7 @@ declare module '@deepseek-ai/cordis' {
     attention: AttentionEngineService
     decision: DecisionEngineService
     actionExecutor: ActionExecutorService
+    contextAssembler: ContextAssembler
     on(name: string, listener: (...args: any[]) => any, options?: unknown): () => boolean
     emit(name: string, ...args: any[]): void
     plugin(plugin: unknown, config?: unknown): unknown

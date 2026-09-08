@@ -13,9 +13,13 @@ export const ORCA_EVENT_KNOWN_SOURCES = [
   'calendar',        // 日历事件
   'pc',              // 电脑状态（焦点/进程/电池）
   'phone',           // 手机推送
+  'scheduler',       // 内部调度器（Phase 7.1A 新增）
   'iot',             // 智能家居
   'environment',     // 环境传感器
   'internal',        // Orca 内部事件（自检/状态变更）
+  // IM Bridge（IM-1.0 新增）
+  'im.qq',           // QQ 消息（NapCatQQ）
+  'im.wechat',       // 微信消息（openclaw-weixin）
 ] as const
 
 export type OrcaEventSource = (typeof ORCA_EVENT_KNOWN_SOURCES)[number] | (string & {})
@@ -28,6 +32,14 @@ export const ORCA_EVENT_KNOWN_TYPES = [
   'sensor',          // 通用传感器数据
   'state_changed',   // 状态变更（来自 World State，Phase 2）
   'user_action',     // 用户主动行为
+  // Phase 7.1A：scheduler 事件（GPT Review Phase 7.0）
+  'scheduler:tick',     // 心跳事件
+  'briefing:due',       // 简报提醒（source='scheduler'，Phase 7.1B）
+  'reflection:due',     // 反思提醒（source='scheduler'）
+  'reminder:due',       // 通用提醒（source='scheduler'）
+  // IM Bridge（IM-1.0 新增）
+  'im.message.received', // IM 收到消息
+  'im.message.sent',    // IM Orca 发出消息
 ] as const
 
 export type OrcaEventType = (typeof ORCA_EVENT_KNOWN_TYPES)[number] | (string & {})

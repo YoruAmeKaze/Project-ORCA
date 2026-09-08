@@ -1,6 +1,6 @@
 # Project Orca — Agent 启动上下文（AGENT.md）
 
-> **给新会话/新代理的启动引导**：开工前先通读本文档，再按需深读具体文件。本文档是当前代码（**app-cordis v0.6.4 + Phase 5.4.B**）+ 设计稿（**Phase 5.4 D-AGENT-19 + guide/orca-memory-consumption-design.md**）的权威快照。
+> **给新会话/新代理的启动引导**：开工前先通读本文档，再按需深读具体文件。本文档是当前代码（**app-cordis v1.0.0 + Phase 7.1B 全部完成**）+ 设计稿（**Phase 7.3 Architecture Review + IM Bridge IM-1.0 + guide/orca-memory-quality-design.md**）的权威快照。
 > 与 `README.md`（对外概述）、`dev-log.md`（历史日志）、`TODO.md`（待办）配合使用；冲突时**以本文档 + 源码为准**。
 > **维护规则（硬性，见 `guide/decisions.md` D-VER-04）**：每次代码有实质变更（新机制、版本升级），**提交前必须同步本文档**——改目录结构/机制/配置键/版本号/待办中任一项即必改对应板块；dev-log 条目末尾标注"AGENT.md 已同步"。代码改了但本文档停在旧状态 = 违规提交。
 
@@ -39,8 +39,10 @@ npm start                         # node dist/index.js；或 npm run dev（tsx w
   → image-router（D-AGENT-15：chat_id → agent 工位分配）
   → [Orca Runtime，ORCA_RUNTIME_ENABLED=1 启用]
       feishu-adapter → EventBus（滑动窗口 200）
-        → WorldStateUpdater（reducer 注册表 + time tick）→ WorldStateService
-        → pc/calendar/phone adapters（mock，默认 disabled）
+        → WorldStateUpdater（Reducer 注册表）→ WorldStateService
+        → RuntimeAdapters（Phase 7.1A：统一 { start(), stop() } 接口）
+        → SchedulerAdapter（emit scheduler:tick 仅；纯 Time Producer）
+        → PC/Calendar/Phone adapters（mock，默认 disabled）
         → AttentionEngine（Phase 3：规则评估 → dedup → throttle）→ emit 'orca/attention'
         → DecisionEngine（Phase 4.A：纯决策层，AttentionItem → Decision）→ emit 'orca/decision'
         → ActionExecutor（Phase 4.B + 4.D + Phase 5.2：registry + builtin handlers + deferred store + scheduler consume + memory.remember/forget）→ emit 'orca/action-result'
@@ -73,11 +75,12 @@ app-cordis/                    # ★ Cordis/TypeScript 版（唯一主线）
 │   │   ├── context.ts         # Cordis Context 类型增强（feishu/llm/vision/sessions/info*/eventBus/worldState/attention/decision）
 │   │   ├── session.ts         # SessionStore：内存会话
 │   │   ├── agents/            # 信息获取框架：types/registry（闭集）/store（档案室 JSONL）/executor（Pull）/router（R0+R1）/builtins/food-log.ts（food-agent）
-│   │   ├── services/          # feishu / llm（DeepSeek）/ vision（Qwen VL）/ eventBus / worldState / attention / attention-config / decision / action / memoryStore（Phase 5.0）/ episodeEngine（Phase 5.1）/ reflectionEngine（Phase 5.3）
-│   │   ├── plugins/           # feishu-channel / agent / info-agents / info-receiver / image-router / food-image / dashboard / orca-runtime / world-state-updater / attention-engine / decision-engine / action-executor / episode-engine（Phase 5.1）/ reflection-engine（Phase 5.3）/ input-adapters/{feishu,pc,calendar,phone}-adapter
-│   │   ├── types/             # event.ts（OrcaEvent）/ worldState.ts / attention.ts / decision.ts / action.ts / memory.ts（Phase 5.0+5.1：LongMemoryFact / MemoryCandidate / AuditEvent / ForgetMarker / Episode / MemoryStore 接口）
+│   │   ├── services/          # feishu / llm（DeepSeek）/ vision（Qwen VL）/ eventBus / worldState / attention / attention-config / decision / action / memoryStore（Phase 5.0）/ episodeEngine（Phase 5.1）/ reflectionEngine（Phase 5.3）/ scheduledRuleRegistry（Phase 7.1B）
+│   │   ├── plugins/           # feishu-channel / agent / info-agents / info-receiver / image-router / food-image / dashboard / orca-runtime / world-state-updater / attention-engine / decision-engine / action-executor / episode-engine（Phase 5.1）/ reflection-engine（Phase 5.3）/ scheduled-rule-registry（Phase 7.1B）/ input-adapters/{feishu,pc,calendar,phone,scheduler}-adapter
+│   │   ├── types/             # event.ts（OrcaEvent）/ worldState.ts / attention.ts / decision.ts / action.ts / memory.ts（Phase 5.0+5.1：LongMemoryFact / MemoryCandidate / AuditEvent / ForgetMarker / Episode / MemoryStore 接口）/ runtime-adapter.ts（Phase 7.1A）/ scheduled-rule.ts（Phase 7.1B）
+│   │   ├── rules/scheduled/   # briefing.ts / reflection.ts（Phase 7.1B deterministic rules）
 │   │   └── data/              # records/ 档案室 JSONL + images/ 图片落盘（gitignore）
-│   └── scripts/               # smoke-info-agent / smoke-world-state / smoke-attention / smoke-decision / smoke-action / smoke-memory（Phase 5.0） / smoke-episode（Phase 5.1） / smoke-memory-handler（Phase 5.2） / smoke-reflection（Phase 5.3） / smoke-d-agent-18（Phase 5.3.1） / smoke-memory-attention（Phase 5.4.A） / smoke-memory-event-bridge（Phase 5.4.B） / recognize-food / list-food
+│   └── scripts/               # smoke-info-agent / smoke-world-state / smoke-attention / smoke-decision / smoke-action / smoke-memory（Phase 5.0） / smoke-episode（Phase 5.1） / smoke-memory-handler（Phase 5.2） / smoke-reflection（Phase 5.3） / smoke-d-agent-18（Phase 5.3.1） / smoke-memory-attention（Phase 5.4.A） / smoke-memory-event-bridge（Phase 5.4.B） / smoke-scheduled-rule-registry（Phase 7.1B） / smoke-briefing-rule（Phase 7.1B） / smoke-reflection-rule（Phase 7.1B） / smoke-reminder-rule（Phase 7.1B） / recognize-food / list-food
 guide/                         # 设计文档（memory-pack / decisions / orca-cordis-migration-plan / orca-info-agent-framework / orca-iphone-channel）
 AGENT.md                       # ★ 本文档
 dev-log.md / TODO.md / README.md
@@ -167,6 +170,8 @@ dev-log.md / TODO.md / README.md
 | ORCA_PC_ENABLED / ORCA_PC_REFRESH_MS | 0 / 60000 | PC adapter（mock） |
 | ORCA_CALENDAR_ENABLED / ORCA_CALENDAR_REFRESH_MS | 0 / 120000 | Calendar adapter（mock） |
 | ORCA_PHONE_ENABLED / ORCA_PHONE_REFRESH_MS | 0 / 300000 | Phone adapter（mock） |
+| ORCA_SCHEDULER_ENABLED | 0 | Scheduler adapter（Phase 7.1A；纯 Time Producer） |
+| ORCA_SCHEDULER_TICK_MS | 60000 | Scheduler tick 间隔 |
 | ORCA_ATTENTION_ENABLED | 1 | Attention Engine（纯评估，安全默认） |
 | ORCA_DECISION_ENABLED | 1 | Decision Engine（Phase 4.A 纯决策层，安全默认） |
 | ORCA_ACTION_ENABLED | 0 | Action Executor（Phase 4.B 执行层；默认禁用，启用前需明确注册 handler） |
@@ -211,10 +216,332 @@ dev-log.md / TODO.md / README.md
 
 - **Phase 5.4.A（2026-08-27）**：MemoryAttentionAdapter 基础——Memory → Attention 的唯一桥接层（第一版 MVP）。`src/services/memoryAttentionAdapter.ts`：`createMemoryAttentionAdapter` 工厂 + `MemoryAttentionAdapter` 实例；轮询 MemoryStore 生成 `type='memory.insight'` 的 AttentionItems。`factToAttentionItem(fact)`：将 LongMemoryFact 映射为 AttentionItem；priority 从 confidence 计算（≥0.9=urgent, ≥0.8=high, ≥0.7=normal, else=low）；`action='remember_only'`；metadata 包含 `factId / memoryType / memorySource / confidence / createdAt / updatedAt`。去重：`seenFacts: Map<factId, updatedAt>`，同一 `updatedAt` 不重新生成。TopK 默认 5。`src/plugins/memory-attention-adapter.ts`：Cordis plugin；依赖 `ctx.memory`；通过 `ctx.emit('orca/attention', item)` 注入事件流；`disposed` 闸门。配置键：`ORCA_MEMORY_ATTENTION_ENABLED`（默认 true）/ `ORCA_MEMORY_ATTENTION_POLL_INTERVAL_MS`（默认 60000）/ `ORCA_MEMORY_ATTENTION_TOP_K`（默认 5）。`src/config.ts`：`OrcaMemoryConfig` 新增 `attentionEnabled` / `attentionPollIntervalMs` / `attentionTopK`。R24 smoke 36 用例（M1~M7）覆盖 active fact → AttentionItem 生成 / superseded 不生成 / forget 后不生成 / duplicate tick 去重 / confidence metadata 正确 / TopK 限制 / factToAttentionItem 单测。**未引入**：Memory type → AttentionItem action 映射（统一 remember_only）/ preference 直接触发 notify / 修改 EventBus / ReflectionEngine 参与。
 
-- **Phase 5.4.B（2026-08-27）**：Memory Event Bridge——MemoryStore mutation event 驱动 MAA。`src/types/memory.ts`：`MemoryChangedEvent` 接口（`type: MemoryEventType` / `factId / subject / factType / timestamp / newFactId?`）+ `MemoryEventType` 枚举（`fact.created | fact.updated | fact.superseded | fact.merged | fact.forgotten`）+ `OrcaMemoryConfig.eventEmitter` 可选注入。`src/services/memoryStore.ts`：4 个 mutation 函数均 emit 相应事件（`upsertFact` → created/updated；`supersedeFact` → created+superseded；`mergeFacts` → merged×n+updated；`forgetFact` → forgotten）。`src/index.ts`：MemoryStore 构造时传入 `eventEmitter: (e) => ctx.emit('memory_changed', e)`。`src/services/memoryAttentionAdapter.ts`：`onMemoryChanged(event)` 处理函数；invalidate 类型（superseded/merged/forgotten）直接删除 `seenFacts`；create/update 类型异步查询当前 fact 状态并 emit AttentionItem；`MemoryAttentionAdapter` 接口新增 `onMemoryChanged`。`src/plugins/memory-attention-adapter.ts`：`ctx.on('memory_changed', ...)` 订阅并转发给 adapter；dispose 时 unsubscribe。R25 smoke 39 用例（EB1~EB7）覆盖 event → AttentionItem 生成 / update 刷新 / forget 消失 / supersede 旧fact失效 / dedup 正确性 / merge 失效 / payload 完整性。**未引入**：Memory 直接产生 Action / 修改 AttentionEngine/DecisionEngine/WorldState / 新存储。**342/342 smoke PASS**。
+- **Phase 5.4.B（2026-08-27）**：Memory Event Bridge——MemoryStore mutation event 驱动 MAA。`src/types/memory.ts`：`MemoryChangedEvent` 接口（`type: MemoryEventType` / `factId / subject / factType / timestamp / newFactId?`）+ `MemoryEventType` 枚举（`fact.created | fact.updated | fact.superseded | fact.merged | fact.forgotten`）+ `OrcaMemoryConfig.eventEmitter` 可选注入。`src/services/memoryStore.ts`：4 个 mutation 函数均 emit 相应事件（`upsertFact` → created/updated；`supersedeFact` → created+superseded；`mergeFacts` → merged×n+updated；`forgetFact` → forgotten）。`src/index.ts`：MemoryStore 构造时传入 `eventEmitter: (e) => ctx.emit('memory_changed', e)`。`src/services/memoryAttentionAdapter.ts`：`onMemoryChanged(event)` 处理函数；invalidate 类型（superseded/merged/forgotten）直接删除 `seenFacts`；create/update 类型异步查询当前 fact 状态并 emit AttentionItem；`MemoryAttentionAdapter` 接口新增 `onMemoryChanged`。`src/plugins/memory-attention-adapter.ts`：`ctx.on('memory_changed', ...)` 订阅并转发给 adapter；dispose 时 unsubscribe。R25 smoke 39 用例（EB1~EB7）覆盖 event → AttentionItem 生成 / update 刷新 / forget 消失 / supersede 旧fact失效 / dedup 正确性 / merge 失效 / payload 完整性。**未引入**：Memory 直接产生 Action / 修改 AttentionEngine/DecisionEngine/WorldState / 新存储。
+
+- **Phase 6.A（2026-09-06）**：CEO ContextAssembler——`src/types/context.ts` + `src/services/contextAssembler.ts` + `src/plugins/context-assembler.ts`（后者未单独实现，逻辑直接内联在 index.ts）。`ContextAssembler` 是 CEO 访问 Memory/InfoRecords 的唯一入口（不经 MemoryStore 直接查询）；`assemble(input, worldState, options?)` → `ContextAssemblyResult`（四维度 context + formatted summary）。Memory 查询：subject 精确匹配 → type 过滤 → 全局三优先级；Top-K=10（可配置）；per-fact value ≤ 80 字符（可配置）；R3 总计 ≤ 500 字符 budget；排序 confidence↓ then updatedAt↓。格式化：`[Memory:{type}] {subject}: {value} (confidence {confidence})`。`src/config.ts`：新增 `OrcaContextAssemblerConfig` 接口 + `OrcaConfig.contextAssembler`；环境变量 `ORCA_MEMORY_CONTEXT_ENABLED`（默认 1）/ `ORCA_MEMORY_CONTEXT_TOP_K`（默认 10）/ `ORCA_MEMORY_CONTEXT_PER_FACT_CHARS`（默认 80）/ `ORCA_MEMORY_CONTEXT_BUDGET_CHARS`（默认 500）/ `ORCA_MEMORY_CONTEXT_INFO_RECORDS_LIMIT`（默认 3）。`src/context.ts`：新增 `contextAssembler: ContextAssembler` 到 Context 接口声明。`src/index.ts`：装配在 MemoryStore 之后，依赖 `ctx.memory` + `ctx.infoStore`。R26 smoke 38 用例（CA1~CA12）覆盖基本 assembly / 格式化 / budget / per-fact 截断 / Top-K / 空数据 / subject 过滤 / type 过滤 / budgetHit flag / disabled 模式 / 排序。**未引入**：MemoryCache（Phase 6.B）/ scoring interface / 修改 AttentionEngine / DecisionEngine / WorldState。**380/380 smoke PASS（Phase 5.4.B 342 + Phase 6.A 38）**。
+
+- **Phase 6.B（2026-09-06）**：CEO Context Integration——`src/plugins/agent.ts`：在 feishu/message + dashboard/message 两个入口处接入 `ctx.contextAssembler`，在 `persona + archive.context` 之后追加【长期记忆】区块。CEO context 构造路径（已确认在 `src/plugins/agent.ts` 第 109 行）：`personaPrompt() + archive.context + memoryContext`，其中 `memoryContext` = `ctx.contextAssembler.assemble(userInput, worldState)` 的 memoryFacts 格式化字符串拼接。`agent.inject` 扩展为 `['feishu', 'llm', 'sessions', 'infoAgents', 'infoStore', 'eventBus', 'worldState', 'contextAssembler']`。Memory disabled 或 contextAssembler 不可用时 graceful degradation：memoryContext 为空字符串，不影响主流程（CE3/CE4）。infoRecords 注入（R2）完全保留，向后兼容（CE5）。WorldState snapshot 通过 `ctx.worldState.getState()` 透传到 `assemble()`（CE9）。R27 smoke 29 用例（CE1~CE9）覆盖 assemble 格式化 / 空 facts / disabled / infoRecords 兼容 / summary 分层 / CEO prompt 格式 / confidence 排序 / worldState 透传。**未修改**：AttentionEngine / DecisionEngine / MemoryStore 核心语义 / 其他 Agent 行为。**409/409 smoke PASS（Phase 5.4.B 342 + Phase 6.A 38 + Phase 6.B 29）**。
+
+- **Phase 6.C.1（2026-09-06）**：Memory Quality Layer 实现——Scoring Interface + L2 Source Conflict Resolution。`src/types/context.ts`：`ScoringFunction` 类型 + `ScoringPreset = 'confidence' | 'source-confidence'` + `getScoringFunction(preset)` + `scoreByConfidence` + `scoreBySourceConfidence`（user-explicit +0.2 bonus）。`ContextAssemblerConfig` 新增 `scoringPreset` 字段。`src/services/contextAssembler.ts`：`resolveL2SourceConflict()` 实现（按 type+subject 分组，user-explicit 优先），queryMemory 流程改为 query→L2 filter→scoring sort→format→budget cap。`ContextAssemblyResult` 新增 `sourceConflictsFiltered`。Config 新增 `ORCA_MEMORY_SCORING_PRESET`（默认 'confidence'）。**重要约束**：MemoryStore `upsertFact` 同 (type, subject) 第二次 upsert update-in-place（不保留两个 active facts），因此同组多 source 冲突无法在 active facts 中直接构造；L2 filter 逻辑已实现但此场景依赖 MemoryStore 未来支持。Q1~Q8 smoke 18 用例。**427/427 smoke PASS（Phase 6.C.1 18 + 之前 409）**。
+
+- **Phase 6.C.2（2026-09-06）**：L3 Semantic Conflict Detection 实现 + Review 修复。`src/types/context.ts`：`SemanticConflict` 接口 + `detectSemanticConflicts()`（**修复后规则：同 subject + 同 type + ≥2 条 facts + formatted value 不同 = conflict candidate**；相同 formatted value 不是冲突）。`ContextAssemblyResult` 新增 `semanticConflicts: SemanticConflict[]`。`ContextAssemblerConfig` 新增 `detectSemanticConflict: boolean`（默认 false）。`contextAssembler.ts`：assemble 流程增加 semantic conflict detection（L2 filter 之后、scoring 之前）；`buildSummary` 增加 `## Memory Conflict Warnings` section 输出。Config 新增 `ORCA_MEMORY_CONFLICT_DETECT_SEMANTIC` 环境变量（默认 '0'）。**不自动过滤**，只标记 ⚠️。C1~C9 smoke 27 用例（含同 value 不冲突测试）。**重要约束**：MemoryStore `upsertFact` 同 (type, subject) 保留第一次 id 但用第二次的值覆盖，导致同组多 source 场景无法构造两个 active facts；`detectSemanticConflicts()` 逻辑已正确实现，依赖 MemoryStore 未来支持方可覆盖 same-subject+type 多 fact 场景。**454/454 smoke PASS（Phase 6.C.2 27 + 之前 427）**。
+
+- **Phase 6.C.3（2026-09-06）**：MemoryUsageTracker 实现。`src/services/memoryUsageTracker.ts`：**新增** —— `createMemoryUsageTracker(config)` 返回 `MemoryUsageTracker` 接口；in-memory ring buffer（默认容量 100，可配置）；`record(record: MemoryUsageRecord)` 和 `getRecords()` API；`enabled=false` 时零开销。`src/services/contextAssembler.ts`：新增可选参数 `memoryUsageTracker?: MemoryUsageTracker`；`assemble()` 成功后记录 `MemoryUsageRecord`（**隐私保护：query 只记录长度，不记录内容**）。`MemoryUsageRecord`：timestamp / queryLength / returnedFactIds / conflictFilteredIds / semanticConflictCount / charsUsed / budgetHit / scoringPreset / semanticDetectionEnabled。**不写 JSONL / 不持久化 / 不进入 MemoryStore / 不产生 mutation**。U1~U10 smoke 31 用例。**485/485 smoke PASS（新增 31 + 之前 454）**。
+
+- **Phase 6.C Closeout（2026-09-06）**：完整 Phase 6.C（6.C.1 + 6.C.2 + 6.C.3）正式完成。**485/485 smoke PASS；E1-E9 evaluation 77/81（4 项为设计约束）；无 P0/P1 问题。** D-AGENT-21 §21-07 新增 Phase 6.C implementation closeout，记录已验证 invariant / known limitations / architecture boundary。详见 `guide/decisions.md` D-AGENT-21 §21-07。
+
+- **Phase 7.1A（GPT Review Phase 7.0）**：WorldState 架构重构——RuntimeAdapter 统一接口 + EventBus 唯一状态入口 + Scheduler 收敛为纯 Time Producer。**GPT Review 核心修正**：否决 `WorldStateExtensionAdapter.poll() → applyUpdate()` 模式；保持 EventBus 是唯一状态来源；WorldState 必须始终是 Pure Reducer + Snapshot。
+
+- **Phase 7.1A Review 修正（2026-09-08）**：Scheduler Adapter 只 emit `scheduler:tick`；删除全部 4 个 scheduler reducers（`scheduler:tick` 等不产生持久状态变化）；删除 `scheduler:briefing:due/reflection:due/reminder:due` timer。
+
+- **Phase 7.1B（2026-09-08）**：ScheduledRuleRegistry——最小主动行为闭环。`src/types/scheduled-rule.ts`：`ScheduledRule`/`ScheduledRuleContext`/`ScheduledRulePredicate`/`ScheduledBusinessEvent` 接口。`src/services/scheduledRuleRegistry.ts`：`createScheduledRuleRegistry()` + `ScheduledRuleRegistryService`。`src/plugins/scheduled-rule-registry.ts`：`scheduledRuleRegistry` Cordis plugin + `TEST_RULE_ALWAYS_TRIGGER`。**事件流向**：SchedulerAdapter → scheduler:tick → ScheduledRuleRegistry → predicate → EventBus.publish(businessEvent) → AttentionEngine。**26/26 smoke PASS**。
+
+**Phase 7.1A Review 修正（Scheduler 收敛为纯 Time Producer）**：
+- Scheduler Adapter **只** emit `scheduler:tick`（纯时间信号）
+- 删除 `scheduler:briefing:due` / `scheduler:reflection:due` / `scheduler:reminder:due`（这些属于 ScheduledRuleRegistry，7.1B）
+- 删除全部 4 个 scheduler reducers（`scheduler:tick` 等不产生持久状态变化）
+- WorldStateUpdater 继续订阅全部事件，允许"无 reducer → 忽略"
+
+**新增文件**：
+- `src/types/runtime-adapter.ts`：`RuntimeAdapter` 接口（`{ start(), stop() }`）+ `RuntimeAdapterConfig`
+- `src/plugins/input-adapters/scheduler-adapter.ts`：`createSchedulerAdapter()` + `schedulerAdapter()`；**仅 emit `scheduler:tick`**（纯 Time Producer）
+
+**重构文件**：
+- `src/plugins/input-adapters/pc-adapter.ts`：实现 `RuntimeAdapter` 接口
+- `src/plugins/input-adapters/calendar-adapter.ts`：实现 `RuntimeAdapter` 接口
+- `src/plugins/input-adapters/phone-adapter.ts`：实现 `RuntimeAdapter` 接口
+- `src/types/event.ts`：新增 `scheduler` source + 事件类型（`scheduler:tick` / `scheduler:briefing:due` / `scheduler:reflection:due` / `scheduler:reminder:due`；为 7.1B 准备）
+- `src/services/worldState.ts`：删除全部 scheduler reducers（Phase 7.1A Review）
+- `src/config.ts`：`OrcaSchedulerConfig` 简化为仅含 `enabled` + `tickMs`
+- `src/index.ts`：RuntimeAdapters 统一生命周期管理 + shutdown 时调用 `stop()`
+
+**架构图（Phase 7.1A）**：
+```
+RuntimeAdapter (Scheduler / Calendar / PC / Weather)
+        ↓
+EventBus.publish({source:'scheduler', type:'scheduler:tick', ...})
+        ↓
+WorldStateUpdater（Reducer 模式）
+        ↓
+WorldState（Pure Snapshot）
+        ↓
+AttentionEngine
+
+注：scheduler:briefing:due / reflection:due / reminder:due 由 ScheduledRuleRegistry（7.1B）订阅 scheduler:tick 后决策触发
+```
+
+**两条必须保持的架构边界**：
+1. **EventBus 是唯一状态入口**：WorldState 永远不主动 polling，只消费 Event 并计算 Snapshot
+2. **RuntimeAdapter 统一接口**：`{ start(), stop() }`；所有数据源必须通过 EventBus 发射事件，不直接修改 WorldState
+
+**为什么 Rule 不属于 Adapter**：
+- Adapter 职责：**数据获取 + 格式化**（读取数据源 → 发射 Event）
+- Rule 职责：**条件判断 + 决策**（订阅 Event → 判断是否触发 Action）
+- 分离好处：Adapter 可复用（同一数据源可被不同 Rule 使用）；Rule 可组合（同一 Event 可触发多个 Rule）
+- Scheduler 是"纯 Time Producer"，不承载业务逻辑；业务逻辑由 ScheduledRuleRegistry（7.1B）负责
+
+**配置键（Phase 7.1A）**：
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `ORCA_SCHEDULER_ENABLED` | 0 | Scheduler adapter 开关 |
+| `ORCA_SCHEDULER_TICK_MS` | 60000 | tick 心跳间隔 |
+
+**未修改**：Memory / Attention / Decision / Action / EpisodeEngine / ReflectionEngine（按 GPT Review 要求）。
+
+- **Phase 7.1B（2026-09-08）**：ScheduledRuleRegistry——最小主动行为闭环（scheduler:tick → Rule predicate → briefing:due → AttentionEngine）。
+
+**Phase 7.1B 设计目标**：
+- 验证 `scheduler:tick → rule hit → business event` 闭环
+- Registry 是"业务规则层"，不持有 timer（timer 在 SchedulerAdapter）
+- businessEvent 通过 EventBus.publish() 发射，进入现有流水线：EventBus → WorldStateUpdater（无 reducer → 忽略）→ AttentionEngine
+- 不直接调用 AttentionEngine / DecisionEngine / ActionExecutor
+
+**新增文件**：
+- `src/types/scheduled-rule.ts`：`ScheduledRule` / `ScheduledRuleContext` / `ScheduledRulePredicate` / `ScheduledBusinessEvent` 接口
+- `src/services/scheduledRuleRegistry.ts`：`createScheduledRuleRegistry()` + `ScheduledRuleRegistryService` 接口
+- `src/plugins/scheduled-rule-registry.ts`：`scheduledRuleRegistry` Cordis plugin + `TEST_RULE_ALWAYS_TRIGGER`（验证用）
+- `src/rules/scheduled/briefing.ts`：`createBriefingIntervalRule()` —— 第一个 deterministic rule（基于 lastTriggeredAt 间隔判断）
+- `src/rules/scheduled/reflection.ts`：`createReflectionIntervalRule()` —— 第二个 deterministic rule（API/语义与 BriefingIntervalRule 完全一致）
+- `src/rules/scheduled/reminder.ts`：`createReminderIntervalRule()` —— 第三个 deterministic rule（API/语义与前两个完全一致）
+- `scripts/smoke-scheduled-rule-registry.mjs`：26 个用例覆盖 R1-R7（全部通过）
+- `scripts/smoke-briefing-rule.mjs`：14 个用例覆盖 R1-R4（全部通过）
+- `scripts/smoke-reflection-rule.mjs`：14 个用例覆盖 R1-R4（全部通过）
+- `scripts/smoke-reminder-rule.mjs`：19 个用例覆盖 R1-R5（含三 Rule 共存互不影响验证，全部通过）
+
+**ScheduledRule API**：
+```typescript
+// 业务事件定义
+interface ScheduledBusinessEvent {
+  source: OrcaEventSource        // e.g. 'scheduler'
+  type: OrcaEventType            // e.g. 'briefing:due'（不含 source 前缀）
+  data?: Record<string, unknown> // payload
+  priority?: number              // 默认 1
+}
+
+// predicate 上下文
+interface ScheduledRuleContext {
+  tick: OrcaEvent                // 当前 scheduler:tick 事件
+  lastTriggeredAt: number        // 上次触发时间戳（毫秒），0=从未触发
+}
+
+// predicate 类型
+type ScheduledRulePredicate = (ctx: ScheduledRuleContext) => boolean
+
+// 规则定义
+interface ScheduledRule {
+  readonly ruleId: string
+  readonly predicate: ScheduledRulePredicate  // 判断是否触发
+  readonly businessEvent: ScheduledBusinessEvent  // 命中时发射
+}
+
+// Registry API
+interface ScheduledRuleRegistry {
+  register(rule: ScheduledRule): void
+  unregister(ruleId: string): boolean
+  size(): number
+  ruleIds(): string[]
+}
+```
+
+**事件流向（Phase 7.1B）**：
+```
+SchedulerAdapter → scheduler:tick → ScheduledRuleRegistry
+                                      ↓
+                              predicate 判断
+                                      ↓
+                              EventBus.publish(businessEvent)
+                                      ↓
+                              WorldStateUpdater（无 reducer → 忽略）
+                                      ↓
+                              AttentionEngine（businessEvent 触发评估）
+```
+
+**第一版 test rule**：
+- `test-rule-always-trigger`：predicate 始终返回 `true`，每 tick 都触发 `briefing:due`（source='scheduler', type='briefing:due'）
+- 用于验证 `scheduler:tick → rule hit → briefing:due` 最小闭环
+
+**第一个 deterministic rule**：
+- `createBriefingIntervalRule(ruleId, briefingIntervalMs)`：基于 lastTriggeredAt 间隔判断
+- `lastTriggeredAt === 0`（从未触发）→ 立即触发
+- `elapsed >= briefingIntervalMs` → 触发
+- `elapsed < briefingIntervalMs` → 不触发
+- 不生成 briefing 内容，不调用 LLM，只判断"是否到触发时间"
+
+**第二个 deterministic rule**：
+- `createReflectionIntervalRule(ruleId, reflectionIntervalMs)`：API/语义与 BriefingIntervalRule 完全一致
+- predicate 逻辑相同，businessEvent 为 `reflection:due`（source='scheduler', type='reflection:due'）
+- 不生成 reflection 内容，不调用 ReflectionEngine，只判断"是否到反思时间"
+
+**smoke 覆盖（26/26 + 14/14 + 14/14 + 19/19 = 73/73 PASS）**：
+- R1：register / unregister / size / ruleIds 纯函数
+- R2：predicate 命中 → emit business event
+- R3：predicate 不命中 → 不 emit
+- R4：多 rule 独立注册/评估
+- R5：lastTriggeredAt 上下文正确
+- R6：plugin 集成（scheduler:tick → evaluate → business event）
+- R7：多个 tick 连续触发（3 tick → 3 business event）
+
+**架构边界（Phase 7.1B）**：
+1. Registry 不持有 timer（timer 在 SchedulerAdapter）
+2. businessEvent 通过 EventBus 发射，不直接调用 AttentionEngine
+3. predicate 异常被 try/catch 捕获，不崩进程
+4. Rule 注销同步清理 lastTriggeredAt
+
+**未实现（Phase 7.1B 范围外）**：
+- Morning Briefing / Reflection / Reminder 等具体业务规则
+- LLM-based scheduling
+- External Services Gateway
+
+---
+
+## Phase 7.1 Architecture Freeze Review Report（2026-09-08）
+
+### 架构边界确认
+
+| 边界 | 状态 | 验证 |
+|------|------|------|
+| **EventBus 单一事件入口** | ✅ 确认 | 所有 Adapter 仅通过 `bus.publish()` 发射事件；`applyUpdate` 仅由 `world-state-updater.ts` 内部调用 |
+| **WorldState 纯 Reducer** | ✅ 确认 | 无 polling / 无外部 `applyUpdate` 调用；所有写路径通过 `EventBus.subscribe` → `applyReducers` |
+| **SchedulerAdapter 纯 Time Producer** | ✅ 确认 | 仅 `bus.publish({ type: 'scheduler:tick' })`，无业务逻辑 |
+| **ScheduledRuleRegistry 无 timer** | ✅ 确认 | 仅订阅 `scheduler:tick`，`evaluate` 在内存中计算间隔 |
+| **Rule 无副作用** | ✅ 确认 | `briefing/reflection/reminder` rules 仅调用 `bus.publish()`，不调用 Attention / Decision / Action |
+| **Memory 单一职责** | ✅ 确认 | `MemoryStore` 是唯一长期记忆源；`ContextAssembler` 只读；`MemoryAttentionAdapter` 是唯一 Memory→Attention 路径 |
+
+### 隐藏耦合检查
+
+| 检查项 | 结果 |
+|--------|------|
+| Scheduler 依赖 Attention | ✅ 无 |
+| Rule 依赖 Decision / Action | ✅ 无 |
+| Attention 依赖具体业务 Rule | ✅ 无 |
+| WorldState 被非 EventBus 路径修改 | ✅ 无 |
+| Plugin 生命周期资源泄漏 | ✅ 无（所有 plugin 在 dispose 时 unsubscribe / clearInterval） |
+| `scheduledRuleRegistry` 未注册到 `index.ts` | ⚠️ **已修复**——新增注册到 `index.ts`（Runtime enabled 时自动加载） |
+
+### Review 修复的问题
+
+| 问题 | 类型 | 处理 |
+|------|------|------|
+| `index.ts` 第 96-97 行 `imageRouter` 重复注册 | **真 bug**（复制粘贴错误） | 已删除重复行 |
+| `scheduledRuleRegistry` plugin 未注册到 `index.ts` | **架构缺口**（Phase 7.1B smoke 通过但生产不加载） | 已添加 `ctx.plugin(scheduledRuleRegistry)` |
+
+### 当前 Runtime 数据流
+
+```
+外部信号（飞书/传感器/手动）
+    ↓
+EventBus.publish()
+    ↓
+┌──────────────────────────────────────┐
+│ WorldStateUpdater（Reducer 模式）      │
+│  - feishu:message → user.lastSeenAt │
+│  - 其他事件 → 无 reducer → 忽略      │
+└──────────────────────────────────────┘
+    ↓
+WorldState（Pure Snapshot）
+    ↓
+AttentionEngine（全量事件订阅）
+    ↓
+DecisionEngine（订阅 orca/attention）
+    ↓
+ActionExecutor（订阅 orca/decision；默认 disabled）
+```
+
+### Scheduler 数据流
+
+```
+SchedulerAdapter（setInterval）
+    ↓
+EventBus.publish({ type: 'scheduler:tick' })
+    ↓
+ScheduledRuleRegistry（订阅 scheduler:tick）
+    ↓
+createBriefingIntervalRule / createReflectionIntervalRule / createReminderIntervalRule
+    ↓
+EventBus.publish({ type: 'briefing:due' / 'reflection:due' / 'reminder:due' })
+    ↓
+WorldStateUpdater（无 reducer → 忽略）
+    ↓
+AttentionEngine（business event 进入评估）
+```
+
+### 当前已支持能力
+
+| 能力 | 状态 |
+|------|------|
+| RuntimeAdapter 统一接口（`{ start(), stop() }`） | ✅ |
+| EventBus 单一事件入口 | ✅ |
+| WorldState 纯 Reducer + Snapshot | ✅ |
+| SchedulerAdapter 纯 Time Producer（`scheduler:tick`） | ✅ |
+| ScheduledRuleRegistry（规则层） | ✅ |
+| BriefingIntervalRule（deterministic，interval 判断） | ✅ |
+| ReflectionIntervalRule（deterministic，interval 判断） | ✅ |
+| ReminderIntervalRule（deterministic，interval 判断） | ✅ |
+| 多 Rule 共存（互不影响，独立 lastTriggeredAt） | ✅ |
+
+### Phase 7.1 正式关闭状态
+
+- **Phase 7.1A**：RuntimeAdapter + SchedulerAdapter + WorldState 边界 ✅
+- **Phase 7.1B**：ScheduledRuleRegistry + 3 个 deterministic Rules ✅
+
+### 推荐下一阶段方向
+
+1. **Phase 7.2：Rule 注册系统**——当前 rules 由 smoke test 手动 `registry.register()`，生产需要配置驱动的注册机制（`ORCA_SCHEDULER_BRIEFING_INTERVAL_MS` 等环境变量）
+2. **Phase 7.3：Morning Briefing 业务闭环**——`briefing:due` → Decision → Action → Feishu 推送（不修改现有架构，只注册新 rule）
+3. **Phase 7.4：Reflection / Reminder 业务闭环**（同 7.3 模式）
+
+### 不进入 Phase 7.2 的边界（Architecture Freeze）
+
+以下功能在 Phase 7.1 架构完全冻结后作为独立业务层叠加，不修改 Runtime 基础架构：
+
+- Morning Briefing 完整业务逻辑
+- ReflectionEngine 调度
+- Reminder 系统
+- Calendar / Weather 集成
+- Session Persistence
+- Vector DB / Tool Calling
+- External Services Gateway
+
+#### Phase 6 Memory 架构边界（Phase 6.C 完成后快照）
+
+```
+写入路径：
+  ReflectionEngine → MemoryStore.promoteCandidate()
+  remember action → MemoryStore.upsertFact()（user-explicit source）
+  forget action → MemoryStore.forgetFact() + ForgetMarker
+
+读取路径（CEO）：
+  MemoryStore.queryFacts({state:'active'})
+      ↓
+  ContextAssembler（query → L2 filter → L3 detection → scoring → format → budget cap）
+      ↓
+  CEO Context（memoryFacts[] + semanticConflicts[] + summary string）
+
+Memory → Attention（唯一路径）：
+  MemoryStore
+      ↓
+  MemoryAttentionAdapter（polling）
+      ↓
+  AttentionItem → EventBus → AttentionEngine → DecisionEngine → ActionExecutor
+```
+
+**关键 invariant（Phase 6.C 验证保证）**：
+1. **Forget safety**：forget 后 fact 不出现在 `queryFacts({state:'active'})` 和 ContextAssembler output
+2. **MemoryStore authority**：LongMemoryFact 唯一来源是 MemoryStore，ContextAssembler 只读
+3. **L2/L3 隔离**：冲突处理在 ContextAssembler，不修改 MemoryStore，不产生 mutation
+4. **Scoring deterministic**：相同输入产生相同输出
+5. **Privacy**：MemoryUsageTracker 只记录 `queryLength: number`，不记录文本
+6. **Budget enforcement**：`charsUsed <= memoryBudgetChars`，`perFactChars` 限制每条长度
+7. **Graceful degradation**：memory disabled 时 `memoryFacts=[]`，不影响其他 context 维度
+
+**Known Limitation（MemoryStore contract）**：
+- `upsertFact` 同 (type, subject) 保留第一次 source（不可变）
+- 同 (type, subject) 第二次 upsert 保留第一次 id，更新 value/confidence
+- 因此无法在 active facts 中保留"同 subject+type + 不同 source 两个 facts"
+- L2/L3 逻辑正确，依赖 MemoryStore 未来支持方可覆盖上述场景
 
 ### 8.2 待办（TODO.md）
-- **Phase 6 设计稿（2026-08-27）**：Memory-aware CEO Context——`guide/orca-memory-consumption-design.md` §12 + D-AGENT-20。CEO Context 四元组：input / worldState / info / memory；R3 层注入 memoryFacts，按 subject 匹配 → type 过滤 → 全局查询三优先级；Top-K=10，字符限制每条 ≤ 80 / R3 总计 ≤ 500；Token 预算 500 token 固定配额；MemoryCache（Phase 6.B 可选，TTL 5 分钟，`memory_changed` 事件失效）；不引入 embedding / SQLite / vector DB；MAA 与 CEO 查询双通道独立互补。**未实现代码**。
+- **Phase 6 设计稿（2026-08-27）**：Memory-aware CEO Context——`guide/orca-memory-consumption-design.md` §12 + D-AGENT-20。CEO Context 四元组：input / worldState / info / memory；R3 层注入 memoryFacts，按 subject 匹配 → type 过滤 → 全局查询三优先级；Top-K=10，字符限制每条 ≤ 80 / R3 总计 ≤ 500；Token 预算 500 token 固定配额。**Phase 6.A（ContextAssembler）已实现（见 Phase 6.A 条目）**。**Phase 6.B：MemoryCache（TTL 5 分钟，`memory_changed` 事件失效）未实现**。
 - **Phase 4.F**：ActionPlan 拆分（payload / channel / target）；真实 act handler（最小权限 + 白名单校验）；支持 bark / 邮件等其他通知渠道（NotifyHandler 按 event.source 分支扩展）；urgency=2 推送门控
 - 迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull）
 - 会话持久化（jsonl）；独立飞书 bot 的 app_id 路由（远期）
@@ -277,4 +604,4 @@ dev-log.md / TODO.md / README.md
 
 ---
 
-*维护者：ka。本文档与代码同步于 **app-cordis v0.6.4 + Phase 5.4.B（2026-08-27）**；设计稿 **Phase 5.4 D-AGENT-19 + guide/orca-memory-consumption-design.md（2026-08-27）**。*
+*维护者：ka。本文档与代码同步于 **app-cordis v1.0.0 + Phase 7.1B（2026-09-08）**；设计稿 **Phase 7.3 Architecture Review + IM Bridge IM-1.0 + guide/orca-memory-quality-design.md（2026-09-08）**。*

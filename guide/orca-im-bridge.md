@@ -1,34 +1,46 @@
-# Project Orca — QQ / 微信消息中转调研（Orca = 消息代理层）
+# Project Orca — IM Bridge：Personal Communication Attention Layer
 
-> 状态：**Accepted（架构已冻结，未实现）**
-> 日期：2026-09-05（v1.0）→ 2026-09-05（v1.1 review 修订）→ 2026-09-05（v1.1.1 终稿入册）
-> 关联：`guide/orca-info-agent-framework.md`（v0.2 CEO-员工-档案室）、`guide/orca-iphone-channel.md`（v1.0 手机 = 共享数据源）、`guide/decisions.md`（D-AGENT-13 / 15 → **D-AGENT-16 已入册**）
-> 决策记录：`guide/decisions.md` 新增 D-AGENT-16（中转代理层 / 四态决策 / Adapter/Agent 分离 / L1 隐私 / PoC 边界）
+> 状态：**架构冻结（IM-0 Phase；代码未实现）**
+> 日期：2026-09-05（v1.0）→ 2026-09-05（v1.1）→ 2026-09-05（v1.1.1）→ **2026-09-06 IM-0 修订（Communication Attention Layer）**
+> 关联：`guide/orca-info-agent-framework.md`（v0.2 CEO-员工-档案室）、`guide/orca-iphone-channel.md`（v1.0 手机 = 共享数据源）、`guide/decisions.md`（**D-AGENT-16 rev. IM-0**）
+> 定位变更：D-AGENT-16 修订记录见 `guide/decisions.md` §D-AGENT-16rev
 
 ---
 
 ## 0. TL;DR
 
-**让 Orca 当 QQ / 微信的"消息代理"——消息进 Orca，由 Persistent Context Runtime 三层决策「代回 / 告知 / 提醒 / 仅归档」四种形态，再回送原平台。**
+**Personal Communication Attention Layer——帮助 Orca 管理个人通信注意力：判断哪些消息值得打扰用户，哪些需要通知，哪些可以建议回复，极少部分安全场景自动回复。Orca 不是聊天机器人，不追求"代回所有消息"。**
 
 ```
-QQ（NapCatQQ）/ 微信（wechatferry / openclaw-weixin）
-  ├─ 入站：QQ/微信收件箱 ──→ IM Adapter ──→ MessageEnvelope ──→ EventBus ──→ WorldState ──→ Attention ──→ Decision
-  │                                                                                                                          │
-  │                                                                          ┌───────────┬───────────────┬───────────────┴────────────┐
-  │                                                                          ▼           ▼               ▼                            ▼
-  │                                                                       archive     notify            defer                          act(handler=im.send)
-  │                                                                       （仅归档）  （立即通知）        （稍后提醒）                    （调 handler 执行副作用）
-  │                                                                          │           │               │                            │
-  └─ 出站：ActionExecutor 按 Decision.handler 调对应实现 ─────────────────────────────────→ sendToChat(text) ──────────────→ sendToChat(text)
+外部 IM 平台（QQ / 微信）
+  │
+  ▼
+IM Adapter（normalize：原协议 → MessageEnvelope）
+  │
+  ▼
+OrcaEvent { source: 'im.qq', type: 'im.message.received', data: { envelope } }
+  │
+  ▼
+EventBus.publish()
+  │
+  ▼
+Runtime：WorldState → Attention → Decision
+  │
+  ▼
+┌─────────────┬──────────────┬──────────────┬───────────────┐
+▼              ▼              ▼              ▼               ▼
+ignore        notify        suggest_reply  auto_reply     （future:）
+（无需关注）  （通知用户）   （起草供确认）  （规则允许    defer（并入
+                                                直接发）     notify 即可）
 ```
 
-**核心边界（v1.1 review 后定型）：**
-- **Adapter ≠ Agent**：IM Adapter 只做"原协议 ↔ MessageEnvelope"；Orca 只认 Envelope，不认 OneBot / WCF / NapCat
-- **InfoAgent 只做查档**：`im-archive-agent` 负责查询历史（CEO 调度用 `archive-agent`，不是 `bridge-agent`）
-- **act ≠ 自动回复**：Decision.action=`act` 时还需 `handler='im.send'`；同一种 action 还能跑 `feishu.reply` / `tts.speak` / `calendar.create` / `todo.add`
-- **Decision 四态**：`act / notify / defer / archive`（不再做 remember_only→remember 二次映射）
-- **企业微信 ≠ IM 通道**：只作 Notify Channel（Orca→你 的通知），不做 IM 回复（企业微信群机器人不能给普通微信好友发消息）
+**IM-0 Phase 核心约束（IM-0 修订）：**
+- **Adapter 四不**：不调 LLM、不做决策、不直接回复、不直接写 Memory
+- **四态 = ignore / notify / suggest_reply / auto_reply**（删除 act/notify/defer/archive + 删除 requiresApproval）
+- **auto_reply MVP 严格 5 条件**：白名单 ∧ 非群聊 ∧ 纯文本 ∧ 命中格式 ∧ ≤20字；否则只能 notify 或 suggest_reply
+- **MessageEnvelope 新增 `direction: 'in' | 'out'`**（区分收到的消息与 Orca 发出的消息）
+- **Memory 边界**：不新增 imArchiver 直接写 infoStore；统一走 Episode / MemoryArchiver
+- **企业微信 ≠ IM 通道**：只作 Notify Channel
 
 **为什么稳定且合规：**
 - **出站（Orca 主动发）**：第一版只走 **企业微信 webhook**（合规、稳定、零账号成本）。NapCatQQ 走"小号+纯外发"作为 QQ 侧补充（封号风险中-高，仅 PoC）。
@@ -68,43 +80,54 @@ iPhone 是"传感器群"，通过三通道（飞书 / HTTP webhook / 文件夹�
 
 ---
 
-## 2. 决策形态（**四态映射**，v1.1 定型）
+## 2. 决策形态（**四态映射，IM-0 修订**）
 
 ```
-收到 MessageEnvelope M（platform, chatId, senderId, text, ts, isGroup, mentionedMe）
+收到 MessageEnvelope M（direction='in', platform, chatId, senderId, text, ts, isGroup, mentionedMe）
    ↓
 WorldState（user.status / focus_mode / extensions.im.{importantContacts,autoReplyContacts,blockedContacts}）
    ↓
 AttentionEngine 规则评估（§3）→ AttentionItem{action, priority, reason}
    ↓
-DecisionEngine 翻译（Phase 4.A）→ Decision{action, handler?}
+DecisionEngine（纯翻译，无 IO）→ Decision{action}
    ↓
-ActionExecutor（Phase 4.B/C/D）按 action 分派
+ActionExecutor 按 action 分派
 ```
 
-| AttentionItem.action | Decision.action | 含义 | 触发条件（示例） |
-|---|---|---|---|
-| `act` | **`act`** | **Orca 代回**（具体由 handler 决定） | 自动应答白名单（autoReplyContacts）/ 群通知机器人 / 确认类对话 |
-| `notify_immediately` | **`notify`** | **立即通知用户** | 中等风险（家事 / 同事 / 不确定语气）；可附"代回？"按钮 |
-| `wait_until_available` | **`defer`** | **稍后提醒用户** | 用户忙 / 睡觉 + 重要联系人来消息 |
-| `remember_only` | **`archive`** | **仅归档，不打扰** | 群聊水聊 / 已知重要但不紧急 / 噪音 |
-| `ignore` | `ignore` | 不做任何事 | 营销号 / 已知 spam |
+**IM-0 四态（IM-0 修订；替代 v1.1 act/notify/defer/archive）：**
 
-**v1.1 关键修订**：
-- **`act` 不再绑定"自动回复"语义**：Decision 必须带 `handler` 字段，标明代回的具体实现（`im.send` / `feishu.reply` / `tts.speak` / `calendar.create` / `todo.add` / ...）
-- **`archive` 取代 remember_only→remember 二次映射**：Decision.action 直接是终态，不再做 AttentionAction→DecisionAction 的二次翻译链
-- **`archive` ≠ `ignore`**：`archive` 入档可被 R0 检索；`ignore` 完全丢弃
+| Decision.action | 含义 | LLM 介入 | 用户操作 | 触发条件示例 |
+|---|---|---|---|---|
+| `ignore` | 低价值消息，什么都不做 | ❌ | 无 | 营销号 / blockedContacts / 群聊非 @ 的水聊 |
+| `notify` | 重要消息，立即告知用户 | ❌ | 用户自行决定如何回复 | 重要联系人私聊 / sleeping + 重要联系人来消息 |
+| `suggest_reply` | Orca 起草回复，供用户确认后发出 | ✅（起草） | "确认发送" / "修改" / "忽略" | 复杂消息需要理解；群聊 @ Orca；多轮上下文 |
+| `auto_reply` | 规则明确允许，直接发出 | ❌ | 无（发送后飞书通知用户"已代回 X"） | 快递取件码 / 系统通知 + 满足全部 5 个 MVP 条件 |
 
-**Decision 完整结构（v1.1.1）**：
+**Attention → Decision 映射（IM-0）：**
+
+```
+AttentionAction                  Decision.action
+──────────────────────────────────────────
+ignore                      → ignore
+notify_immediately          → notify
+wait_until_available        → notify（defer 并入 notify；Scheduler 负责时机）
+auto_reply（白名单）         → auto_reply
+needs_review（复杂语义）      → suggest_reply
+```
+
+**删除 requiresApproval（IM-0）**：
+- 旧设计：`Decision { action: 'act', requiresApproval: true/false }`
+- 新设计：审批逻辑由 `suggest_reply` 表达（LLM 起草 → 用户确认 → 发出）；`auto_reply` 无需审批（规则即授权）
+- 理由：审批不应作为通用字段存在，而应由明确的 action 类型表达
+
+**Decision 完整结构（IM-0）**：
 
 ```ts
 interface Decision {
   decisionId: string
   attentionId: string
   ruleId: string
-  action: 'act' | 'notify' | 'defer' | 'archive' | 'ignore'   // 终态
-  handler?: string                                            // 仅 action='act' 时必填
-  requiresApproval?: boolean                                  // ★ v1.1.1 新增：action='act' 时审批元数据
+  action: 'ignore' | 'notify' | 'suggest_reply' | 'auto_reply'   // 终态（IM-0）
   priority: number
   reason: string
   eventId: string
@@ -113,32 +136,41 @@ interface Decision {
 }
 ```
 
-**v1.1.1 新增 `requiresApproval` 设计要点**：
-- **审批作为 Action 元数据，不靠规则约定**：Decision 引擎在产生 Decision 时根据 `handler` 类型自动决定 `requiresApproval`（也允许 Attention 规则显式覆盖）
-- **默认 true**：所有 act 默认走审批（L2 副作用）；仅当 Attention 规则显式置 false（如 `im-auto-reply` 用户已配置过 autoReplyContacts + 首次授权）才跳过
-- **统一抽象**：未来 `calendar.create` / `todo.add` / `mqtt.publish` / `webhook.post` 等所有 act handler 都用同一个审批机制；不再每个 handler 各自实现确认流
-- **审批粒度**：`requiresApproval: true` → ActionExecutor 走 Phase 4.E 合并通知（notify 路径），附「批准 / 拒绝 / 修改后批准」三选项；`requiresApproval: false` → 直接调 handler（用户已授权白名单）
-- **审批记录**：批准 / 拒绝 = 一条 InfoRecord（namespace='decision-action', type='act-approval'）；可审计、可回放
-- **审计追溯**：Decision.decisionId ↔ Approval Record 一对一；infoStore supersedes 支持"批准后再撤回"
+**auto_reply MVP 严格 5 条件（IM-0 新增）：**
+
+必须**同时**满足才允许 `auto_reply`，否则降级为 `notify` 或 `suggest_reply`：
+
+| # | 条件 | 说明 |
+|---|---|---|
+| 1 | `senderId ∈ autoReplyContacts` | 用户明确授权的白名单 |
+| 2 | `envelope.isGroup === false` | 非群聊（群聊风险高，MVP 不处理） |
+| 3 | `envelope.attachments === undefined` | 纯文本，无附件 |
+| 4 | `text 匹配固定格式` | 快递取件码 / 外卖通知 / 系统告警等结构化文本（正则匹配） |
+| 5 | `text.length ≤ 20` | 简单内容阈值 |
+
+**auto_reply 边界（IM-0 约束）：**
+- **禁止**：LLM 自动决定是否回复、多轮上下文、群聊处理、附件分析
+- **必须**：发送后飞书通知用户"已代回 X 给 Y"
+- **安全**：autoReplyContacts 用户自管；交集检查（importantContacts ∩ autoReplyContacts = ∅）
 
 ---
 
-## 3. Attention 规则草案（D-AGENT-16 新增）
+## 3. Attention 规则（IM-0 修订：四态映射）
 
 > 全部走 `AttentionRuleRegistry.register(...)`，与现有 5 条内置规则同构。
 
-| ruleId | 优先级 | predicate（用 `prevState`） | AttentionAction | 备注 |
+| ruleId | 优先级 | predicate | Decision.action | 备注 |
 |---|---|---|---|---|
-| `im-urgent-from-important` | high | `event.source==='im.qq' \|\| 'im.wechat'` 且 `event.data.envelope.senderId` ∈ `extensions.im.importantContacts` | `notify_immediately` | 提醒用户亲自回；**绝不代回**（即使对方在 autoReplyContacts 也不代回） |
-| `im-private-default` | normal | `event.source` 以 `im.` 开头 且 非 `im-urgent-from-important` 命中 且 `event.data.envelope.isGroup===false` | `notify_immediately` | 默认告知用户、请用户决定代回 |
-| `im-auto-reply` | normal | `event.source` 以 `im.` 开头 且 `event.data.envelope.senderId` ∈ `extensions.im.autoReplyContacts` | `act` | 自动代回；Decision.handler=`im.send` |
-| `im-group-default` | low | `event.source` 以 `im.` 开头 且 `event.data.envelope.isGroup===true` 且 非 `im-urgent-from-important` | `archive` | 群聊默认仅归档 |
-| `im-spam-throttle` | — | `event.source` 以 `im.` 开头 且 `event.data.envelope.senderId` ∈ `extensions.im.blockedContacts` | `ignore` | 黑名单直接忽略 |
-| `im-overnight-from-important` | high | `event.source` 以 `im.` 开头 且 `prevState?.user.status==='sleeping'` 且 `event.data.envelope.senderId` ∈ `extensions.im.importantContacts` | `wait_until_available` | 用户睡觉时重要消息不打扰，合并到醒来通知 |
+| `im-urgent-from-important` | high | `event.source` 以 `im.` 开头 且 `envelope.senderId` ∈ `importantContacts` | `notify` | 提醒用户亲自回；绝不代回 |
+| `im-private-default` | normal | `event.source` 以 `im.` 开头 且 `envelope.isGroup===false` 且非 `im-urgent-from-important` | `notify` | 默认告知用户 |
+| `im-auto-reply` | normal | `event.source` 以 `im.` 开头 且 `envelope.senderId` ∈ `autoReplyContacts` **且满足全部 5 条件** | `auto_reply` | 5 条件：白名单∧非群∧纯文本∧格式匹配∧≤20字 |
+| `im-auto-reply-needs-review` | normal | `event.source` 以 `im.` 开头 且 `envelope.senderId` ∈ `autoReplyContacts` **但不满足** auto_reply 5 条件 | `suggest_reply` | 格式/长度不满足，走 LLM 起草 |
+| `im-group-mentions-me` | normal | `event.source` 以 `im.` 开头 且 `envelope.isGroup===true` 且 `envelope.mentionedMe===true` | `suggest_reply` | 群聊 @ Orca，需 LLM 起草 |
+| `im-group-default` | low | `event.source` 以 `im.` 开头 且 `envelope.isGroup===true` 且非上述命中 | `ignore` | 群聊默认静默 |
+| `im-spam-throttle` | — | `event.source` 以 `im.` 开头 且 `envelope.senderId` ∈ `blockedContacts` | `ignore` | 黑名单直接丢弃 |
+| `im-overnight-from-important` | high | `event.source` 以 `im.` 开头 且 `prevState.user.status==='sleeping' 且 `envelope.senderId` ∈ `importantContacts` | `notify` | defer 并入 notify；Scheduler 负责时机 |
 
-**v1.1 修订说明**：
-- **importantContacts 与 autoReplyContacts 完全独立**：`importantContacts` 触发 `notify_immediately`（提醒但不代回）；`autoReplyContacts` 触发 `act`（允许代回）。**两者交集为空**——一个人可以"很重要但绝不能代回"（导师 / 女朋友），也可以"不重要但允许代回"（快递机器人）。
-- **不依赖 WorldState 历史字段**：规则全部基于 `event.data.envelope` + `extensions.im.{importantContacts,autoReplyContacts,blockedContacts}` + `prevState.user.status`，**没有 lastSeen / lastMessage / recentChats**（v1.0 误用已删，见 §修订记录）
+**IM-0 说明**：importantContacts ∩ autoReplyContacts = ∅（交集为空）；不依赖 WorldState 历史字段（无 lastSeen / lastMessage / recentChats）
 
 **节流配置**：复用 Phase 3.B.throttle（source cooldown + hourly cap），`source='im.qq'` / `source='im.wechat'` 各自一套 cooldown。
 
@@ -180,16 +212,23 @@ interface Decision {
 > 所有 IM / 飞书 / 未来 Telegram / Discord 共用；Adapter 只做"原协议 → Envelope"，Orca 只认 Envelope，**不认识 OneBot / WCF / NapCat / openclaw**
 
 ```ts
-// src/types/messageEnvelope.ts（草案）
+// src/types/messageEnvelope.ts（草案，IM-0）
 interface MessageEnvelope {
-  id: string                       // ★ v1.1.1 拆分：Orca 内部 Event ID（randomUUID；与 envelopeToOrcaEvent.id 对齐）
-  messageId: string                // ★ v1.1.1 新增：平台原始消息 ID（OneBot message_id / WCF msgid / feishu message_id）；跨通道去重键
+  /** Orca 内部 Event ID；randomUUID；EventBus / infoStore / Decision back-trace 用 */
+  id: string
+
+  /** 平台原始消息 ID；跨通道去重 + supersedes 更正的真正键 */
+  messageId: string
+
+  /** 消息方向：in = 收到，out = Orca 发出（IM-0 新增） */
+  direction: 'in' | 'out'
+
   platform: 'qq' | 'wechat' | 'feishu' | 'telegram' | 'discord' | ...
   chatId: string                   // 会话 ID（p2p = 用户 ID，群 = 群 ID）
-  senderId: string                 // 发送者 ID
+  senderId: string                 // 发送者 ID（direction='out' 时为 Orca 自身 ID）
   senderName?: string              // 昵称（不入档案，仅日志）
   text: string                     // 纯文本；图片/文件走 attachments
-  ts: number                       // 消息时间戳（毫秒）
+  ts: number                       // 消息时间戳（毫秒，UTC）
   isGroup: boolean
   mentionedMe: boolean
   attachments?: Array<{
@@ -221,19 +260,25 @@ interface ImAdapter {
   sendText(envelope: Pick<MessageEnvelope, 'chatId' | 'isGroup'>, text: string): Promise<{ ok: boolean; error?: string }>
 }
 
-// 翻译为 OrcaEvent（与 envelope 解耦：EventBus 仍走 OrcaEvent，envelope 在 data 内）
+// 翻译为 OrcaEvent（IM-0 修订：区分 received / sent）
 function envelopeToOrcaEvent(env: MessageEnvelope): OrcaEvent {
   return {
     id: randomUUID(),
     source: `im.${env.platform}`,
-    type: 'im.message',
+    type: env.direction === 'in' ? 'im.message.received' : 'im.message.sent',
     ts: env.ts,
     data: {
-      envelope: env,                 // ★ 整 envelope 入 data
-      // 历史查询不依赖 raw；raw 仅在 Adapter 内部留存
+      envelope: env,                 // 整 envelope 入 data
     },
   }
 }
+```
+
+**Event 命名规范（IM-0 确认）**：
+- `source`：来源平台（`im.qq` / `im.wechat` / `im.feishu`），**不含 platform 信息在 type 里**
+- `type`：消息类型（`im.message.received` / `im.message.sent`），**不包含 source 信息**
+- 不要：`wechat.message` / `qq.message`（Orca event 规范：`${source}.${type}`）
+- `im.message.sent`（Orca 发送）走 Audit Log；`im.message.received`（收到）走 Attention → Decision
 ```
 
 **Adapter 边界**：
@@ -637,6 +682,20 @@ ActionExecutor → NotifyHandler(channel=corpwechat/feishu/bark) / ImSendActHand
 | ⑦ | 企业微信定位错 | 降级为 Notify Channel（不是 IM Adapter / 不是 QQ/微信回复通道）；专做 Orca→你 的通知 |
 | ⑧ | 协议细节泄漏到 Orca | 新增 `MessageEnvelope` 通用信封；Adapter 只做"原协议 → Envelope"，Orca 只认 Envelope，不认 OneBot / WCF / NapCat |
 
+### v1.1.1 → IM-0（2026-09-06 IM-0 Phase；Communication Attention Layer 定位修订）
+| # | 改动 | 修订 |
+|---|---|---|
+| ⑫ | 定位从"聊天机器人"改为"Personal Communication Attention Layer" | 核心价值：判断哪些消息值得打扰用户，哪些需要通知，哪些可以建议回复，极少部分安全场景自动回复 |
+| ⑬ | 删除 act/notify/defer/archive → 改为 ignore/notify/suggest_reply/auto_reply | `act` → `auto_reply`；`defer` 并入 `notify`；新增 `suggest_reply`（需 LLM 起草） |
+| ⑭ | 删除 `requiresApproval` 字段 | 审批逻辑内化为 `suggest_reply` 专用流程；`auto_reply` 无需审批（规则即授权） |
+| ⑮ | MessageEnvelope 新增 `direction: 'in' \| 'out'` | 区分收到的消息与 Orca 发出的消息；Event type 改为 `im.message.received` / `im.message.sent` |
+| ⑯ | Event type 命名规范确认 | `source='im.qq'`，`type='im.message.received'`（不含 source 信息）；Orca→用户发的走 Audit Log |
+| ⑰ | Attention 规则 6 条→8 条；Decision 列替换为 Decision.action | `im-auto-reply` 拆为 `auto_reply`（满足全部 5 条件）和 `suggest_reply`（白名单但不满足）；新增 `im-group-mentions-me` |
+| ⑱ | auto_reply MVP 5 条件明确 | 白名单∧非群∧纯文本∧格式匹配∧≤20字；禁止 LLM 自动决定、多轮上下文、群聊处理、附件分析 |
+| ⑲ | Memory 边界明确 | 不新增 imArchiver 直接写 infoStore；统一走 Episode / MemoryArchiver |
+| ⑳ | Auto Reply 设计章节整体重写 | 原 §6 拆分为：四态含义、自动回复两条路径、requiresApproval 删除、auto_reply MVP 约束 |
+| ㉑ | 文档元信息更新 | 标题/状态/日期/关联指向 D-AGENT-16 rev. IM-0 |
+
 ### v1.1 → v1.1.1（2026-09-05 final 三处小修）
 | # | 改动 | 修订 |
 |---|---|---|
@@ -650,7 +709,8 @@ ActionExecutor → NotifyHandler(channel=corpwechat/feishu/bark) / ImSendActHand
 
 - `guide/orca-info-agent-framework.md`（v0.2）
 - `guide/orca-iphone-channel.md`（v1.0）
-- `guide/decisions.md`（D-AGENT-01~15；D-AGENT-16 待 review）
+- `guide/decisions.md`（D-AGENT-01~15；**D-AGENT-16 rev. IM-0**）
+- `guide/orca-im-bridge-review.md`（2026-09-06 Architecture Review 报告）
 - `guide/orca-cordis-migration-plan.md`
 - `AGENT.md` §5 能力清单 / §6 配置键 / §8 待办（代码开工后同步）
 - `TODO.md` / `dev-log.md`（每阶段 commit 同步）
