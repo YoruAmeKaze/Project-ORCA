@@ -78,6 +78,8 @@ export interface AttentionItem {
   reason: string
   action: AttentionAction
   eventId?: string
+  /** Feishu chatId（feishu 消息来源）；用于 CognitionOutput 路由回飞书 */
+  chatId?: string
   source?: string
   stateSnapshot: WorldState
   evaluatedAt: number

@@ -151,6 +151,7 @@ const ruleFeishuDeadline: AttentionRule = {
       reason: `消息含 deadline 关键词：「${text.slice(0, 30)}」`,
       action: 'remember_only',
       eventId: event?.id,
+      chatId: event?.data?.chatId as string | undefined,
     }
   },
 }
@@ -206,6 +207,7 @@ const ruleFocusInterrupt: AttentionRule = {
     reason: `用户在 ${event && 'focus'}，仅入档不打断`,
     action: 'remember_only',
     eventId: event?.id,
+    chatId: event?.data?.chatId as string | undefined,
   }),
 }
 
@@ -241,6 +243,7 @@ export class AttentionEngine implements AttentionEngineService {
     const evaluatedAt = Date.now()
     const stateSnapshot = JSON.parse(JSON.stringify(input.state)) as AttentionInput['state']
     const eventId = input.event?.id
+    const chatId = input.event?.data?.chatId as string | undefined
 
     for (const rule of this.registry.getRules()) {
       if (!rule.predicate(input)) continue
@@ -257,6 +260,8 @@ export class AttentionEngine implements AttentionEngineService {
         ...partial,
         // eventId 优先用 produce 返回的，否则用 input.event.id
         eventId: partial.eventId ?? eventId,
+        // chatId：从 OrcaEvent.data 提取（feishu 消息路由用）；produce 已返回则用返回的，否则用 event.data.chatId
+        chatId: partial.chatId ?? chatId,
       })
     }
     return out

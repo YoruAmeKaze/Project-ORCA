@@ -21,7 +21,8 @@
     "smoke:notify-e2e": "npm run build && node scripts/smoke-notify-e2e.mjs",
     "smoke:deferred": "npm run build && node scripts/smoke-deferred.mjs",
     "smoke:notify-merged": "npm run build && node scripts/smoke-notify-merged.mjs",
-    "smoke:all": "npm run smoke && npm run smoke:world-state && npm run smoke:attention && npm run smoke:decision && npm run smoke:action && npm run smoke:notify && npm run smoke:notify-e2e && npm run smoke:deferred && npm run smoke:notify-merged"
+    "smoke:delete-intent": "npm run build && node scripts/smoke-delete-intent.mjs",
+    "smoke:all": "npm run smoke && npm run smoke:world-state && npm run smoke:attention && npm run smoke:decision && npm run smoke:action && npm run smoke:notify && npm run smoke:notify-e2e && npm run smoke:deferred && npm run smoke:notify-merged && npm run smoke:delete-intent"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1"

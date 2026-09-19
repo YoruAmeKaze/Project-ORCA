@@ -12,9 +12,37 @@ import type { WorldState } from '../types/worldState.js'
 /** 饮食类问题关键词（R0 查档触发，命中档案即复用，不重复调视觉模型） */
 const FOOD_QUERY_RE = /(卡路里|热量|千卡|kcal|吃了|摄入|饮食|早饭|午饭|晚饭|早餐|午餐|晚餐|吃)/i
 
-/** 删除命令意图（确定性执行，不经过 LLM）：删+对象，或 记录/食物+删词 */
+/**
+ * 删除命令意图（确定性执行，不经过 LLM）。
+ *
+ * v1.8.0 hotfix：原先第一分支含"不要"，导致"不要编""不要 emoji"等普通否定
+ * 表达被误判为删除命令。修正后四条路径**都要求删除动词 +明确对象**同时出现，
+ * 路径 D（v1.6 兼容：删动词 + 短间隔 + 对象词）保留"删掉火鸡面"形式。
+ *
+ * 路径 A（动词在前 + 指示词 + 对象词，严格）：
+ *   (删除|删掉|删了|清空|清理|去掉) + (这条|那条|所有|全部|那些)? + (记录|档案|饮食|食物|饮食记录|food-log|数据)
+ *
+ * 路径 B（动词在后，兼容"把记录删掉"语序）：
+ *   (这条|那条|所有|全部|那些)? + (记录|档案|饮食|食物|测试|饮食记录|food-log|数据) + (删除|删掉|删了|清空|清理|去掉)
+ *
+ * 路径 C（"不要"型，**必须**紧跟对象词）：
+ *   不要 + (这条|那条|所有|全部|那些)? + (记录|档案|饮食|食物|饮食记录|food-log|数据)
+ *
+ * 路径 D（v1.6 兼容：删动词 + 任意短后文——v1.6 旧行为兜底）：
+ *   (删除|删掉|删了|清空|清理|去掉) + .{0,14}
+ *   用于保留"删掉火鸡面""删掉寿司""删掉昨天那条"等具体名词型删除。
+ *   **关键边界**：不含"不要"——"不要"路径完全由路径 C 负责，
+ *   路径 D 不会误判"不要编""不要 emoji"等普通否定。
+ *
+ * 反例（必须不触发）：
+ *   "不要编" / "不要 emoji" / "不要客气" / "不要瞎说" → "不要" 后无对象词
+ *   "具体一点详细一点，不要编" → 同上（多段以句末标点分隔）
+ *
+ * 正例（必须触发）：
+ *   "删掉测试记录" / "删除这条记录" / "清空饮食记录" / "去掉刚才那条记录" / "不要这条记录" / "删掉火鸡面"
+ */
 const DELETE_INTENT_RE =
-  /(?:删除|删掉|删了|清空|清理|去掉|不要).{0,14}|(?:记录|档案|饮食|食物|测试).{0,8}(?:删除|删掉|清空|清理|去掉)/i
+  /(?:(?:删除|删掉|删了|清空|清理|去掉)\s*(?:这条|那条|所有|全部|那些)?\s*(?:记录|档案|饮食|食物|饮食记录|food-log|数据))|(?:(?:这条|那条|所有|全部|那些)?\s*(?:记录|档案|饮食|食物|测试|饮食记录|food-log|数据)\s*(?:删除|删掉|删了|清空|清理|去掉))|(?:不要\s*(?:这条|那条|所有|全部|那些)?\s*(?:记录|档案|饮食|食物|饮食记录|food-log|数据))|(?:(?:删除|删掉|删了|清空|清理|去掉).{0,14})/i
 const DELETE_ALL_RE = /(全部|所有|清空|全删)/i
 const DELETE_NOISE_RE = /(测试|噪音|无效|unknown)/i
 const DELETE_FOOD_STOPWORDS = /(记录|档案|饮食|食物|测试|全部|所有|那条|这条)/
@@ -76,6 +104,23 @@ export function agent(ctx: Context, config: OrcaConfig) {
       logger: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void }
     }
     try {
+      ctx.logger.info('[agent] 收到 feishu/message: %s', msg.text.slice(0, 50))
+
+      // Phase C：Runtime enabled 时，feishu/message 由 Runtime path 处理
+      // CognitionCore → CognitionOutput → cognitionOutputPlugin → Feishu
+      // Agent 不再执行 LLM cognition（避免双重回复）
+      if (config.runtime.enabled) {
+        ctx.logger.debug('[agent] Runtime enabled，跳过 LLM cognition（由 CognitionCore 处理）')
+        // 确定性处理（删除命令）仍然执行
+        const deleteReply = await handleDeleteIntent(msg.text, ctx.infoStore)
+        if (deleteReply !== null) {
+          ctx.logger.info('[agent] Runtime 模式下删除命令: %s -> %s', msg.text, deleteReply)
+          if (!config.dryRun) await feishu.sendToChat(msg.chatId, deleteReply)
+        }
+        return
+      }
+
+      // Legacy path（ORCA_RUNTIME_ENABLED=0）：Agent 直接处理 LLM cognition
       // CEO 前置 0：删除命令（确定性执行，不进 LLM、不进历史）
       const deleteReply = await handleDeleteIntent(msg.text, ctx.infoStore)
       if (deleteReply !== null) {

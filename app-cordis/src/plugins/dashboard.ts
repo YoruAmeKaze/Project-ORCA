@@ -23,8 +23,52 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
     receiverPort: config.infoReceiver.port,
   }
 
-  ctx.on('feishu/message', () => { state.feishu.lastMessageAt = Date.now() })
-  ctx.on('feishu/image', () => { state.feishu.lastImageAt = Date.now() })
+  const runtimeFocus = {
+    status: 'Idle' as 'Idle' | 'Thinking' | 'Acting' | 'Waiting',
+    description: 'Waiting for a signal that needs attention.',
+    triggerSource: '—',
+    attentionRule: '—',
+    lastReflectionAt: null as number | null,
+    timeline: [] as Array<{ at: number; label: string; detail: string }>,
+  }
+
+  function pushFocusEvent(label: string, detail: string): void {
+    runtimeFocus.timeline.unshift({ at: Date.now(), label, detail })
+    runtimeFocus.timeline.splice(3)
+  }
+
+  const unsubscribers = [
+    ctx.on('feishu/message', () => { state.feishu.lastMessageAt = Date.now() }),
+    ctx.on('feishu/image', () => { state.feishu.lastImageAt = Date.now() }),
+    ctx.on('orca/attention', (item: { source?: string; ruleId?: string; reason?: string }) => {
+      runtimeFocus.status = 'Waiting'
+      runtimeFocus.triggerSource = item.source ?? 'runtime'
+      runtimeFocus.attentionRule = item.ruleId ?? '—'
+      runtimeFocus.description = item.reason ?? 'An attention signal is waiting to be processed.'
+      pushFocusEvent('Attention triggered', `${runtimeFocus.triggerSource} / ${runtimeFocus.attentionRule}`)
+    }),
+    ctx.on('cognition/started', () => {
+      runtimeFocus.status = 'Thinking'
+      runtimeFocus.description = 'Orca is evaluating the current attention signal.'
+      pushFocusEvent('Cognition started', runtimeFocus.attentionRule)
+    }),
+    ctx.on('cognition/completed', () => {
+      runtimeFocus.status = 'Idle'
+      runtimeFocus.description = 'The last cognition completed; Orca is monitoring for the next signal.'
+      pushFocusEvent('Cognition completed', runtimeFocus.attentionRule)
+    }),
+    ctx.on('cognition/failed', () => {
+      runtimeFocus.status = 'Idle'
+      runtimeFocus.description = 'The last cognition ended without a result.'
+      pushFocusEvent('Cognition failed', runtimeFocus.attentionRule)
+    }),
+    ctx.on('orca/action-result', (result: { action?: string; success?: boolean }) => {
+      runtimeFocus.status = 'Acting'
+      runtimeFocus.description = result.success === false ? 'The latest action needs attention.' : 'Orca is applying the selected action.'
+      pushFocusEvent('Action completed', result.action ?? 'runtime action')
+      setTimeout(() => { if (runtimeFocus.status === 'Acting') runtimeFocus.status = 'Idle' }, 1200)
+    }),
+  ]
 
   function getInfoAgents(): { name: string; description: string; modes: string[] }[] {
     const registry = ctx.get('infoAgents')
@@ -86,11 +130,17 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
   async function handleStatus(_req: IncomingMessage, res: ServerResponse): Promise<void> {
     const [orcaOk, receiverOk] = await Promise.all([probePort(state.orcaPort), probePort(state.receiverPort)])
     const agents = getInfoAgents()
+    const scheduler = ctx.get('cognitiveScheduler') as { getPendingCount(): number; isCognitionRunning(): boolean } | undefined
     sendJson(res, 200, {
       ok: true, ts: Date.now(),
       services: { orca: { port: state.orcaPort, reachable: orcaOk }, infoReceiver: { port: state.receiverPort, reachable: receiverOk } },
       feishu: { lastMessageAt: state.feishu.lastMessageAt, lastImageAt: state.feishu.lastImageAt, lastMessageRel: relTime(state.feishu.lastMessageAt), lastImageRel: relTime(state.feishu.lastImageAt) },
       infoAgents: agents,
+      runtime: {
+        ...runtimeFocus,
+        activeTasks: scheduler?.getPendingCount() ?? 0,
+        cognitionRunning: scheduler?.isCognitionRunning() ?? false,
+      },
     })
   }
 
@@ -649,8 +699,8 @@ html, body {
 .snap-viewport {
   position: fixed;
   inset: 0;
-  overflow-y: scroll;
-  scroll-snap-type: y mandatory;
+  overflow: hidden;
+  scroll-snap-type: none;
   scroll-behavior: auto;
   z-index: 1;
   /* Hide scrollbar */
@@ -687,7 +737,7 @@ html, body {
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  padding-top: 12vh;
+  padding-top: 8vh;
   text-align: center;
   position: relative;
 }
@@ -698,8 +748,8 @@ html, body {
   letter-spacing: 0.35em;
   text-transform: uppercase;
   color: var(--muted);
-  margin-top: -18px;
-  margin-bottom: 4px;
+  margin-top: 0;
+  margin-bottom: 14px;
   opacity: 0;
   animation: aUp 0.9s ease 0.15s forwards;
 }
@@ -819,29 +869,29 @@ html, body {
   font-weight: 300;
   letter-spacing: 0.12em;
   color: var(--muted);
-  margin-top: -20px;
+  margin-top: 12px;
   margin-bottom: 0;
   opacity: 0;
   animation: aUp 0.9s ease 0.45s forwards;
 }
 
 .hero-lower {
-  margin-top: 14vh;
+  margin-top: 5vh;
 }
 
 .strip {
-  margin-top: -60px;
+  margin-top: -14px;
 }
 
 /* Core Orb */
 .core-wrap {
   position: relative;
-  width: 300px;
-  height: 300px;
+  width: 220px;
+  height: 220px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 64px auto 0;
+  margin: 22px auto 0;
   opacity: 0;
   animation: aIn 1.4s ease 0.7s forwards;
 }
@@ -1333,6 +1383,370 @@ html, body {
 .a2 { opacity:0; animation: aUp 0.8s ease 0.25s forwards; }
 .a3 { opacity:0; animation: aUp 0.8s ease 0.35s forwards; }
 .a4 { opacity:0; animation: aUp 0.8s ease 0.45s forwards; }
+
+/* ---- Refined surface system ---- */
+body {
+  background:
+    radial-gradient(circle at 50% -10%, rgba(125,211,252,.11), transparent 34%),
+    var(--bg);
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: .34;
+  background-image:
+    linear-gradient(rgba(125,211,252,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(125,211,252,.035) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(to bottom, black, transparent 80%);
+}
+
+.wrap { max-width: 1280px; padding-left: 48px; padding-right: 48px; }
+.hero { padding-top: 8vh; overflow: visible; }
+.hero-eyebrow { display: inline-flex; align-items: center; gap: 10px; color: var(--accent); font-size: 10px; letter-spacing: .28em; margin-top: 0; margin-bottom: 14px; }
+.hero-eyebrow::before { content: ''; width: 28px; height: 1px; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+.hero-title { text-shadow: 0 18px 60px rgba(0,0,0,.28); }
+.hero-sub { max-width: 420px; margin: 12px auto 0; letter-spacing: .18em; }
+
+/* The former four animated title layers occasionally read as overlapping glyphs. */
+.hero-title { min-height: .92em; }
+.hero-word {
+  display: block;
+  color: #eaf7ff;
+  text-shadow: 3px 0 0 rgba(34,211,238,.58), -3px 0 0 rgba(244,114,182,.38), 0 0 26px rgba(125,211,252,.72), 0 0 70px rgba(125,211,252,.22);
+  animation: titlePulse 5s ease-in-out infinite;
+}
+
+.hero-identity {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: visible;
+  max-height: 900px;
+  opacity: 1;
+  transform: translateY(0);
+  transition: max-height 1.05s cubic-bezier(.65,0,.35,1), opacity .55s ease, transform 1.05s cubic-bezier(.65,0,.35,1);
+}
+
+.hero-chat {
+  width: min(720px, 100%);
+  margin-top: 18px;
+  position: relative;
+  z-index: 4;
+}
+
+.hero-chat .cmd { opacity: 1; animation: none; }
+
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 0;
+  margin: 0 auto;
+  overflow: hidden;
+  opacity: 0;
+  padding: 0 2px;
+  transition: max-height 1.05s cubic-bezier(.2,.8,.2,1), opacity .5s ease, margin .8s ease, padding .8s ease;
+}
+
+.chat-msg {
+  width: fit-content;
+  max-width: min(88%, 560px);
+  padding: 12px 15px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 12px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  text-align: left;
+  box-shadow: 0 12px 26px rgba(0,0,0,.14);
+  animation: chatIn .45s cubic-bezier(.2,.8,.2,1) both;
+}
+
+.chat-msg.user { align-self: flex-end; background: rgba(125,211,252,.13); border-color: rgba(125,211,252,.25); }
+.chat-msg.orca { align-self: flex-start; background: rgba(255,255,255,.045); }
+.chat-msg.pending { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+@keyframes chatIn { from { opacity: 0; transform: translateY(12px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+.chat-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 8px;
+  background: rgba(255,255,255,.04);
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .35s ease, background .2s ease, color .2s ease;
+}
+.chat-close:hover { color: var(--text); background: rgba(255,255,255,.1); }
+
+body.chat-mode .snap-viewport { overflow: hidden; }
+body.chat-mode .hero { padding-top: 9vh; }
+body.chat-mode .hero-identity { max-height: 0; opacity: 0; transform: translateY(-28px); pointer-events: none; overflow: hidden; }
+body.chat-mode .hero-identity .scroll { opacity: 0; visibility: hidden; }
+body.chat-mode .hero-chat { margin-top: 0; }
+body.chat-mode .chat-thread { max-height: min(58vh, 560px); margin: 0 0 16px; padding: 40px 2px 6px; overflow: hidden; }
+body.chat-mode .chat-close { opacity: 1; pointer-events: auto; }
+body.chat-mode .cmd { margin-top: 0; animation: none; opacity: 1; }
+
+.strip {
+  gap: 0;
+  padding: 14px 16px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 18px;
+  background: rgba(10, 16, 29, .52);
+  box-shadow: 0 16px 50px rgba(0,0,0,.2), inset 0 1px 0 rgba(255,255,255,.05);
+  backdrop-filter: blur(16px);
+}
+.strip-item { min-width: 122px; padding: 0 18px; }
+.strip-n { font-size: 25px; }
+.strip-l { font-size: 9px; color: var(--dim); }
+.strip-sep { height: 34px; background: rgba(255,255,255,.1); }
+
+.space { padding-top: 100px; }
+.space-intro { margin-bottom: 48px; }
+.space-intro h2 { letter-spacing: -.035em; }
+.space-intro p { color: var(--muted); }
+.grid { gap: 0 36px; }
+
+.pill {
+  border-color: rgba(255,255,255,.085);
+  border-radius: 16px;
+  padding: 24px 24px;
+  background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(255,255,255,.018));
+  box-shadow: 0 18px 44px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.04);
+  backdrop-filter: blur(14px);
+}
+.pill::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 24px; right: 24px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(125,211,252,.45), transparent);
+  opacity: .65;
+}
+.pill:hover { border-color: rgba(125,211,252,.26); box-shadow: 0 20px 50px rgba(0,0,0,.24), 0 0 0 1px rgba(125,211,252,.05); }
+.pill-head { margin-bottom: 18px; }
+.pill-label { color: var(--muted); font-size: 10px; letter-spacing: .18em; }
+.pill-badge { border: 1px solid rgba(125,211,252,.15); }
+
+.agent-item { padding: 14px 0; }
+.agent-name { font-size: 14px; }
+.agent-doing { font-size: 12px; }
+.mem-sea { height: 220px; margin-bottom: 16px; }
+.mem-cat { padding: 8px 9px; }
+.act-row { padding: 11px 0; }
+.act-av { width: 26px; height: 26px; border: 1px solid rgba(255,255,255,.08); }
+
+.cmd { margin-top: 28px; }
+.cmd-field { border-radius: 14px; padding: 15px 18px; background: rgba(5,10,20,.6); border-color: rgba(255,255,255,.11); box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
+.cmd-field:focus-within { border-color: rgba(125,211,252,.48); box-shadow: 0 0 0 4px rgba(125,211,252,.08), 0 16px 40px rgba(0,0,0,.25); }
+.cmd-icon { font-size: 18px; }
+
+.sbar { padding: 12px 48px; border-top: 1px solid rgba(255,255,255,.06); background: rgba(7,11,20,.72); backdrop-filter: blur(16px); }
+.sbar-i { font-size: 11px; }
+.sbar-r { font-size: 10px; }
+.tpicker { top: 18px; right: 24px; }
+.tbtn { width: 38px; height: 38px; background: rgba(7,11,20,.66); backdrop-filter: blur(12px); }
+
+@media (max-width: 900px) {
+  .wrap { padding-left: 24px; padding-right: 24px; }
+  .hero { padding-top: 13vh; }
+  .hero-title { font-size: clamp(72px, 20vw, 130px); }
+  .core-wrap { transform: scale(.82); margin-top: 32px; margin-bottom: -22px; }
+  body.chat-mode .hero { padding-top: 7vh; }
+  body.chat-mode .chat-thread { max-height: 62vh; }
+  .strip-item { min-width: 92px; padding: 0 10px; }
+  .strip-n { font-size: 20px; }
+  .space { padding-top: 72px; padding-bottom: 100px; }
+  .grid { gap: 18px; }
+  .g-l, .g-c, .g-r { padding-top: 0; }
+  .g-c { order: -1; }
+  .core-sm { margin: 4px auto 18px; }
+  .orb-line { height: 24px; }
+  .mem-sea { height: 190px; }
+  .sbar { padding: 10px 20px; }
+  .sbar-l { gap: 12px; }
+  .sbar-i { font-size: 10px; }
+  .sbar-i:nth-child(3) { display: none; }
+  .sbar-r { display: none; }
+}
+
+@media (max-width: 560px) {
+  .hero { padding-top: 12vh; }
+  .hero-eyebrow { font-size: 8px; letter-spacing: .2em; }
+  .hero-sub { font-size: 12px; }
+  .hero-lower { margin-top: 9vh; }
+  .strip { width: 100%; justify-content: space-between; }
+  .strip-item { min-width: 0; flex: 1; padding: 0 7px; }
+  .strip-n { font-size: 17px; }
+  .strip-l { font-size: 8px; letter-spacing: .1em; }
+  .strip-sep { height: 28px; }
+  .space-intro h2 { font-size: 28px; }
+  .space-intro p { font-size: 13px; line-height: 1.5; }
+  .pill { padding: 20px 18px; }
+  .cmd-hints { gap: 10px; flex-wrap: wrap; }
+  .chat-msg { max-width: 92%; font-size: 13px; }
+  body.chat-mode .hero { padding-top: 5vh; }
+  body.chat-mode .chat-thread { max-height: 65vh; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+}
+
+/* ---- Frameless runtime surface ---- */
+.space-intro { text-align: left; max-width: 720px; margin-left: auto; margin-right: auto; }
+.space-kicker { margin-bottom: 14px; color: var(--accent); font-family: var(--mono); font-size: 10px; letter-spacing: .18em; }
+.space-intro h2 { font-size: clamp(30px, 4vw, 50px); }
+.space-intro p { max-width: 48ch; }
+.grid { grid-template-columns: minmax(0, 1fr) 300px minmax(0, 1.1fr); gap: 0 52px; }
+
+.pill {
+  border: 0;
+  border-radius: 0;
+  padding: 0 0 28px;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  border-bottom: 1px solid rgba(255,255,255,.12);
+}
+.pill::before { display: none; }
+.pill:hover { transform: none; border-color: rgba(255,255,255,.28); box-shadow: none; }
+.pill-head { padding-bottom: 14px; margin-bottom: 0; border-bottom: 1px solid rgba(255,255,255,.08); }
+.pill-label { color: var(--muted); font-size: 10px; letter-spacing: .16em; }
+.pill-badge { background: transparent; border: 0; padding: 2px 0; color: var(--accent); font-family: var(--mono); }
+.agent-item { padding: 18px 0; border-bottom-color: rgba(255,255,255,.08); }
+.agent-item:hover { padding-left: 0; }
+.mem-sea { margin-top: 14px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.mem-cat { border-bottom: 1px solid rgba(255,255,255,.06); border-radius: 0; padding: 11px 0; }
+.mem-cat:hover { background: transparent; }
+.act-row { border-bottom-color: rgba(255,255,255,.08); }
+.act-row:hover { padding-left: 0; }
+.act-av { border-radius: 6px; }
+.g-l, .g-r { padding-top: 72px; }
+.g-c { display: flex; flex-direction: column; align-items: center; min-height: 480px; padding-top: 0; }
+.g-c .orb-line { flex: 0 0 auto; }
+.core-caption { margin-top: 14px; color: var(--text); font-size: 11px; letter-spacing: .16em; text-transform: uppercase; text-align: center; }
+.runtime-pipeline { width: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 7px; margin-top: 22px; color: var(--muted); font-family: var(--mono); font-size: 9px; letter-spacing: .05em; text-align: center; }
+.runtime-pipeline span { color: var(--text); }
+.runtime-pipeline i { color: var(--accent); font-style: normal; opacity: .7; }
+.runtime-meta { display: flex; justify-content: center; gap: 18px; margin-top: 15px; color: var(--dim); font-family: var(--mono); font-size: 9px; }
+.runtime-meta span { white-space: nowrap; }
+.hero-chat .cmd-field { border-radius: 0; border-width: 0 0 1px; border-color: rgba(255,255,255,.16); background: transparent; box-shadow: none; padding-left: 0; padding-right: 0; }
+.hero-chat .cmd-field:focus-within { border-color: var(--accent); box-shadow: 0 8px 28px rgba(125,211,252,.08); }
+.hero-chat .cmd-hints { padding-left: 0; }
+
+@media (max-width: 900px) {
+  .space-intro { text-align: center; }
+  .grid { grid-template-columns: 1fr; gap: 42px; }
+  .g-l, .g-r { padding-top: 0; }
+  .g-c { min-height: 290px; order: -1; }
+  .runtime-pipeline { max-width: 340px; }
+}
+
+/* ---- Dashboard V2: runtime observatory ---- */
+body { background: #080d18; }
+.snap-viewport { position: fixed; inset: 0; min-height: 100vh; overflow: hidden; padding: 0 0 58px; }
+.page { min-height: 100vh; }
+.runtime-dashboard { width: min(1440px, calc(100% - 64px)); margin: 0 auto; }
+.page:nth-child(2) .runtime-dashboard { padding-top: 92px; }
+.runtime-grid { display: grid; grid-template-columns: minmax(200px, 3fr) minmax(440px, 6fr) minmax(200px, 3fr); gap: 36px; align-items: stretch; }
+.source-panel, .memory-panel { padding-top: 12px; border-top: 1px solid rgba(255,255,255,.14); }
+.panel-head, .focus-head { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+.panel-head b { color: var(--text); font-size: 10px; font-weight: 400; }
+.agent-list { margin-top: 16px; }
+.agent-item { padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,.08); }
+.agent-top { gap: 8px; margin: 0; }
+.agent-dot { width: 6px; height: 6px; }
+.agent-name { color: var(--text); font-family: var(--mono); font-size: 12px; }
+.agent-facts { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; color: var(--dim); font-size: 10px; }
+
+.focus-panel { min-height: 512px; padding: 22px 26px 18px; border: 1px solid rgba(125,211,252,.22); background: linear-gradient(145deg, rgba(125,211,252,.075), rgba(255,255,255,.018) 45%, rgba(255,255,255,.005)); box-shadow: 0 20px 70px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.06); }
+.focus-head { padding-bottom: 18px; border-bottom: 1px solid rgba(255,255,255,.1); }
+.focus-state { padding: 4px 8px; color: var(--accent); border: 1px solid rgba(125,211,252,.25); font-size: 9px; }
+.focus-state.thinking { color: var(--cyan); border-color: rgba(34,211,238,.4); }
+.focus-state.acting { color: var(--green); border-color: rgba(74,222,128,.4); }
+.focus-state.waiting { color: var(--amber); border-color: rgba(245,158,11,.4); }
+.focus-body { padding: 32px 0 22px; }
+.focus-status { display: flex; align-items: center; gap: 10px; color: var(--text); font-family: var(--mono); font-size: 28px; letter-spacing: .02em; }
+.focus-pulse { width: 9px; height: 9px; background: var(--accent); box-shadow: 0 0 16px var(--accent); border-radius: 50%; animation: focusPulse 2s ease-in-out infinite; }
+@keyframes focusPulse { 50% { opacity: .35; transform: scale(.72); } }
+.focus-body p { max-width: 54ch; margin: 16px 0 26px; color: var(--muted); font-size: 14px; line-height: 1.65; }
+.focus-facts { display: grid; grid-template-columns: 1.2fr 1.2fr .7fr; border-top: 1px solid rgba(255,255,255,.1); border-bottom: 1px solid rgba(255,255,255,.1); }
+.focus-facts > div { min-width: 0; padding: 13px 14px 13px 0; }
+.focus-facts > div + div { padding-left: 14px; border-left: 1px solid rgba(255,255,255,.1); }
+.focus-facts span, .focus-budget span, .memory-stats span { display: block; color: var(--dim); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+.focus-facts strong { display: block; overflow: hidden; margin-top: 7px; color: var(--text); font-family: var(--mono); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.focus-budget { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+.focus-budget strong { display: block; margin-top: 5px; color: var(--muted); font-family: var(--mono); font-size: 10px; font-weight: 400; }
+.budget-ring { display: grid; width: 38px; height: 38px; place-items: center; border: 2px solid rgba(125,211,252,.25); border-right-color: var(--accent); border-radius: 50%; color: var(--accent); font-family: var(--mono); font-size: 10px; }
+.timeline-head { padding-top: 16px; color: var(--muted); font-family: var(--mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; }
+.focus-timeline { margin-top: 10px; border-top: 1px solid rgba(255,255,255,.08); }
+.timeline-row { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.06); font-size: 11px; }
+.timeline-row time, .timeline-row small { color: var(--dim); font-family: var(--mono); font-size: 9px; }
+.timeline-row span { color: var(--text); }
+.timeline-empty { padding: 16px 0; color: var(--dim); font-family: var(--mono); font-size: 10px; }
+
+.memory-map { position: relative; height: 276px; margin-top: 16px; border-bottom: 1px solid rgba(255,255,255,.1); background-image: linear-gradient(rgba(125,211,252,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(125,211,252,.04) 1px, transparent 1px); background-size: 24px 24px; }
+.memory-node { position: absolute; display: grid; place-items: center; aspect-ratio: 1; border: 1px solid currentColor; border-radius: 50%; color: var(--accent); background: rgba(125,211,252,.035); text-align: center; }
+.memory-node span { display: block; font-size: 9px; }
+.memory-node b { display: block; margin-top: 3px; font-family: var(--mono); font-size: 12px; font-weight: 400; }
+.memory-node.projects { left: 6%; top: 12%; width: 88px; }
+.memory-node.knowledge { right: 6%; top: 9%; width: 114px; color: var(--green); }
+.memory-node.preferences { left: 18%; bottom: 12%; width: 72px; color: var(--cyan); }
+.memory-node.experiences { right: 14%; bottom: 10%; width: 94px; color: var(--amber); }
+.memory-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding-top: 15px; }
+.memory-stats b { display: block; margin-top: 6px; color: var(--text); font-family: var(--mono); font-size: 11px; font-weight: 400; }
+
+.stream-panel { margin-top: 36px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.14); }
+.event-terminal { height: 184px; margin-top: 14px; overflow: hidden; font-family: var(--mono); }
+.act-row { display: grid; grid-template-columns: 74px 180px 1fr; gap: 12px; padding: 6px 0; border: 0; color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.act-row time { color: var(--dim); }
+.event-type { color: var(--accent); }
+.event-copy { overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.act-loading { padding: 8px 0; color: var(--dim); font-size: 11px; }
+
+.sbar { top: auto; bottom: 0; padding: 14px 32px; border-top: 1px solid rgba(255,255,255,.08); border-bottom: 0; background: rgba(8,13,24,.78); }
+.sbar::before { content: 'ORCA'; margin-right: 26px; color: var(--text); font-family: var(--mono); font-size: 12px; letter-spacing: .18em; }
+.sbar-l { gap: 18px; }
+.sbar-i { font-family: var(--mono); font-size: 10px; }
+.tpicker { top: 64px; right: 22px; }
+
+@media (max-width: 960px) {
+  .runtime-dashboard { width: min(100% - 40px, 680px); }
+  .runtime-grid { grid-template-columns: 1fr; gap: 28px; }
+  .focus-panel { order: -1; min-height: 0; }
+  .memory-map { height: 220px; }
+}
+@media (max-width: 620px) {
+  .snap-viewport { padding-bottom: 48px; }
+  .runtime-dashboard { width: calc(100% - 28px); }
+  .page:nth-child(2) .runtime-dashboard { padding-top: 52px; }
+  .focus-panel { padding: 18px; }
+  .focus-facts { grid-template-columns: 1fr; }
+  .focus-facts > div, .focus-facts > div + div { padding: 11px 0; border-left: 0; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .timeline-row { grid-template-columns: 58px 1fr; }
+  .timeline-row small { display: none; }
+  .act-row { grid-template-columns: 60px 1fr; }
+  .event-copy { display: none; }
+  .sbar { padding: 14px; }
+  .sbar::before { margin-right: 14px; }
+  .sbar-i:nth-child(2), .sbar-i:nth-child(3), .sbar-r { display: none; }
+}
 </style>
 </head>
 <body>
@@ -1344,177 +1758,93 @@ html, body {
 <div class="scanlines"></div>
 
 <div class="snap-viewport">
-
-  <!-- PAGE 1: HERO -->
+  <!-- PAGE 1: ORCA main interface -->
   <div class="page">
     <div class="wrap">
       <section class="hero">
-        <div class="hero-eyebrow">Personal Intelligence System</div>
-        <h1 class="hero-title">
-          <span class="t-cyan"><b class="t-inner">ORCA</b></span>
-          <span class="t-blue"><b class="t-inner">ORCA</b></span>
-          <span class="t-pink"><b class="t-inner">ORCA</b></span>
-          <span class="t-white"><b class="t-inner">ORCA</b></span>
-        </h1>
-        <p class="hero-sub">Autonomous AI Workspace</p>
-
-        <div class="hero-lower">
-        <div class="core-wrap">
-          <svg class="core-svg" viewBox="0 0 300 300">
-            <circle class="cring cring-1" cx="150" cy="150" r="55" />
-            <circle class="cring cring-2" cx="150" cy="150" r="78" />
-            <circle class="cring cring-3" cx="150" cy="150" r="104" />
-            <circle class="cring cring-4" cx="150" cy="150" r="132" />
-          </svg>
-          <div class="cdot"></div>
-        </div>
-
-        <div class="scroll">
-          <div class="scroll-t">Explore</div>
-          <div class="scroll-l"></div>
-        </div>
-        </div>
-
-        <div class="strip">
-          <div class="strip-item">
-            <div class="strip-n" id="hero-agents">${agents.length}</div>
-            <div class="strip-l">Agents</div>
+        <div class="hero-identity">
+          <div class="hero-eyebrow">Personal Intelligence System</div>
+          <h1 class="hero-title"><span class="hero-word">ORCA</span></h1>
+          <p class="hero-sub">Autonomous Workspace</p>
+          <div class="hero-lower">
+            <div class="core-wrap">
+              <svg class="core-svg" viewBox="0 0 300 300">
+                <circle class="cring cring-1" cx="150" cy="150" r="55" />
+                <circle class="cring cring-2" cx="150" cy="150" r="78" />
+                <circle class="cring cring-3" cx="150" cy="150" r="104" />
+                <circle class="cring cring-4" cx="150" cy="150" r="132" />
+              </svg>
+              <div class="cdot"></div>
+            </div>
+            <div class="scroll"><div class="scroll-t">Explore</div><div class="scroll-l"></div></div>
           </div>
-          <div class="strip-sep"></div>
-          <div class="strip-item">
-            <div class="strip-n" id="hero-core">${orcaOk ? 'Online' : 'Offline'}</div>
-            <div class="strip-l">Core</div>
+          <div class="strip">
+            <div class="strip-item"><div class="strip-n" id="hero-agents">${agents.length}</div><div class="strip-l">Agents</div></div>
+            <div class="strip-sep"></div>
+            <div class="strip-item"><div class="strip-n" id="hero-core">${orcaOk ? 'Online' : 'Offline'}</div><div class="strip-l">Core</div></div>
+            <div class="strip-sep"></div>
+            <div class="strip-item"><div class="strip-n" id="hero-lastseen">${state.feishu.lastMessageAt ? relTime(state.feishu.lastMessageAt) : '—'}</div><div class="strip-l">Last seen</div></div>
           </div>
-          <div class="strip-sep"></div>
-          <div class="strip-item">
-            <div class="strip-n" id="hero-lastseen">${state.feishu.lastMessageAt ? relTime(state.feishu.lastMessageAt) : '—'}</div>
-            <div class="strip-l">Last seen</div>
+        </div>
+        <div class="hero-chat" id="heroChat">
+          <div class="chat-thread" id="chatThread" aria-live="polite"></div>
+          <button class="chat-close" id="chatClose" type="button" title="Close conversation" aria-label="Close conversation">×</button>
+          <div class="cmd">
+            <div class="cmd-field" id="cmdFld"><div class="cmd-icon">⬡</div><input type="text" class="cmd-input" placeholder="Ask Orca anything…" id="cmdIn" autocomplete="off" spellcheck="false"></div>
+            <div class="cmd-hints"><span class="cmd-h"><kbd>↵</kbd> Send</span><span class="cmd-h"><kbd>Ctrl K</kbd> Focus</span><span class="cmd-h"><kbd>Esc</kbd> Clear</span></div>
           </div>
         </div>
       </section>
     </div>
   </div>
 
-  <!-- PAGE 2: WORKSPACE -->
+  <!-- PAGE 2: Runtime Dashboard V2 -->
   <div class="page">
-    <div class="wrap">
-      <section class="space">
+    <main class="runtime-dashboard">
+      <section class="runtime-grid">
+        <aside class="source-panel">
+          <div class="panel-head"><span>Information Sources</span><b id="agent-count">${agents.length}</b></div>
+          <div class="agent-list">
+            ${agents.length === 0 ? '<div class="agent-item"><span class="agent-name">No source online</span></div>' : agents.map((a, i) => `
+              <div class="agent-item">
+                <div class="agent-top"><span class="agent-dot ${i === 0 ? 'on' : 'idle'}"></span><span class="agent-name">${a.name}</span></div>
+                <div class="agent-facts"><span>${i === 0 ? 'active now' : 'standing by'}</span><span>calls today —</span></div>
+              </div>`).join('')}
+          </div>
+        </aside>
 
-        <div class="space-intro">
-          <h2>Your Intelligence Ecosystem</h2>
-          <p>Where agents think, memories flow, and actions leave traces</p>
-        </div>
-
-        <div class="grid">
-
-          <!-- LEFT: Agent Network -->
-          <div class="g-l">
-            <div class="pill a1">
-              <div class="pill-head">
-                <span class="pill-label">Agent Network</span>
-                <span class="pill-badge" id="agent-count">${agents.length}</span>
-              </div>
-              <div class="agent-list">
-                ${agents.length === 0 ? `
-                  <div class="agent-item">
-                    <div class="agent-doing" style="margin-left:0">No agents active — awaiting connection</div>
-                  </div>` : ''}
-                ${agents.map((a, i) => {
-                  const on = i === 0
-                  return `
-                  <div class="agent-item">
-                    <div class="agent-top">
-                      <span class="agent-name">${a.name}</span>
-                      <div class="agent-meta">
-                        <span class="agent-dot ${on ? 'on' : 'idle'}"></span>
-                        <span class="agent-slabel ${on ? 'on' : 'idle'}">${on ? 'Active' : 'Idle'}</span>
-                      </div>
-                    </div>
-                    <div class="agent-doing">${a.description || 'Standing by'}</div>
-                  </div>`
-                }).join('')}
-              </div>
+        <section class="focus-panel" aria-label="Current Focus">
+          <div class="focus-head"><span>Current Focus</span><span class="focus-state" id="focus-state">Idle</span></div>
+          <div class="focus-body">
+            <div class="focus-status"><span class="focus-pulse"></span><span id="focus-status">Idle</span></div>
+            <p id="focus-description">Waiting for a signal that needs attention.</p>
+            <div class="focus-facts">
+              <div><span>Trigger Source</span><strong id="focus-trigger">—</strong></div>
+              <div><span>Attention Rule</span><strong id="focus-rule">—</strong></div>
+              <div><span>Active Tasks</span><strong id="focus-tasks">0</strong></div>
             </div>
+            <div class="focus-budget"><div class="budget-ring" id="budget-ring"><span id="focus-budget">—</span></div><div><span>Cognitive Budget</span><strong>Not configured</strong></div></div>
           </div>
+          <div class="timeline-head">Recent Cognition</div>
+          <div class="focus-timeline" id="focus-timeline"><div class="timeline-empty">No cognition events recorded.</div></div>
+        </section>
 
-          <!-- CENTER: Core + orbitals -->
-          <div class="g-c a2">
-            <div class="orb-line"></div>
-            <div class="orb-dot"></div>
-            <div class="core-sm">
-              <svg class="core-svg" viewBox="0 0 100 100">
-                <circle class="cring cring-1" cx="50" cy="50" r="20" />
-                <circle class="cring cring-2" cx="50" cy="50" r="32" />
-                <circle class="cring cring-3" cx="50" cy="50" r="44" />
-              </svg>
-              <div class="cdot" style="width:7px;height:7px"></div>
-            </div>
-            <div class="orb-dot"></div>
-            <div class="orb-line"></div>
+        <aside class="memory-panel">
+          <div class="panel-head"><span>Memory Ocean</span><b id="memory-total">0</b></div>
+          <div class="memory-map" id="memory-map">
+            <div class="memory-node projects"><span>Projects</span><b id="mc-projects">0</b></div>
+            <div class="memory-node knowledge"><span>Knowledge</span><b id="mc-knowledge">0</b></div>
+            <div class="memory-node preferences"><span>Preferences</span><b id="mc-preferences">0</b></div>
+            <div class="memory-node experiences"><span>Experiences</span><b id="mc-experiences">0</b></div>
           </div>
-
-          <!-- RIGHT: Memory Ocean + Activity -->
-          <div class="g-r">
-
-            <!-- Memory Ocean -->
-            <div class="pill a3" style="margin-bottom:18px">
-              <div class="pill-head">
-                <span class="pill-label">Memory Ocean</span>
-                <span class="pill-badge">4 layers</span>
-              </div>
-
-              <div class="mem-sea">
-                <svg class="mem-svg" viewBox="0 0 320 260" preserveAspectRatio="xMidYMid meet">
-                  <path class="mpath mp-1" d="M60,68 C105,56 130,90 160,130" />
-                  <path class="mpath mp-2" d="M260,52 C218,82 190,106 160,130" />
-                  <path class="mpath mp-3" d="M76,192 C118,165 142,148 160,130" />
-                  <path class="mpath mp-4" d="M244,194 C200,168 180,150 160,130" />
-                  <path class="mpath mp-x" d="M60,68 C90,135 125,180 244,194" />
-                  <path class="mpath mp-x" d="M260,52 C198,105 175,145 76,192" />
-                </svg>
-                <div class="mnode mn-1" data-label="Projects"      style="left:16%;top:26%"></div>
-                <div class="mnode mn-2" data-label="Preferences"   style="left:78%;top:19%"></div>
-                <div class="mnode mn-3" data-label="Knowledge"     style="left:20%;top:76%"></div>
-                <div class="mnode mn-4" data-label="Experiences"   style="left:73%;top:78%"></div>
-                <div class="mem-ctr"></div>
-              </div>
-
-              <div class="mem-cats">
-                <div class="mem-cat"><div class="mem-cdot" style="background:var(--accent)"></div><span class="mem-clbl">Projects</span><span class="mem-cn" id="mc-projects">—</span></div>
-                <div class="mem-cat"><div class="mem-cdot" style="background:var(--cyan)"></div><span class="mem-clbl">Preferences</span><span class="mem-cn" id="mc-preferences">—</span></div>
-                <div class="mem-cat"><div class="mem-cdot" style="background:var(--green)"></div><span class="mem-clbl">Knowledge</span><span class="mem-cn" id="mc-knowledge">—</span></div>
-                <div class="mem-cat"><div class="mem-cdot" style="background:var(--amber)"></div><span class="mem-clbl">Experiences</span><span class="mem-cn" id="mc-experiences">—</span></div>
-              </div>
-            </div>
-
-            <!-- Activity -->
-            <div class="pill a4">
-              <div class="pill-head">
-                <span class="pill-label">Activity</span>
-              </div>
-              <div class="act" id="actFeed">
-                <div class="act-loading" style="font-size:12px;color:var(--dim);padding:8px 0">Loading events…</div>
-              </div>
-            </div>
-          </div>
-
-        </div>
-
-        <!-- Command -->
-        <div class="cmd">
-          <div class="cmd-field" id="cmdFld">
-            <div class="cmd-icon">⬡</div>
-            <input type="text" class="cmd-input" placeholder="Ask Orca anything…" id="cmdIn" autocomplete="off" spellcheck="false">
-          </div>
-          <div class="cmd-hints">
-            <span class="cmd-h"><kbd>↵</kbd> Send</span>
-            <span class="cmd-h"><kbd>Ctrl K</kbd> Focus</span>
-            <span class="cmd-h"><kbd>Esc</kbd> Clear</span>
-          </div>
-        </div>
-
+          <div class="memory-stats"><div><span>Retrieved Today</span><b id="memory-retrieved">—</b></div><div><span>Last Reflection</span><b id="memory-reflection">—</b></div></div>
+        </aside>
       </section>
-    </div>
+      <section class="stream-panel">
+        <div class="panel-head"><span>Event Stream</span><b id="runtime-buffer">—</b></div>
+        <div class="event-terminal" id="actFeed"><div class="act-loading">Awaiting runtime events…</div></div>
+      </section>
+    </main>
   </div>
 
 </div>
@@ -1636,6 +1966,7 @@ document.addEventListener('DOMContentLoaded', function() {
       if (agentCount) agentCount.textContent = String(d.infoAgents && d.infoAgents.length || 0)
 
       renderAgentList(d.infoAgents || [])
+      renderFocus(d.runtime || {})
     } catch (_) {}
   }
 
@@ -1643,22 +1974,40 @@ document.addEventListener('DOMContentLoaded', function() {
     var list = document.querySelector('.agent-list')
     if (!list) return
     if (!agents.length) {
-      list.innerHTML = '<div class="agent-item"><div class="agent-doing" style="margin-left:0">No agents active — awaiting connection</div></div>'
+      list.innerHTML = '<div class="agent-item"><span class="agent-name">No source online</span></div>'
       return
     }
     list.innerHTML = agents.map(function(a, i) {
       var on = i === 0
       return '<div class="agent-item">' +
-        '<div class="agent-top">' +
-          '<span class="agent-name">' + esc(a.name) + '</span>' +
-          '<div class="agent-meta">' +
-            '<span class="agent-dot ' + (on ? 'on' : 'idle') + '"></span>' +
-            '<span class="agent-slabel ' + (on ? 'on' : 'idle') + '">' + (on ? 'Active' : 'Idle') + '</span>' +
-          '</div>' +
-        '</div>' +
-        '<div class="agent-doing">' + esc(a.description || 'Standing by') + '</div>' +
+        '<div class="agent-top"><span class="agent-dot ' + (on ? 'on' : 'idle') + '"></span><span class="agent-name">' + esc(a.name) + '</span></div>' +
+        '<div class="agent-facts"><span>' + (on ? 'active now' : 'standing by') + '</span><span>calls today —</span></div>' +
       '</div>'
     }).join('')
+  }
+
+  function renderFocus(runtime) {
+    var status = runtime.status || 'Idle'
+    var statusEl = $('focus-status')
+    var badge = $('focus-state')
+    var description = $('focus-description')
+    var trigger = $('focus-trigger')
+    var rule = $('focus-rule')
+    var tasks = $('focus-tasks')
+    if (statusEl) statusEl.textContent = status
+    if (badge) { badge.textContent = status; badge.className = 'focus-state ' + String(status).toLowerCase() }
+    if (description) description.textContent = runtime.description || 'Waiting for a signal that needs attention.'
+    if (trigger) trigger.textContent = runtime.triggerSource || '—'
+    if (rule) rule.textContent = runtime.attentionRule || '—'
+    if (tasks) tasks.textContent = String(runtime.activeTasks || 0)
+    var timeline = $('focus-timeline')
+    if (timeline) {
+      var events = Array.isArray(runtime.timeline) ? runtime.timeline : []
+      timeline.innerHTML = events.length ? events.map(function(event) {
+        var time = new Date(event.at).toLocaleTimeString('zh-CN', { hour12: false })
+        return '<div class="timeline-row"><time>' + esc(time) + '</time><span>' + esc(event.label) + '</span><small>' + esc(event.detail) + '</small></div>'
+      }).join('') : '<div class="timeline-empty">No cognition events recorded.</div>'
+    }
   }
 
   /* ─── Activity feed ─── */
@@ -1669,6 +2018,8 @@ document.addEventListener('DOMContentLoaded', function() {
       var d = await r.json()
       var feed = $('actFeed')
       if (!feed) return
+      var buffer = $('runtime-buffer')
+      if (buffer && typeof d.bufferSize === 'number') buffer.textContent = d.bufferSize + ' buffered'
 
       if (!d.events || !d.events.length) {
         feed.innerHTML = '<div class="act-loading" style="font-size:12px;color:var(--dim);padding:8px 0">No events yet</div>'
@@ -1687,14 +2038,18 @@ document.addEventListener('DOMContentLoaded', function() {
           ? (String(ev.data.text).slice(0, 60) + (String(ev.data.text).length > 60 ? '…' : ''))
           : label
         var meta = new Date(ev.timestamp).toLocaleTimeString('zh-CN', { hour12: false })
-        return '<div class="act-row">' +
-          '<div class="act-av ' + cls + '">' + icon + '</div>' +
-          '<div class="act-b">' +
-            '<div class="act-t">' + esc(text) + '</div>' +
-            '<div class="act-m">' + esc(meta) + ' · ' + esc(label) + '</div>' +
-          '</div>' +
-        '</div>'
+        return '<div class="act-row"><time>' + esc(meta) + '</time><span class="event-type">' + esc(label) + '</span><span class="event-copy">' + esc(text) + '</span></div>'
       }).join('')
+    } catch (_) {}
+  }
+
+  async function refreshRuntimeTelemetry() {
+    try {
+      var r = await fetch('/api/attention')
+      if (!r.ok) return
+      var d = await r.json()
+      var rules = $('runtime-rules')
+      if (rules && typeof d.ruleCount === 'number') rules.textContent = 'Attention rules ' + d.ruleCount
     } catch (_) {}
   }
 
@@ -1705,17 +2060,27 @@ document.addEventListener('DOMContentLoaded', function() {
       if (!r.ok) return
       var d = await r.json()
       if (!d.layers) return
+      var total = 0
       d.layers.forEach(function(layer) {
         var el = $('mc-' + layer.key.toLowerCase())
         if (el) el.textContent = layer.count ? String(layer.count) : '—'
+        total += Number(layer.count || 0)
       })
+      var memoryTotal = $('memory-total')
+      if (memoryTotal) memoryTotal.textContent = String(total)
     } catch (_) {}
   }
 
   /* ─── Command bar ─── */
   var inp = $('cmdIn')
   var fld = $('cmdFld')
+  var chatThread = $('chatThread')
+  var chatClose = $('chatClose')
   fld && fld.addEventListener('click', function() { inp && inp.focus() })
+  chatClose && chatClose.addEventListener('click', function() {
+    document.body.classList.remove('chat-mode')
+    if (snapViewport) snapViewport.scrollTop = 0
+  })
   document.addEventListener('keydown', function(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); inp && inp.focus() }
     if (e.key === 'Escape' && document.activeElement === inp) { inp.value = ''; inp.blur() }
@@ -1727,6 +2092,9 @@ document.addEventListener('DOMContentLoaded', function() {
     inp.value = ''
 
     var id = 'msg-' + Date.now()
+    enterChatMode()
+    appendChatMessage(id + '-user', 'user', text)
+    appendChatMessage(id, 'orca pending', 'Orca is thinking…')
     appendActivity('◉', 'act-av-g', esc(text), 'sending…', id)
 
     try {
@@ -1738,8 +2106,35 @@ document.addEventListener('DOMContentLoaded', function() {
       if (!r.ok) throw new Error('chat failed')
     } catch (_) {
       updateActivity(id, '◌', 'act-av-a', esc(text), 'send failed')
+      updateChatMessage(id, 'orca', 'Message could not be sent. Please try again.')
     }
   })
+
+  function enterChatMode() {
+    document.body.classList.add('chat-mode')
+    if (snapViewport && currentPage !== 0) {
+      currentPage = 0
+      smoothScrollTo(snapViewport, 0, 1450)
+    }
+  }
+
+  function appendChatMessage(id, classes, text) {
+    if (!chatThread) return
+    var message = document.createElement('div')
+    message.id = 'chat-' + id
+    message.className = 'chat-msg ' + classes
+    message.textContent = text
+    chatThread.appendChild(message)
+    chatThread.scrollTop = chatThread.scrollHeight
+  }
+
+  function updateChatMessage(id, classes, text) {
+    var message = $('chat-' + id)
+    if (!message) return
+    message.className = 'chat-msg ' + classes
+    message.textContent = text || 'No response received.'
+    if (chatThread) chatThread.scrollTop = chatThread.scrollHeight
+  }
 
   function appendActivity(icon, cls, text, meta, id) {
     var feed = $('actFeed')
@@ -1779,7 +2174,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (ev.type === 'orca' && ev.data && ev.data.id) {
           var icon = ev.data.error ? '◌' : '◉'
           var cls = ev.data.error ? 'act-av-a' : 'act-av-g'
-          updateActivity(ev.data.id, icon, cls, esc(ev.data.reply || ''), new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+          var reply = ev.data.reply || (ev.data.error ? 'Orca could not complete this request.' : 'No response received.')
+          updateActivity(ev.data.id, icon, cls, esc(reply), new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+          updateChatMessage(ev.data.id, ev.data.error ? 'orca error' : 'orca', reply)
         }
       } catch (_) {}
     })
@@ -1796,25 +2193,30 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   /* ─── Wheel scroll — one wheel tick = one full page snap ─── */
-  var snapViewport = $('.snap-viewport')
+  var snapViewport = document.querySelector('.snap-viewport')
   var pages = snapViewport ? snapViewport.querySelectorAll('.page') : []
   var currentPage = 0
   var isScrolling = false
+  var wheelCooldown = false
 
   if (snapViewport) {
-    snapViewport.addEventListener('wheel', function(e) {
+    document.addEventListener('wheel', function(e) {
       e.preventDefault()
-      if (isScrolling) return
-      var delta = e.wheelDeltaY !== undefined ? -e.wheelDeltaY : (e.deltaY || e.detail || 0)
-      var nextPage = currentPage + (delta > 0 ? 1 : delta < 0 ? -1 : 0)
+      if (document.body.classList.contains('chat-mode')) return
+      if (isScrolling || wheelCooldown) return
+      var delta = e.deltaY || 0
+      if (Math.abs(delta) < 1) return
+      var nextPage = currentPage + (delta > 0 ? 1 : -1)
       if (nextPage < 0 || nextPage >= pages.length || nextPage === currentPage) return
       currentPage = nextPage
       isScrolling = true
+      wheelCooldown = true
       var targetTop = pages[currentPage].offsetTop
-      smoothScrollTo(snapViewport, targetTop, 900, function() {
+      smoothScrollTo(snapViewport, targetTop, 1450, function() {
         isScrolling = false
+        window.setTimeout(function() { wheelCooldown = false }, 360)
       })
-    }, { passive: false })
+    }, { passive: false, capture: true })
   }
 
   function smoothScrollTo(el, targetTop, duration, onDone) {
@@ -1825,8 +2227,10 @@ document.addEventListener('DOMContentLoaded', function() {
       if (!startTime) startTime = timestamp
       var elapsed = timestamp - startTime
       var progress = Math.min(elapsed / duration, 1)
-      // easeInOutCubic
-      var t = progress < 0.5 ? 4 * progress * progress * progress : 1 - Math.pow(-2 * progress + 2, 3) / 2
+      // A longer quintic curve avoids the abrupt start/end of the previous snap motion.
+      var t = progress < 0.5
+        ? 16 * progress * progress * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 5) / 2
       el.scrollTop = startTop + diff * t
       if (progress < 1) {
         requestAnimationFrame(step)
@@ -1840,12 +2244,14 @@ document.addEventListener('DOMContentLoaded', function() {
   /* ─── Boot ─── */
   refreshStatus()
   refreshActivity()
+  refreshRuntimeTelemetry()
   refreshMemory()
   connectSSE()
   tick()
 
   setInterval(refreshStatus, 5000)
   setInterval(refreshActivity, 5000)
+  setInterval(refreshRuntimeTelemetry, 10000)
   setInterval(refreshMemory, 15000)
   setInterval(tick, 10000)
 })
@@ -1860,7 +2266,10 @@ document.addEventListener('DOMContentLoaded', function() {
     ctx.logger.info('[dashboard] 仪表盘已启动 http://127.0.0.1:%d/dashboard', DASHBOARD_PORT)
   })
 
-  return () => { server.close() }
+  return () => {
+    unsubscribers.forEach((unsubscribe) => unsubscribe())
+    server.close()
+  }
 }
 
 function sendJson(res: ServerResponse, status: number, obj: unknown): void {

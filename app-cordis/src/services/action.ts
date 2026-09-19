@@ -31,6 +31,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { readFile, statfs } from 'node:fs/promises'
+import { isAbsolute, resolve } from 'node:path'
+import { arch, cpus, freemem, hostname, loadavg, platform, totalmem, uptime, userInfo } from 'node:os'
 import type { Decision } from '../types/decision.js'
 import type { OrcaEvent } from '../types/event.js'
 import type {
@@ -705,6 +708,158 @@ export function createMemoryForgetHandler(ctx: MemoryForgetContext): ActionHandl
       }
     },
   }
+}
+
+// ── filesystem.read handler（Phase D：第一批真实 Capability）──────────────
+
+/**
+ * FilesystemReadContext —— filesystem.read handler 需要的最小依赖
+ */
+export interface FilesystemReadContext {
+  /** 允许读取的根目录（路径必须为绝对路径） */
+  allowedRoot: string
+  /** Logger */
+  logger?: {
+    info(msg: string, ...args: unknown[]): void
+    warn(msg: string, ...args: unknown[]): void
+  }
+}
+
+
+// ── system.info handler（Phase E：只读系统环境信息）──────────────────────
+export interface SystemInfoContext {
+  diskPath: string
+  logger?: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void }
+}
+type SystemInfoScope = 'cpu' | 'memory' | 'disk' | 'process' | 'environment'
+
+/** 只读系统快照：不执行 shell、不写 WorldState。 */
+export function createSystemInfoHandler(ctx: SystemInfoContext): ActionHandler {
+  return {
+    name: 'system.info', action: 'system.info',
+    async execute(decision: Decision): Promise<ActionResult> {
+      const scopes = parseSystemInfoScopes(decision.reason)
+      if (!scopes) return failResult(decision, `system.info: cannot parse reason: ${decision.reason}`)
+      try {
+        const info: Record<string, unknown> = {}
+        if (scopes.includes('cpu')) { const list = cpus(); info.cpu = { count: list.length, model: list[0]?.model ?? 'unknown', loadAverage: loadavg() } }
+        if (scopes.includes('memory')) { const total = totalmem(); const free = freemem(); info.memory = { totalBytes: total, freeBytes: free, usedBytes: total - free, usageRatio: total > 0 ? (total - free) / total : 0 } }
+        if (scopes.includes('disk')) {
+          try { const fs = await statfs(ctx.diskPath); const b = Number(fs.bsize); const total = Number(fs.blocks) * b; info.disk = { path: ctx.diskPath, totalBytes: total, availableBytes: Number(fs.bavail) * b, usedBytes: Math.max(0, total - Number(fs.bfree) * b) } }
+          catch (err) { info.disk = { path: ctx.diskPath, error: err instanceof Error ? err.message : String(err) } }
+        }
+        if (scopes.includes('process')) { const u = process.memoryUsage(); info.process = { pid: process.pid, uptimeSeconds: process.uptime(), runtimeUptimeSeconds: uptime(), rssBytes: u.rss, heapUsedBytes: u.heapUsed, heapTotalBytes: u.heapTotal } }
+        if (scopes.includes('environment')) { const env = process.env; info.environment = { hostname: hostname(), platform: platform(), arch: arch(), nodeVersion: process.version, user: userInfo().username, cwd: process.cwd(), runtime: env.ORCA_RUNTIME_ENABLED === '1', llmBackend: env.ORCA_LLM_BACKEND ?? 'dashscope', dryRun: env.ORCA_DRY_RUN === '1' } }
+        ctx.logger?.info('[action:system.info] 读取系统信息成功 scopes=%s', scopes.join(','))
+        return okResult(decision, { info, scopes })
+      } catch (err) { const detail = err instanceof Error ? err.message : String(err); ctx.logger?.warn('[action:system.info] 读取失败: %s', detail); return failResult(decision, `system.info failed: ${detail}`) }
+    },
+  }
+}
+
+function parseSystemInfoScopes(reason: string): SystemInfoScope[] | null {
+  const all: SystemInfoScope[] = ['cpu', 'memory', 'disk', 'process', 'environment']
+  if (!reason.trim()) return all
+  try { const parsed: unknown = JSON.parse(reason); if (parsed === null || typeof parsed !== 'object') return null; const raw = (parsed as { scope?: unknown }).scope; if (raw === undefined) return all; if (!Array.isArray(raw) || !raw.every((v) => typeof v === 'string' && all.includes(v as SystemInfoScope))) return null; return raw as SystemInfoScope[] } catch { return null }
+}
+interface FilesystemReadParams {
+  path: string
+  encoding?: string
+}
+
+/**
+ * filesystem.read handler
+ *
+ * 行为：
+ * - 从 Decision.reason 中解析 JSON { path, encoding? }
+ * - 安全校验：规范化路径后验证仍在 allowedRoot 内
+ * - 读取文件内容（encoding 默认为 utf-8）
+ * - 返回 content + metadata
+ *
+ * 约束：
+ * - 不读取 allowedRoot 以外的任何路径
+ * - 不执行文件（仅读取）
+ * - encoding 非法时返回 success=false
+ * - 文件不存在 / 无权限 → success=false + 明确 error
+ * - 目录而非文件 → success=false + 明确 error
+ */
+export function createFilesystemReadHandler(ctx: FilesystemReadContext): ActionHandler {
+  return {
+    name: 'filesystem.read',
+    action: 'filesystem.read',
+    async execute(decision: Decision): Promise<ActionResult> {
+      // 1. 解析 reason JSON
+      const params = tryParseReadParams(decision.reason)
+      if (!params) {
+        return failResult(decision, `filesystem.read: cannot parse reason: ${decision.reason}`)
+      }
+
+      if (!params.path) {
+        return failResult(decision, 'filesystem.read: path is required')
+      }
+
+      // 2. 安全校验：规范化路径，验证在 allowedRoot 内
+      const normalizedPath = isAbsolute(params.path)
+        ? params.path
+        : resolve(ctx.allowedRoot, params.path)
+
+      // 检查规范化后的路径是否在 allowedRoot 下
+      // 使用 resolve 将 allowedRoot 也规范化，防止 /foo//bar vs /foo/ 的问题
+      const normalizedRoot = resolve(ctx.allowedRoot)
+      if (!normalizedPath.startsWith(normalizedRoot)) {
+        ctx.logger?.warn(
+          '[action:filesystem.read] 路径越界: path=%s allowedRoot=%s',
+          normalizedPath, normalizedRoot,
+        )
+        return failResult(decision, `filesystem.read: path outside allowed root: ${params.path}`)
+      }
+
+      // 3. 校验 encoding
+      const encoding = params.encoding ?? 'utf-8'
+      const validEncodings = ['utf-8', 'utf8', 'ascii', 'base64', 'hex']
+      if (!validEncodings.includes(encoding.toLowerCase())) {
+        return failResult(decision, `filesystem.read: unsupported encoding: ${encoding}`)
+      }
+
+      // 4. 读取文件
+      try {
+        const content = await readFile(normalizedPath, { encoding: encoding as BufferEncoding })
+        ctx.logger?.info(
+          '[action:filesystem.read] 读取成功: path=%s encoding=%s size=%d',
+          normalizedPath, encoding, String(content).length,
+        )
+        return okResult(decision, {
+          path: normalizedPath,
+          encoding,
+          content,
+          size: Buffer.byteLength(String(content), encoding as BufferEncoding),
+        })
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        ctx.logger?.warn('[action:filesystem.read] 读取失败: path=%s error=%s', normalizedPath, detail)
+        return failResult(decision, `filesystem.read failed: ${detail}`)
+      }
+    },
+  }
+}
+
+/**
+ * 解析 Decision.reason 中的 filesystem.read 参数。
+ * 期望 JSON: { path, encoding? }
+ */
+function tryParseReadParams(reason: string): FilesystemReadParams | null {
+  try {
+    const parsed = JSON.parse(reason)
+    if (typeof parsed === 'object' && parsed !== null) {
+      return {
+        path: parsed.path !== undefined ? String(parsed.path) : '',
+        encoding: parsed.encoding !== undefined ? String(parsed.encoding) : undefined,
+      }
+    }
+  } catch {
+    // 不是 JSON
+  }
+  return null
 }
 
 // ── JSON reason 解析辅助 ───────────────────────────────────────────────

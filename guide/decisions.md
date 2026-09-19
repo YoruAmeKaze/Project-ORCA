@@ -1276,3 +1276,40 @@ Memory → Attention：
   AttentionEngine → DecisionEngine → ActionExecutor
 ```
 
+### D-AGENT-22: Cordis DI 边界冻结（2026-09-08，v1.8.0 hotfix）
+
+**议题**：ContextAssembler 在顶层 `ctx.get('infoStore')` 抢 Service Locator 时机失败，导致 agent fiber 永远 INACTIVE，飞书消息链路整个不通。
+
+**核心问题**：Cordis v4 `ctx.plugin()` 是**异步 Fiber 激活**——`new Fiber(...)` 同步返回 fiber 对象，但 plugin 函数（`runtime.callback(ctx, config)`）在 fiber `_refresh()` 算出 epoch 后通过 `_reload()` 异步执行（`lib/index.js:1348-1370`）。`ctx.get('serviceName')` 是即时服务查询，不等 fiber 激活完成。
+
+**因此**：在顶层 bootstrap 中
+```ts
+ctx.plugin(infoAgents, config)   // ← 同步返回 fiber，但 infoStore 还没 provide
+const x = ctx.get('infoStore')   // ← undefined，永远
+```
+永远是错的。Plugin 内的 `ctx.provide('xxx', ...)` 要等 fiber 激活才执行。
+
+**§22-01** 顶层 bootstrap **禁用** `ctx.get()` 抢 Service Locator 模式。任何 service 依赖解析必须通过 plugin `inject` 声明，由 Cordis DI 在 fiber 激活时保证就绪。
+
+**§22-02** 依赖多 service 的初始化逻辑（如 ContextAssembler 需要 memory + infoStore）**必须**封装为独立 plugin，声明 `inject = [依赖名, ...]`。Plugin 体内 `ctx.get()` 或 `ctx.provide()` 都是合法的（因为 plugin 激活时 inject 已满足）。
+
+**§22-03** 不允许 `await ctx.plugin(...)` 顶层层叠——这会让 bootstrap 退化为 async IIFE，污染整个启动流程。仅依赖 Cordis DI 即可。
+
+**§22-04** 测试/调试时临时取 service 可以 `ctx.get(name)`，但**禁止**写入生产路径的初始化逻辑。
+
+**§22-05** 已修正的案例：v1.8.0 hotfix——`src/plugins/context-assembler-provider.ts`（新增，inject=['memory','infoStore']），替代 index.ts L77-95 旧顶层 `ctx.get('infoStore') + ctx.provide` 块。
+
+**§22-06** **附带的同源 bug 修复**：index.ts L195/L198/L201 三处 plugin 调用漏传 `config`（v0.6.4 引入）——`episodeEnginePlugin` / `reflectionEnginePlugin` / `memoryAttentionAdapter` 三个 function plugin 函数签名 `(ctx, config)` 中 config 为 undefined，访问 `config.memory.xxx` TypeError。虽与 ContextAssembler 无直接关联，但同属"插件装配未严格遵守 function plugin 签名"问题，顺手修复。
+
+**已知边界**：
+- ❌ 不允许顶层 `ctx.plugin(X) → ctx.get(X 提供的 service)` 抢时机
+- ❌ 不允许 `ctx.plugin(X) → await ctx.plugin(X)` 同步等激活（违反 §22-03）
+- ✓ 允许 plugin 函数体内 `ctx.get()` 取已 inject 依赖
+- ✓ 允许 plugin 函数体内 `ctx.provide()` 注册新 service
+
+**验证**：
+- dist 启动日志确认：`[orca-cordis] Phase 6.A ContextAssembler 已启用（memoryTopK=10, memoryBudgetChars=500）`
+- `tsc --noEmit` 通过
+- 启动端口 8100/8101/8200 listen 成功
+- infoAgents（L.374）→ ContextAssembler（L.377）依赖注入顺序正确
+
