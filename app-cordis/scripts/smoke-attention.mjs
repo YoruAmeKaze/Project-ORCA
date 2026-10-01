@@ -4,7 +4,7 @@
  *
  * 覆盖：
  *  R8.A  纯 AttentionEngine.evaluate（4 条内置规则 + 1 个 SKIP）
- *        R8.A0:  ruleCount === 5
+ *        R8.A0:  ruleCount === 6
  *        R8.A1:  empty input → 0 items
  *        R8.A2:  sleeping-quiet: state=sleeping + null event → ignore
  *        R8.A3:  sleeping-quiet: state=sleeping + feishu:message → 忽略消息（仍 ignore）
@@ -102,9 +102,9 @@ function mkPcAppFocus(app) {
 // ────────────────────────────────────────────────────────────
 {
   const engine = createAttentionEngine()
-  check('R8.A0: ruleCount === 5（内置 4 条规则 + SKIP 的 urgent-keyword）', engine.ruleCount() === 5)
-  // 注意：ruleRegistrySize 也是 5（模块加载时硬编码注册）
-  check('R8.A0b: ruleRegistrySize === 5', ruleRegistrySize() === 5)
+  check('R8.A0: ruleCount === 7（含 feishu-message + dashboard-message）', engine.ruleCount() === 7)
+  // 注意：ruleRegistrySize 也是 6（模块加载时硬编码注册）
+  check('R8.A0b: ruleRegistrySize === 7', ruleRegistrySize() === 7)
 
   // ── R8.A1: empty input ──
   const emptyItems = engine.evaluate({ event: null, state: mkState(), prevState: undefined })
@@ -137,9 +137,9 @@ function mkPcAppFocus(app) {
   check('R8.A5: away-arrival priority=normal', r5[0]?.priority === 'normal')
   check('R8.A5: eventId 透传', r5[0]?.eventId === r5[0]?.eventId) // smoke 简化检查
 
-  // A6: prevState=undefined + 飞书消息 → 0 items（短路）
+  // A6: prevState=undefined + 普通飞书消息 → 通用规则触发
   const r6 = engine.evaluate({ event: mkFeishuMsg('hello'), state: awake, prevState: undefined })
-  check('R8.A6: prevState=undefined + 飞书 → 0 items', r6.length === 0)
+  check('R8.A6: prevState=undefined + 普通飞书 → 1 item（feishu-message）', r6.length === 1 && r6[0]?.ruleId === 'feishu-message')
 
   // A7: state-only trigger (event=null) → away-arrival 不命中（rule 要求 event !== null）
   const r7 = engine.evaluate({ event: null, state: away, prevState: away })
@@ -157,7 +157,7 @@ function mkPcAppFocus(app) {
   check('R8.A9: 飞书 "ddl" → 1 item', r9.length === 1 && r9[0]?.ruleId === 'feishu-deadline')
 
   const r10 = engine.evaluate({ event: mkFeishuMsg('今天天气不错'), state: normalState, prevState: normalState })
-  check('R8.A10: 飞书 普通文本 → 0 items（deadline 不命中）', r10.length === 0)
+  check('R8.A10: 飞书 普通文本 → 1 item（feishu-message）', r10.length === 1 && r10[0]?.ruleId === 'feishu-message')
 
   const r11 = engine.evaluate({ event: mkCalendarEvent(3), state: normalState, prevState: normalState })
   check('R8.A11: calendar:calendar_event（无 deadline 关键词）→ 0 items', r11.length === 0)
@@ -188,7 +188,7 @@ function mkPcAppFocus(app) {
   check('R8.A16: meeting + 飞书 → 1 item', r16.length === 1)
 
   const r17 = engine.evaluate({ event: mkFeishuMsg('hi'), state: normalState, prevState: normalState })
-  check('R8.A17: normal activity + 飞书 → 0 items', r17.length === 0)
+  check('R8.A17: normal activity + 飞书 → 1 item（feishu-message）', r17.length === 1 && r17[0]?.ruleId === 'feishu-message')
 
   const r18 = engine.evaluate({ event: mkPcAppFocus('VSCode'), state: focus, prevState: focus })
   check('R8.A18: pc:app_focus + focus → 0 items（source 不是 feishu）', r18.length === 0)
@@ -557,13 +557,13 @@ function mkTestRule(id, trigger = true, action = 'remember_only') {
   check('R11.4.3: disable a 后 → c,b2（a 不出现，b2 在末位）',
     items4c.map((i) => i.ruleId).join(',') === 'c,b2')
 
-  // ── R11.5: 现有 5 条内置规则迁移后行为不变 ──
+  // ── R11.5: 现有内置规则迁移后行为不变 ──
   const defaultReg = getDefaultRegistry()
-  check('R11.5.1: defaultRegistry.size() === 5（5 条内置规则）', defaultReg.size() === 5)
-  check('R11.5.2: ruleRegistrySize() === 5（向后兼容）', ruleRegistrySize() === 5)
+  check('R11.5.1: defaultRegistry.size() === 7（含 feishu-message + dashboard-message）', defaultReg.size() === 7)
+  check('R11.5.2: ruleRegistrySize() === 7（向后兼容）', ruleRegistrySize() === 7)
   // 不传参 createAttentionEngine → 使用默认 Registry
   const engine5 = createAttentionEngine()
-  check('R11.5.3: 默认 engine.ruleCount() === 5', engine5.ruleCount() === 5)
+  check('R11.5.3: 默认 engine.ruleCount() === 7', engine5.ruleCount() === 7)
   // 验证 R8 关键场景仍触发
   const r8sleep = engine5.evaluate({ event: null, state: mkState({ status: 'sleeping' }), prevState: undefined })
   check('R11.5.4: sleeping-quiet 仍触发（向后兼容）',

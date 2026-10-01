@@ -211,12 +211,48 @@ const ruleFocusInterrupt: AttentionRule = {
   }),
 }
 
+/** 普通飞书文本消息也必须进入 Runtime cognition。 */
+const ruleFeishuMessage: AttentionRule = {
+  id: 'feishu-message',
+  description: '普通飞书用户消息交由 CognitionCore 回复',
+  predicate: ({ event, state, prevState }) =>
+    event?.source === 'feishu' && event.type === 'message' &&
+    typeof event.data.text === 'string' && event.data.text.trim().length > 0 &&
+    state.user.status !== 'sleeping' && state.user.status !== 'away' &&
+    state.user.currentActivity !== 'focus' && state.user.currentActivity !== 'meeting' &&
+    prevState?.user.status !== 'away' &&
+    !/今晚前|明天前|截止|ddl|报告|due/i.test(event.data.text),
+  produce: ({ event }) => ({
+    priority: 'normal',
+    reason: String(event?.data.text ?? ''),
+    action: 'ignore',
+    eventId: event?.id,
+    chatId: event?.data?.chatId as string | undefined,
+  }),
+}
+
+/** Dashboard 的显式用户输入必须触发一次 Cognition。 */
+const ruleDashboardMessage: AttentionRule = {
+  id: 'dashboard-message',
+  description: 'Dashboard 用户发送文本消息，交由 CognitionCore 回复',
+  predicate: ({ event }) => event?.source === 'dashboard' && event.type === 'message' &&
+    typeof event.data.text === 'string' && event.data.text.trim().length > 0,
+  produce: ({ event }) => ({
+    priority: 'normal',
+    reason: String(event?.data.text ?? ''),
+    action: 'ignore',
+    eventId: event?.id,
+  }),
+}
+
 // 模块加载时一次性注册（与 Phase 2.A reducer 模式一致）
 registerRule(ruleSleepingQuiet)
 registerRule(ruleFeishuDeadline)
 registerRule(ruleCalendarBusySoon)
 registerRule(ruleAwayArrival)
 registerRule(ruleFocusInterrupt)
+registerRule(ruleFeishuMessage)
+registerRule(ruleDashboardMessage)
 
 // ── AttentionEngine 服务 ────────────────────────────────────────────────
 
@@ -244,6 +280,11 @@ export class AttentionEngine implements AttentionEngineService {
     const stateSnapshot = JSON.parse(JSON.stringify(input.state)) as AttentionInput['state']
     const eventId = input.event?.id
     const chatId = input.event?.data?.chatId as string | undefined
+    const dashboardMessageId = input.event?.source === 'dashboard' && typeof input.event.data.id === 'string'
+      ? input.event.data.id
+      : undefined
+    const sessionId = input.event?.sessionId
+    const device = typeof input.event?.data?.device === 'string' ? input.event.data.device : undefined
 
     for (const rule of this.registry.getRules()) {
       if (!rule.predicate(input)) continue
@@ -262,6 +303,9 @@ export class AttentionEngine implements AttentionEngineService {
         eventId: partial.eventId ?? eventId,
         // chatId：从 OrcaEvent.data 提取（feishu 消息路由用）；produce 已返回则用返回的，否则用 event.data.chatId
         chatId: partial.chatId ?? chatId,
+        dashboardMessageId: partial.dashboardMessageId ?? dashboardMessageId,
+        sessionId: partial.sessionId ?? sessionId,
+        device: partial.device ?? device,
       })
     }
     return out

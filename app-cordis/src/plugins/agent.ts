@@ -8,6 +8,7 @@ import type { InfoAgentRegistry } from '../agents/registry.js'
 import type { JsonlInfoRecordStore } from '../agents/store.js'
 import type { ContextAssembler } from '../types/context.js'
 import type { WorldState } from '../types/worldState.js'
+import { getSelfProfile } from '../services/selfProfileLoader.js'
 
 /** 饮食类问题关键词（R0 查档触发，命中档案即复用，不重复调视觉模型） */
 const FOOD_QUERY_RE = /(卡路里|热量|千卡|kcal|吃了|摄入|饮食|早饭|午饭|晚饭|早餐|午餐|晚餐|吃)/i
@@ -136,10 +137,12 @@ export function agent(ctx: Context, config: OrcaConfig) {
 
       // Phase 6.B：Memory context via ContextAssembler
       let memoryContext = ''
+      let selfProfile = getSelfProfile()
       if (contextAssembler && worldState) {
         try {
           const ws = worldState.getState()
           const result = await contextAssembler.assemble(msg.text, ws)
+          selfProfile = result.selfProfile
           // 只注入 memory facts 部分（summary 已包含 WorldState+R2+R3；这里只追加 R3）
           if (result.memoryFacts.length > 0) {
             const memLines = result.memoryFacts.map((f) => f.formatted)
@@ -151,7 +154,7 @@ export function agent(ctx: Context, config: OrcaConfig) {
         }
       }
 
-      const system = personaPrompt() + (archive.context ? `\n\n${archive.context}` : '') + memoryContext
+      const system = selfProfile + '\n\n' + personaPrompt() + (archive.context ? `\n\n${archive.context}` : '') + memoryContext
 
       const history = sessions.get(msg.sessionId)
       const messages: ChatMessage[] = [
@@ -189,6 +192,8 @@ export function agent(ctx: Context, config: OrcaConfig) {
   ctx.on('dashboard/message', async (payload: { text: string; id: string }) => {
     const DASHBOARD_SESSION = 'dashboard'
     try {
+      // Runtime path 由 dashboard-adapter → EventBus → CognitionCore 处理并回 SSE，避免双重 LLM 回复。
+      if (config.runtime.enabled) return
       const { eventBus, llm, sessions, infoAgents, infoStore, worldState, contextAssembler } = ctx as {
         eventBus: { publish(input: { source: string; type: string; data: Record<string, unknown>; priority?: number }): void }
         llm: { chat(messages: { role: string; content: string }[]): Promise<string> }
@@ -203,10 +208,12 @@ export function agent(ctx: Context, config: OrcaConfig) {
 
       // Phase 6.B：Memory context via ContextAssembler
       let memoryContext = ''
+      let selfProfile = getSelfProfile()
       if (contextAssembler && worldState) {
         try {
           const ws = worldState.getState()
           const result = await contextAssembler.assemble(payload.text, ws)
+          selfProfile = result.selfProfile
           if (result.memoryFacts.length > 0) {
             const memLines = result.memoryFacts.map((f) => f.formatted)
             memoryContext = `\n\n【长期记忆】以下事实来自你的长期记忆（直接引用，无需核实）：\n${memLines.join('\n')}`
@@ -217,7 +224,7 @@ export function agent(ctx: Context, config: OrcaConfig) {
         }
       }
 
-      const system = personaPrompt() + (archive.context ? `\n\n${archive.context}` : '') + memoryContext
+      const system = selfProfile + '\n\n' + personaPrompt() + (archive.context ? `\n\n${archive.context}` : '') + memoryContext
       sessions.push(DASHBOARD_SESSION, { role: 'user', content: payload.text })
       const history = sessions.get(DASHBOARD_SESSION)
       const messages: ChatMessage[] = [

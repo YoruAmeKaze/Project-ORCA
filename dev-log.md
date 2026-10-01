@@ -2276,6 +2276,23 @@ AttentionItem → orca/attention
 - `npm run build` 通过；直接 handler 冒烟通过。
 - AGENT.md 已同步。
 
+## 2026-09-20 Dashboard Runtime 输入接入
+
+- 新增 `dashboard-adapter`：`dashboard/message` → EventBus `dashboard:message`，沿用飞书 adapter 的旁路翻译模式。
+- Dashboard `/api/chat` 不再直接调用 `eventBus.publish()`；通道只发射 Cordis 输入事件。
+- 新增 `dashboard-message` AttentionRule，复用现有 Scheduler → CognitionCore 链路。
+- CognitionOutput 按 `dashboardMessageId` 发布 `orca:dashboard-reply`，前端继续通过 SSE 收取回复。
+- Runtime 开启时禁用 Dashboard Agent 的旧直连 LLM 路径，避免重复认知和重复回复；Runtime 关闭时保持 legacy 行为。
+- `smoke:dashboard-runtime`：5/5 PASS；`npm run build` 通过。
+- AGENT.md 已同步。
+
+## 2026-09-20 Frontend Runtime Presentation Contract
+
+- 新增 `src/types/runtime-presentation.ts`：定义 versioned `RuntimePresentationState` 和 `RuntimePresentationEvent`，表达模式、焦点、认知活动、任务、在线能力、记忆汇总与可呈现事件；不向前端公开 WorldState、AttentionRule、CognitiveScheduler 或 ActionHandler 的内部结构。
+- `plugins/dashboard.ts` 增加薄 API 投影：`GET /api/runtime/state`、`GET /api/runtime/events`、`GET /api/runtime/stream`（SSE）和 `POST /api/runtime/commands`。投影只读取现有 Runtime 服务与 EventBus，不保存前端副本状态，也不参与 Agent / Cognition 推导。
+- `/api/runtime/stream` 分别发送 `runtime-state` 和 `runtime-event`：状态用于 Runtime Store 快照同步，事件用于各风格前端独立编排 UI / SVG / Canvas / GSAP 动效；现有内嵌 Dashboard 已切换为消费新契约，旧 API 只保留兼容和调试。
+- `tsc --noEmit -p app-cordis/tsconfig.json` 与 `git diff --check` 通过。AGENT.md 已同步。
+
 ## 2026-09-19 Dashboard 首页交互优化
 
 - 首页标题改为单层发光文字，消除多层动画字导致的视觉重合。
@@ -2301,6 +2318,13 @@ AttentionItem → orca/attention
 - 中央 `Current Focus` 通过 Dashboard 只读投影消费 `orca/attention`、`cognition/started|completed|failed`、`orca/action-result`：展示当前状态、触发源、Attention Rule、Scheduler pending 任务数与最近 3 条认知时间线；不写入任何 Runtime 状态。
 - 左侧展示已注册 InfoAgents，右侧保留四层 Long Memory 的数量节点，底部将 EventBus 最近事件渲染为终端时间流。
 - 现有架构未暴露 Cognitive Budget、每日 memory retrieval、Last Reflection 的可靠指标，界面显示未配置/—，不伪造运行数据。AGENT.md 已同步。
+
+## 2026-09-20 Dashboard 对话态修复
+
+- 修复聊天态消息线程未从 `opacity: 0` 变为可见的问题；用户消息和等待态现在会直接显示。
+- 聊天态改为固定高度工作区：输入栏保持在可视区底部；仅鼠标位于聊天记录区域时允许原生纵向滚动，区域外滚轮继续触发第一页/第二页的整屏缓动切换。
+- `POST /api/chat` 现在先向 EventBus 发布 `{source:'dashboard', type:'message', sessionId:'dashboard'}`，再 emit Cordis `dashboard/message` 供 Agent 处理；Agent 回复继续以 `orca/dashboard-reply` 进入 EventBus。该输入事件目前用于可观测性，不复用 feishu adapter/reducer 语义。AGENT.md 已同步。
+- 前端收到 `action.executed` 且当前存在 pending thinking 气泡时，将其收束为“已处理。”；不改变 Cognition prompt 或 `no_action` Runtime 语义，避免无文本回复导致界面永久等待。
 
 ## 2026-09-19 Dashboard 前端视觉优化
 

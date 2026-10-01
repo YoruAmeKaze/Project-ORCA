@@ -46,7 +46,7 @@ export function cognitionOutputPlugin(ctx: Context, config: OrcaConfig) {
     try {
       switch (output.outputType) {
         case 'text/reply':
-          handleTextReply(output, feishu)
+          handleTextReply(output, feishu, ctx)
           break
         case 'error':
           ctx.logger.warn('[cognition-output] cognition error output: cognitionId=%s error=%s',
@@ -115,7 +115,24 @@ function cognitionIntentToDecision(intent: CognitionActionIntent): Decision {
 function handleTextReply(
   output: CognitionOutput,
   feishu: { sendToChat(chatId: string, text: string): Promise<void> } | undefined,
+  ctx: Context,
 ) {
+  if (output.dashboardMessageId) {
+    const eventBus = ctx.get('eventBus') as
+      | { publish(input: { source: string; type: string; data: Record<string, unknown>; priority?: number; sessionId?: string }): void }
+      | undefined
+    eventBus?.publish({
+      source: 'orca',
+      type: 'dashboard-reply',
+      data: { id: output.dashboardMessageId, reply: output.output, sessionId: output.channelSessionId },
+      priority: 1,
+      sessionId: output.channelSessionId,
+    })
+    ctx.logger.info('[cognition-output] reply dispatched channel=dashboard sessionId=%s requestId=%s',
+      output.channelSessionId ?? '(unknown)', output.requestId)
+    return
+  }
+
   if (!output.chatId) {
     // 这个 cognition 不是由飞书消息触发的，跳过 Feishu reply
     // （后续阶段，非飞书来源的 output 可以通过其他 adapter 处理）
@@ -137,4 +154,6 @@ function handleTextReply(
     const detail = err instanceof Error ? err.message : String(err)
     console.warn('[cognition-output] Feishu sendToChat failed: %s', detail)
   })
+  ctx.logger.info('[cognition-output] reply dispatched channel=feishu sessionId=%s requestId=%s',
+    output.channelSessionId ?? '(unknown)', output.requestId)
 }

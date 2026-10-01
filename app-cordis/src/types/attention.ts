@@ -80,6 +80,12 @@ export interface AttentionItem {
   eventId?: string
   /** Feishu chatId（feishu 消息来源）；用于 CognitionOutput 路由回飞书 */
   chatId?: string
+  /** Dashboard 请求 id（dashboard 消息来源）；用于 CognitionOutput 路由回 SSE */
+  dashboardMessageId?: string
+  /** 通道会话标识；区别于一次 CognitionSession */
+  sessionId?: string
+  /** 输入适配器观测到的客户端设备类别 */
+  device?: string
   source?: string
   stateSnapshot: WorldState
   evaluatedAt: number

@@ -2,6 +2,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { createConnection } from 'node:net'
 import type { Context } from '@deepseek-ai/cordis'
 import type { OrcaConfig } from '../config.js'
+import type {
+  RuntimePresentationEvent,
+  RuntimePresentationMode,
+  RuntimePresentationState,
+} from '../types/runtime-presentation.js'
 
 /** Dashboard HTTP server port (default 8200，可通过 DASHBOARD_PORT 环境变量覆盖) */
 const DASHBOARD_PORT = Number(process.env.DASHBOARD_PORT ?? 8200)
@@ -100,7 +105,11 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
 
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://localhost:${DASHBOARD_PORT}`)
-    if (url.pathname === '/api/status') {
+    if (url.pathname.startsWith('/api/runtime/') && req.method === 'OPTIONS') {
+      setRuntimeCors(res)
+      res.writeHead(204)
+      res.end()
+    } else if (url.pathname === '/api/status') {
       void handleStatus(req, res)
     } else if (url.pathname === '/api/events') {
       void handleEvents(req, res)
@@ -112,6 +121,15 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       void handleDebugPublishEvent(req, res)
     } else if (url.pathname === '/api/memory') {
       void handleMemory(req, res)
+    } else if (url.pathname === '/api/runtime/state') {
+      void handleRuntimePresentationState(req, res)
+    } else if (url.pathname === '/api/runtime/events') {
+      void handleRuntimePresentationEvents(req, res)
+    } else if (url.pathname === '/api/runtime/stream' && req.method === 'GET') {
+      void handleRuntimePresentationStream(req, res)
+    } else if (url.pathname === '/api/runtime/commands' && req.method === 'POST') {
+      setRuntimeCors(res)
+      void handleChat(req, res)
     } else if (url.pathname === '/api/chat' && req.method === 'POST') {
       void handleChat(req, res)
     } else if (url.pathname === '/api/stream' && req.method === 'GET') {
@@ -142,6 +160,181 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
         cognitionRunning: scheduler?.isCognitionRunning() ?? false,
       },
     })
+  }
+
+  /**
+   * Frontend-facing Runtime projection. It deliberately reads existing services
+   * without exposing their internal models or creating another state manager.
+   */
+  async function getRuntimePresentationState(): Promise<RuntimePresentationState> {
+    const scheduler = ctx.get('cognitiveScheduler') as
+      | { getPendingCount(): number; isCognitionRunning(): boolean }
+      | undefined
+    const cognitionActive = scheduler?.isCognitionRunning() ?? false
+    const mode = toPresentationMode(runtimeFocus.status, cognitionActive)
+    const memory = await getPresentationMemory()
+    const bus = ctx.get('eventBus') as
+      | { recent(n: number): Array<{ id?: string; source?: string; type?: string; timestamp?: number; data?: Record<string, unknown> }> }
+      | undefined
+
+    return {
+      version: 1,
+      updatedAt: Date.now(),
+      mode,
+      focus: {
+        label: runtimeFocus.description,
+        source: runtimeFocus.triggerSource === '—' ? null : runtimeFocus.triggerSource,
+        reason: runtimeFocus.attentionRule === '—' ? null : runtimeFocus.attentionRule,
+      },
+      cognition: { active: cognitionActive },
+      tasks: {
+        active: cognitionActive ? 1 : 0,
+        pendingAttention: scheduler?.getPendingCount() ?? 0,
+      },
+      agents: getInfoAgents().map((agent) => ({
+        id: agent.name,
+        status: 'online' as const,
+        capabilities: agent.modes,
+      })),
+      memory,
+      recentEvents: bus?.recent(3).map(projectRuntimeEvent) ?? [],
+    }
+  }
+
+  function toPresentationMode(status: typeof runtimeFocus.status, cognitionActive: boolean): RuntimePresentationMode {
+    if (cognitionActive || status === 'Thinking') return 'cognition'
+    if (status === 'Acting') return 'acting'
+    if (status === 'Waiting') return 'waiting'
+    return 'idle'
+  }
+
+  async function getPresentationMemory(): Promise<RuntimePresentationState['memory']> {
+    const empty: RuntimePresentationState['memory'] = {
+      total: 0,
+      layers: [
+        { id: 'projects', count: 0, updatedAt: null },
+        { id: 'preferences', count: 0, updatedAt: null },
+        { id: 'knowledge', count: 0, updatedAt: null },
+        { id: 'experiences', count: 0, updatedAt: null },
+      ],
+    }
+    const store = ctx.get('infoStore') as
+      | { query(opts: { namespaces?: string[]; limit?: number }): Promise<unknown[]>; namespaces?: () => string[] }
+      | undefined
+    if (!store) return empty
+
+    const namespaceLayer: Record<string, RuntimePresentationState['memory']['layers'][number]['id']> = {
+      'food-agent': 'projects',
+      preferences: 'preferences',
+      knowledge: 'knowledge',
+      experiences: 'experiences',
+      memory: 'experiences',
+    }
+    const layers = new Map(empty.layers.map((layer) => [layer.id, { ...layer }]))
+    const namespaces = store.namespaces?.() ?? Object.keys(namespaceLayer)
+
+    try {
+      for (const namespace of namespaces) {
+        const layerId = namespaceLayer[namespace]
+        if (!layerId) continue
+        const records = await store.query({ namespaces: [namespace], limit: 200 }) as Array<{ ts?: number }>
+        const layer = layers.get(layerId)
+        if (!layer) continue
+        layer.count += records.length
+        for (const record of records) {
+          if (typeof record.ts === 'number' && (layer.updatedAt === null || record.ts > layer.updatedAt)) {
+            layer.updatedAt = record.ts
+          }
+        }
+      }
+    } catch (err) {
+      ctx.logger.warn('[runtime-presentation] memory projection failed: %s', err instanceof Error ? err.message : String(err))
+    }
+
+    const projectedLayers = Array.from(layers.values())
+    return { total: projectedLayers.reduce((sum, layer) => sum + layer.count, 0), layers: projectedLayers }
+  }
+
+  function projectRuntimeEvent(event: {
+    id?: string; source?: string; type?: string; timestamp?: number; data?: Record<string, unknown>
+  }): RuntimePresentationEvent {
+    const source = event.source ?? null
+    const at = event.timestamp ?? Date.now()
+    const id = event.id ?? `runtime-${at}`
+    if (source === 'dashboard' && event.type === 'message') {
+      const text = typeof event.data?.text === 'string' ? event.data.text : ''
+      return {
+        id, type: 'message.received', at, source, summary: 'Message received',
+        correlationId: typeof event.data?.id === 'string' ? event.data.id : undefined,
+        message: { direction: 'incoming', text },
+      }
+    }
+    if (source === 'orca' && event.type === 'dashboard-reply') {
+      const text = typeof event.data?.reply === 'string' ? event.data.reply : ''
+      return {
+        id, type: 'message.completed', at, source: 'orca', summary: 'Response ready',
+        correlationId: typeof event.data?.id === 'string' ? event.data.id : undefined,
+        message: { direction: 'outgoing', text },
+      }
+    }
+    if (event.type === 'action-result') {
+      return { id, type: 'action.executed', at, source, summary: 'Action completed' }
+    }
+    return { id, type: 'runtime.event', at, source, summary: `${source ?? 'runtime'} event received` }
+  }
+
+  function handleRuntimePresentationState(_req: IncomingMessage, res: ServerResponse): void {
+    void getRuntimePresentationState().then((state) => sendRuntimeJson(res, 200, { ok: true, state }))
+      .catch((err: unknown) => sendRuntimeJson(res, 500, { ok: false, error: String(err) }))
+  }
+
+  function handleRuntimePresentationEvents(req: IncomingMessage, res: ServerResponse): void {
+    const bus = ctx.get('eventBus') as
+      | { recent(n: number): Array<{ id?: string; source?: string; type?: string; timestamp?: number; data?: Record<string, unknown> }> }
+      | undefined
+    if (!bus) {
+      sendRuntimeJson(res, 503, { ok: false, error: 'Runtime event stream is unavailable' })
+      return
+    }
+    const url2 = new URL(req.url ?? '/', `http://localhost:${DASHBOARD_PORT}`)
+    const limit = Math.min(Math.max(Number(url2.searchParams.get('limit') ?? 50), 1), 200)
+    sendRuntimeJson(res, 200, { ok: true, events: bus.recent(limit).map(projectRuntimeEvent) })
+  }
+
+  function handleRuntimePresentationStream(req: IncomingMessage, res: ServerResponse): void {
+    const bus = ctx.get('eventBus') as
+      | { subscribe(filter: Record<string, unknown>, handler: (event: unknown) => void): () => void }
+      | undefined
+    if (!bus) {
+      sendRuntimeJson(res, 503, { ok: false, error: 'Runtime event stream is unavailable' })
+      return
+    }
+    setRuntimeCors(res)
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no',
+    })
+    const write = (event: RuntimePresentationEvent) => res.write(`event: runtime-event\ndata: ${JSON.stringify(event)}\n\n`)
+    const writeState = () => {
+      void getRuntimePresentationState().then((state) => res.write(`event: runtime-state\ndata: ${JSON.stringify(state)}\n\n`)).catch(() => undefined)
+    }
+    writeState()
+    const unsubscribers = [
+      bus.subscribe({ minPriority: 0 }, (event) => { write(projectRuntimeEvent(event as Parameters<typeof projectRuntimeEvent>[0])); writeState() }),
+      ctx.on('orca/attention', (item: { id: string; source?: string }) => {
+        write({ id: item.id, type: 'attention.created', at: Date.now(), source: item.source ?? null, summary: 'New attention requires review' }); writeState()
+      }),
+      ctx.on('cognition/started', (sessionId: string) => {
+        write({ id: sessionId, type: 'cognition.started', at: Date.now(), source: 'orca', summary: 'Cognition started' }); writeState()
+      }),
+      ctx.on('cognition/completed', (sessionId: string) => {
+        write({ id: sessionId, type: 'cognition.completed', at: Date.now(), source: 'orca', summary: 'Cognition completed' }); writeState()
+      }),
+      ctx.on('cognition/failed', (sessionId: string) => {
+        write({ id: sessionId, type: 'cognition.failed', at: Date.now(), source: 'orca', summary: 'Cognition did not complete' }); writeState()
+      }),
+    ]
+    const ping = setInterval(() => res.write(': ping\n\n'), 15_000)
+    req.on('close', () => { clearInterval(ping); unsubscribers.forEach((unsubscribe) => unsubscribe()) })
   }
 
   /**
@@ -336,7 +529,7 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
   /**
    * 命令发送端点：POST /api/chat
    * Body: { text: string }
-   * 行为：发射 dashboard/message 事件，由 agent 订阅处理后通过 eventBus 推送回复。
+   * 行为：发射 dashboard/message；Runtime 启用时由 dashboard-adapter 发布到 EventBus。
    * 前端通过 SSE /api/stream 接收 orca/dashboard-reply 事件。
    */
   async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -349,7 +542,7 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       if (size > 4096) { sendJson(res, 413, { ok: false, error: 'body too large' }); req.destroy(); return }
       chunks.push(chunk as Buffer)
     }
-    let body: { text?: unknown; id?: unknown }
+    let body: { text?: unknown; id?: unknown; sessionId?: unknown; clientId?: unknown; device?: unknown }
     try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { sendJson(res, 400, { ok: false, error: 'invalid json' }); return }
 
     const text = typeof body.text === 'string' ? body.text.trim() : ''
@@ -357,8 +550,14 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
 
     const id = typeof body.id === 'string' ? body.id : `msg-${Date.now()}`
 
-    // 发射 dashboard/message 事件，agent 订阅处理
-    ctx.emit('dashboard/message', { text, id })
+    // Dashboard 只产生输入事件；适配器负责 EventBus 翻译，避免通道直接依赖 Runtime。
+    const clientSession = typeof body.sessionId === 'string'
+      ? body.sessionId
+      : typeof body.clientId === 'string' ? body.clientId : undefined
+    const device = body.device === 'mobile' || body.device === 'tablet' || body.device === 'desktop'
+      ? body.device
+      : 'unknown'
+    ctx.emit('dashboard/message', { text, id, sessionId: clientSession, device })
     ctx.logger.info('[dashboard-chat] 收到消息: %s', text.slice(0, 60))
 
     sendJson(res, 202, { ok: true, id, status: 'processing' })
@@ -1493,14 +1692,16 @@ body::after {
 }
 .chat-close:hover { color: var(--text); background: rgba(255,255,255,.1); }
 
+/* Chat is a fixed workspace. The transcript owns the available middle space
+   while the composer stays visible, and wheel input keeps the page snap model. */
 body.chat-mode .snap-viewport { overflow: hidden; }
-body.chat-mode .hero { padding-top: 9vh; }
+body.chat-mode .hero { min-height: calc(100vh - 58px); height: calc(100vh - 58px); padding-top: 5vh; padding-bottom: 22px; }
 body.chat-mode .hero-identity { max-height: 0; opacity: 0; transform: translateY(-28px); pointer-events: none; overflow: hidden; }
 body.chat-mode .hero-identity .scroll { opacity: 0; visibility: hidden; }
-body.chat-mode .hero-chat { margin-top: 0; }
-body.chat-mode .chat-thread { max-height: min(58vh, 560px); margin: 0 0 16px; padding: 40px 2px 6px; overflow: hidden; }
+body.chat-mode .hero-chat { display: flex; flex: 1; min-height: 0; flex-direction: column; margin-top: 0; }
+body.chat-mode .chat-thread { flex: 1; min-height: 0; max-height: none; margin: 0 0 16px; padding: 40px 2px 6px; overflow-y: auto; overscroll-behavior: contain; opacity: 1; scrollbar-width: thin; scrollbar-color: rgba(125,211,252,.3) transparent; }
 body.chat-mode .chat-close { opacity: 1; pointer-events: auto; }
-body.chat-mode .cmd { margin-top: 0; animation: none; opacity: 1; }
+body.chat-mode .cmd { flex: 0 0 auto; margin-top: 0; animation: none; opacity: 1; }
 
 .strip {
   gap: 0;
@@ -1568,7 +1769,6 @@ body.chat-mode .cmd { margin-top: 0; animation: none; opacity: 1; }
   .hero-title { font-size: clamp(72px, 20vw, 130px); }
   .core-wrap { transform: scale(.82); margin-top: 32px; margin-bottom: -22px; }
   body.chat-mode .hero { padding-top: 7vh; }
-  body.chat-mode .chat-thread { max-height: 62vh; }
   .strip-item { min-width: 92px; padding: 0 10px; }
   .strip-n { font-size: 20px; }
   .space { padding-top: 72px; padding-bottom: 100px; }
@@ -1601,7 +1801,6 @@ body.chat-mode .cmd { margin-top: 0; animation: none; opacity: 1; }
   .cmd-hints { gap: 10px; flex-wrap: wrap; }
   .chat-msg { max-width: 92%; font-size: 13px; }
   body.chat-mode .hero { padding-top: 5vh; }
-  body.chat-mode .chat-thread { max-height: 65vh; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1679,6 +1878,7 @@ body { background: #080d18; }
 .focus-head { padding-bottom: 18px; border-bottom: 1px solid rgba(255,255,255,.1); }
 .focus-state { padding: 4px 8px; color: var(--accent); border: 1px solid rgba(125,211,252,.25); font-size: 9px; }
 .focus-state.thinking { color: var(--cyan); border-color: rgba(34,211,238,.4); }
+.focus-state.cognition { color: var(--cyan); border-color: rgba(34,211,238,.4); }
 .focus-state.acting { color: var(--green); border-color: rgba(74,222,128,.4); }
 .focus-state.waiting { color: var(--amber); border-color: rgba(245,158,11,.4); }
 .focus-body { padding: 32px 0 22px; }
@@ -1935,18 +2135,18 @@ document.addEventListener('DOMContentLoaded', function() {
   /* ─── Status bar & hero live update ─── */
   async function refreshStatus() {
     try {
-      var r = await fetch('/api/status')
+      var r = await fetch('/api/runtime/state')
       if (!r.ok) return
       var d = await r.json()
+      var runtime = d.state || {}
+      var agents = runtime.agents || []
 
       var heroAgents = $('hero-agents')
       var heroCore = $('hero-core')
       var heroLastseen = $('hero-lastseen')
-      if (heroAgents) heroAgents.textContent = String(d.infoAgents && d.infoAgents.length || 0)
-      if (heroCore) heroCore.textContent = d.services && d.services.orca && d.services.orca.reachable ? 'Online' : 'Offline'
-      if (heroLastseen && d.feishu && d.feishu.lastMessageAt) {
-        heroLastseen.textContent = d.feishu.lastMessageRel
-      }
+      if (heroAgents) heroAgents.textContent = String(agents.length)
+      if (heroCore) heroCore.textContent = 'Online'
+      if (heroLastseen) heroLastseen.textContent = runtime.mode || 'idle'
 
       var orcaPip = $('sb-pip-orca')
       var orcaTxt = $('sb-txt-orca')
@@ -1955,18 +2155,18 @@ document.addEventListener('DOMContentLoaded', function() {
       var feishuPip = $('sb-pip-feishu')
       var feishuTxt = $('sb-txt-feishu')
 
-      if (orcaPip) orcaPip.className = 'sbar-pip ' + (d.services && d.services.orca && d.services.orca.reachable ? 'l' : 'd')
-      if (orcaTxt) orcaTxt.textContent = 'Orca ' + (d.services && d.services.orca && d.services.orca.reachable ? 'active' : 'inactive')
-      if (recvPip) recvPip.className = 'sbar-pip ' + (d.services && d.services.infoReceiver && d.services.infoReceiver.reachable ? 'l' : 'd')
-      if (recvTxt) recvTxt.textContent = 'Receiver ' + (d.services && d.services.infoReceiver && d.services.infoReceiver.reachable ? 'ready' : 'down')
-      if (feishuPip) feishuPip.className = 'sbar-pip ' + (d.feishu && d.feishu.lastMessageAt ? 'l' : 'n')
-      if (feishuTxt) feishuTxt.textContent = 'Feishu ' + (d.feishu && d.feishu.lastMessageAt ? 'connected' : 'idle')
+      if (orcaPip) orcaPip.className = 'sbar-pip l'
+      if (orcaTxt) orcaTxt.textContent = 'Runtime active'
+      if (recvPip) recvPip.className = 'sbar-pip l'
+      if (recvTxt) recvTxt.textContent = 'Event stream ready'
+      if (feishuPip) feishuPip.className = 'sbar-pip ' + (runtime.cognition && runtime.cognition.active ? 'l' : 'n')
+      if (feishuTxt) feishuTxt.textContent = runtime.cognition && runtime.cognition.active ? 'Cognition active' : 'Cognition idle'
 
       var agentCount = $('agent-count')
-      if (agentCount) agentCount.textContent = String(d.infoAgents && d.infoAgents.length || 0)
+      if (agentCount) agentCount.textContent = String(agents.length)
 
-      renderAgentList(d.infoAgents || [])
-      renderFocus(d.runtime || {})
+      renderAgentList(agents)
+      renderFocus(runtime)
     } catch (_) {}
   }
 
@@ -1980,14 +2180,14 @@ document.addEventListener('DOMContentLoaded', function() {
     list.innerHTML = agents.map(function(a, i) {
       var on = i === 0
       return '<div class="agent-item">' +
-        '<div class="agent-top"><span class="agent-dot ' + (on ? 'on' : 'idle') + '"></span><span class="agent-name">' + esc(a.name) + '</span></div>' +
-        '<div class="agent-facts"><span>' + (on ? 'active now' : 'standing by') + '</span><span>calls today —</span></div>' +
+        '<div class="agent-top"><span class="agent-dot ' + (a.status === 'online' ? 'on' : 'idle') + '"></span><span class="agent-name">' + esc(a.id) + '</span></div>' +
+        '<div class="agent-facts"><span>' + (a.status === 'online' ? 'online' : 'offline') + '</span><span>' + esc((a.capabilities || []).join(', ') || 'ready') + '</span></div>' +
       '</div>'
     }).join('')
   }
 
   function renderFocus(runtime) {
-    var status = runtime.status || 'Idle'
+    var status = runtime.mode || 'idle'
     var statusEl = $('focus-status')
     var badge = $('focus-state')
     var description = $('focus-description')
@@ -1996,16 +2196,16 @@ document.addEventListener('DOMContentLoaded', function() {
     var tasks = $('focus-tasks')
     if (statusEl) statusEl.textContent = status
     if (badge) { badge.textContent = status; badge.className = 'focus-state ' + String(status).toLowerCase() }
-    if (description) description.textContent = runtime.description || 'Waiting for a signal that needs attention.'
-    if (trigger) trigger.textContent = runtime.triggerSource || '—'
-    if (rule) rule.textContent = runtime.attentionRule || '—'
-    if (tasks) tasks.textContent = String(runtime.activeTasks || 0)
+    if (description) description.textContent = runtime.focus && runtime.focus.label || 'Waiting for a signal that needs attention.'
+    if (trigger) trigger.textContent = runtime.focus && runtime.focus.source || '—'
+    if (rule) rule.textContent = runtime.focus && runtime.focus.reason || '—'
+    if (tasks) tasks.textContent = String(runtime.tasks && runtime.tasks.pendingAttention || 0)
     var timeline = $('focus-timeline')
     if (timeline) {
-      var events = Array.isArray(runtime.timeline) ? runtime.timeline : []
+      var events = Array.isArray(runtime.recentEvents) ? runtime.recentEvents : []
       timeline.innerHTML = events.length ? events.map(function(event) {
         var time = new Date(event.at).toLocaleTimeString('zh-CN', { hour12: false })
-        return '<div class="timeline-row"><time>' + esc(time) + '</time><span>' + esc(event.label) + '</span><small>' + esc(event.detail) + '</small></div>'
+        return '<div class="timeline-row"><time>' + esc(time) + '</time><span>' + esc(event.summary) + '</span><small>' + esc(event.source || 'runtime') + '</small></div>'
       }).join('') : '<div class="timeline-empty">No cognition events recorded.</div>'
     }
   }
@@ -2013,13 +2213,13 @@ document.addEventListener('DOMContentLoaded', function() {
   /* ─── Activity feed ─── */
   async function refreshActivity() {
     try {
-      var r = await fetch('/api/events?limit=20')
+      var r = await fetch('/api/runtime/events?limit=20')
       if (!r.ok) return
       var d = await r.json()
       var feed = $('actFeed')
       if (!feed) return
       var buffer = $('runtime-buffer')
-      if (buffer && typeof d.bufferSize === 'number') buffer.textContent = d.bufferSize + ' buffered'
+      if (buffer) buffer.textContent = (d.events || []).length + ' recent'
 
       if (!d.events || !d.events.length) {
         feed.innerHTML = '<div class="act-loading" style="font-size:12px;color:var(--dim);padding:8px 0">No events yet</div>'
@@ -2027,47 +2227,37 @@ document.addEventListener('DOMContentLoaded', function() {
       }
 
       feed.innerHTML = d.events.slice(0, 15).map(function(ev) {
-        var icon = ev.source === 'feishu' ? (ev.type === 'image' ? '◻' : '✉') : '◉'
-        var cls = ev.source === 'feishu' ? 'act-av-ac' : 'act-av-g'
-        var label = ev.type === 'message' ? 'Feishu message'
-          : ev.type === 'image' ? 'Image processed'
-          : ev.type === 'dashboard-reply' ? 'Orca replied'
-          : ev.source === 'orca' ? 'Orca'
-          : (ev.source + '/' + ev.type)
-        var text = ev.data && ev.data.text
-          ? (String(ev.data.text).slice(0, 60) + (String(ev.data.text).length > 60 ? '…' : ''))
-          : label
-        var meta = new Date(ev.timestamp).toLocaleTimeString('zh-CN', { hour12: false })
+        var icon = ev.type === 'message.received' ? '✉' : '◉'
+        var cls = ev.type === 'message.received' ? 'act-av-ac' : 'act-av-g'
+        var label = ev.summary || 'Runtime event'
+        var text = ev.message && ev.message.text
+          ? (String(ev.message.text).slice(0, 60) + (String(ev.message.text).length > 60 ? '…' : ''))
+          : (ev.source || label)
+        var meta = new Date(ev.at).toLocaleTimeString('zh-CN', { hour12: false })
         return '<div class="act-row"><time>' + esc(meta) + '</time><span class="event-type">' + esc(label) + '</span><span class="event-copy">' + esc(text) + '</span></div>'
       }).join('')
     } catch (_) {}
   }
 
   async function refreshRuntimeTelemetry() {
-    try {
-      var r = await fetch('/api/attention')
-      if (!r.ok) return
-      var d = await r.json()
-      var rules = $('runtime-rules')
-      if (rules && typeof d.ruleCount === 'number') rules.textContent = 'Attention rules ' + d.ruleCount
-    } catch (_) {}
+    var rules = $('runtime-rules')
+    if (rules) rules.textContent = 'Runtime presentation v1'
   }
 
   /* ─── Memory Ocean counts ─── */
   async function refreshMemory() {
     try {
-      var r = await fetch('/api/memory')
+      var r = await fetch('/api/runtime/state')
       if (!r.ok) return
       var d = await r.json()
-      if (!d.layers) return
-      var total = 0
-      d.layers.forEach(function(layer) {
-        var el = $('mc-' + layer.key.toLowerCase())
+      var memory = d.state && d.state.memory
+      if (!memory || !memory.layers) return
+      memory.layers.forEach(function(layer) {
+        var el = $('mc-' + layer.id)
         if (el) el.textContent = layer.count ? String(layer.count) : '—'
-        total += Number(layer.count || 0)
       })
       var memoryTotal = $('memory-total')
-      if (memoryTotal) memoryTotal.textContent = String(total)
+      if (memoryTotal) memoryTotal.textContent = String(memory.total || 0)
     } catch (_) {}
   }
 
@@ -2092,16 +2282,32 @@ document.addEventListener('DOMContentLoaded', function() {
     inp.value = ''
 
     var id = 'msg-' + Date.now()
+    var dashboardSessionId = ''
+    var dashboardDevice = 'unknown'
+    try {
+      dashboardSessionId = sessionStorage.getItem('orca-session-id') || ''
+      if (!dashboardSessionId) {
+        dashboardSessionId = 'client-' + Math.random().toString(36).slice(2)
+        sessionStorage.setItem('orca-session-id', dashboardSessionId)
+      }
+    } catch (_) {}
+    try {
+      var ua = navigator.userAgent || ''
+      var touch = navigator.maxTouchPoints || 0
+      if (/iPad|Android(?!.*Mobile)|Tablet/i.test(ua)) dashboardDevice = 'tablet'
+      else if (/Android|iPhone|iPod|Mobile/i.test(ua) || (touch > 1 && window.innerWidth < 800)) dashboardDevice = 'mobile'
+      else dashboardDevice = 'desktop'
+    } catch (_) {}
     enterChatMode()
     appendChatMessage(id + '-user', 'user', text)
     appendChatMessage(id, 'orca pending', 'Orca is thinking…')
     appendActivity('◉', 'act-av-g', esc(text), 'sending…', id)
 
     try {
-      var r = await fetch('/api/chat', {
+      var r = await fetch('/api/runtime/commands', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text: text, id: id }),
+        body: JSON.stringify({ text: text, id: id, sessionId: dashboardSessionId || undefined, device: dashboardDevice }),
       })
       if (!r.ok) throw new Error('chat failed')
     } catch (_) {
@@ -2167,16 +2373,24 @@ document.addEventListener('DOMContentLoaded', function() {
   var evtSrc = null
   function connectSSE() {
     if (evtSrc) evtSrc.close()
-    evtSrc = new EventSource('/api/stream')
-    evtSrc.addEventListener('orca', function(e) {
+    evtSrc = new EventSource('/api/runtime/stream')
+    evtSrc.addEventListener('runtime-state', function(e) {
+      try {
+        renderFocus(JSON.parse(e.data))
+      } catch (_) {}
+    })
+    evtSrc.addEventListener('runtime-event', function(e) {
       try {
         var ev = JSON.parse(e.data)
-        if (ev.type === 'orca' && ev.data && ev.data.id) {
-          var icon = ev.data.error ? '◌' : '◉'
-          var cls = ev.data.error ? 'act-av-a' : 'act-av-g'
-          var reply = ev.data.reply || (ev.data.error ? 'Orca could not complete this request.' : 'No response received.')
-          updateActivity(ev.data.id, icon, cls, esc(reply), new Date().toLocaleTimeString('zh-CN', { hour12: false }))
-          updateChatMessage(ev.data.id, ev.data.error ? 'orca error' : 'orca', reply)
+        if (ev.type === 'message.completed' && ev.correlationId) {
+          var reply = ev.message && ev.message.text || 'No response received.'
+          updateActivity(ev.correlationId, '◉', 'act-av-g', esc(reply), new Date(ev.at).toLocaleTimeString('zh-CN', { hour12: false }))
+          updateChatMessage(ev.correlationId, 'orca', reply)
+        } else if (ev.type === 'action.executed') {
+          // no_action is intentionally silent. Remove the transient pending
+          // bubble without manufacturing a user-visible acknowledgement.
+          var pending = chatThread && chatThread.querySelector('.chat-msg.pending')
+          if (pending && pending.parentNode) pending.parentNode.removeChild(pending)
         }
       } catch (_) {}
     })
@@ -2201,8 +2415,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
   if (snapViewport) {
     document.addEventListener('wheel', function(e) {
+      // The transcript is the only native scroll zone in chat mode. Everywhere
+      // else preserves the full-page animated switch between page one and two.
+      var target = e.target
+      var inChatTranscript = target && target.closest && target.closest('#chatThread')
+      if (document.body.classList.contains('chat-mode') && inChatTranscript) return
       e.preventDefault()
-      if (document.body.classList.contains('chat-mode')) return
       if (isScrolling || wheelCooldown) return
       var delta = e.deltaY || 0
       if (Math.abs(delta) < 1) return
@@ -2275,4 +2493,16 @@ document.addEventListener('DOMContentLoaded', function() {
 function sendJson(res: ServerResponse, status: number, obj: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify(obj))
+}
+
+/** Runtime endpoints are designed for independently served visual frontends. */
+function setRuntimeCors(res: ServerResponse): void {
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+}
+
+function sendRuntimeJson(res: ServerResponse, status: number, obj: unknown): void {
+  setRuntimeCors(res)
+  sendJson(res, status, obj)
 }

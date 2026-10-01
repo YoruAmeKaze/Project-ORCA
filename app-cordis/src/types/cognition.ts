@@ -37,6 +37,9 @@ import type { AttentionItem } from './attention.js'
  * - createdAt: 请求创建时间戳
  * - trigger: 触发原因描述（调试用）
  *
+ * 携带：
+ * - sessionId：外部通道会话边界（不是 CognitionSession.id）
+ *
  * 不携带：
  * - 不携带"如何执行"的细节（CognitionCore 决定）
  * - 不携带预计算的 context（CognitionCore 自行获取）
@@ -50,6 +53,8 @@ export interface CognitiveRequest {
   createdAt: number
   /** 触发原因描述（调试用） */
   trigger: string
+  /** 外部通道会话标识；同一通道会话下的 attention 才会被合并 */
+  sessionId?: string
 }
 
 /**

@@ -204,6 +204,9 @@ export interface FormattedMemoryFact {
  * 包含四个维度的格式化数据，供 CEO/R0 构建 prompt 使用。
  */
 export interface ContextAssemblyResult {
+  /** Fixed system knowledge loaded from resources/self-profile.md. */
+  selfProfile: string
+
   /**
    * 当前用户输入（原样传入）。
    * 不做格式化，R4 层由调用方自行注入。

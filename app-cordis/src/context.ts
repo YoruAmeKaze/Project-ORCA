@@ -8,6 +8,7 @@ import type { DecisionEngineService } from './types/decision.js'
 import type { ActionExecutorService } from './types/action.js'
 import type { SessionStore } from './session.js'
 import type { FeishuMessageEvent, FeishuImageEvent } from './plugins/feishu-channel.js'
+import type { DashboardMessageEvent } from './plugins/input-adapters/dashboard-adapter.js'
 import type { InfoAgentRegistry } from './agents/registry.js'
 import type { InfoExecutor } from './agents/executor.js'
 import type { JsonlInfoRecordStore } from './agents/store.js'
@@ -67,6 +68,10 @@ export interface CognitionOutput {
   attentionIds: string[]
   /** Feishu chatId（从 AttentionItem.stateSnapshot 提取，用于路由 reply）*/
   chatId?: string
+  /** Dashboard 请求 id（用于路由 SSE reply） */
+  dashboardMessageId?: string
+  /** 外部通道会话标识（不是 CognitionSession.id） */
+  channelSessionId?: string
 }
 
 /**
@@ -99,6 +104,7 @@ declare module '@deepseek-ai/cordis' {
   interface Events {
     'feishu/message'(msg: FeishuMessageEvent): void
     'feishu/image'(msg: FeishuImageEvent): void
+    'dashboard/message'(msg: DashboardMessageEvent): void
     'info/record'(record: InfoRecord): void
     'orca/event'(event: OrcaEvent): void
     'orca/state_changed'(state: WorldState): void

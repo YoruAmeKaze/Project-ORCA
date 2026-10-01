@@ -102,18 +102,25 @@ export function createCognitiveScheduler(ctx: Context): CognitiveSchedulerServic
 
     // 没有进行中的 cognition，立即产生 CognitiveRequest
     const attentions = Array.from(pendingAttentions.values())
+    // 不把不同通道会话的回复合并到同一个 cognition；未携带 sessionId
+    // 的历史/测试 attention 仍保持原有批处理行为。
+    const firstSessionId = attentions[0]?.sessionId
+    const batch = firstSessionId === undefined
+      ? attentions
+      : attentions.filter((attention) => attention.sessionId === firstSessionId)
     const request: CognitiveRequest = {
       id: randomUUID(),
-      attentions,
+      attentions: batch,
       createdAt: Date.now(),
-      trigger: `pending=${attentions.length} items, cognition available`,
+      trigger: `pending=${batch.length} items, cognition available`,
+      sessionId: firstSessionId,
     }
 
     // 清空 pending
-    pendingAttentions.clear()
+    for (const attention of batch) pendingAttentions.delete(attention.id)
 
-    ctx.logger.info('[cognitive-scheduler] emitting cognition-request (id=%s, attentions=%d)',
-      request.id, request.attentions.length)
+    ctx.logger.info('[cognitive-scheduler] emitting cognition-request (id=%s sessionId=%s attentions=%d)',
+      request.id, request.sessionId ?? '(mixed/legacy)', request.attentions.length)
     ctx.emit('orca/cognition-request', request)
   }
 

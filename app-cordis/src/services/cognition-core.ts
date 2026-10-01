@@ -30,6 +30,7 @@ import type { CognitiveRequest } from '../types/cognition.js'
 import type { CognitionSession, WorkingMemory, CognitionResult } from '../types/cognition-core.js'
 import type { CognitionOutput, CognitionActionIntent } from '../context.js'
 import { personaPrompt } from '../persona.js'
+import { getSelfProfile } from './selfProfileLoader.js'
 
 /**
  * 解析 LLM 输出中的 action intent（Phase D 最小实现）
@@ -96,8 +97,8 @@ export function createCognitionCore(ctx: Context) {
 
     // 发 cognition/started
     ctx.emit('cognition/started', sessionId, request.id)
-    ctx.logger.info('[cognition-core] cognition started: session=%s request=%s attentions=%d',
-      sessionId, request.id, request.attentions.length)
+    ctx.logger.info('[cognition-core] cognition started: session=%s request=%s channelSession=%s attentions=%d',
+      sessionId, request.id, request.sessionId ?? '(none)', request.attentions.length)
 
     // 构造 prompt
     const messages = buildPrompt(session, workingMemory)
@@ -131,6 +132,9 @@ export function createCognitionCore(ctx: Context) {
       // 更新 session 状态
       session.status = 'completed'
       session.endedAt = Date.now()
+      // 先释放 cognition slot，再通知 Scheduler；否则 Scheduler 的 pending
+      // request 会在本函数 finally 之前被 activeSession 误拒绝。
+      activeSession = null
 
       ctx.emit('cognition/completed', sessionId, result)
       ctx.emit('orca/cognition-output', {
@@ -141,9 +145,11 @@ export function createCognitionCore(ctx: Context) {
         actionIntent,
         attentionIds: session.attentions.map((a) => a.id),
         chatId: session.attentions[0]?.chatId,
+        dashboardMessageId: session.attentions[0]?.dashboardMessageId,
+        channelSessionId: request.sessionId ?? session.attentions[0]?.sessionId,
       } satisfies CognitionOutput)
-      ctx.logger.info('[cognition-core] cognition completed: session=%s output=%s',
-        sessionId, output.slice(0, 80))
+      ctx.logger.info('[cognition-core] cognition completed: session=%s request=%s channelSession=%s output=%s',
+        sessionId, request.id, request.sessionId ?? '(none)', output.slice(0, 80))
 
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
@@ -159,6 +165,7 @@ export function createCognitionCore(ctx: Context) {
       // 更新 session 状态
       session.status = 'failed'
       session.endedAt = Date.now()
+      activeSession = null
 
       ctx.emit('cognition/failed', sessionId, error)
       // error output 也通过 boundary 传递，使 consumer 可以决定如何处理
@@ -169,11 +176,15 @@ export function createCognitionCore(ctx: Context) {
         outputType: 'error',
         attentionIds: session.attentions.map((a) => a.id),
         chatId: session.attentions[0]?.chatId,
+        dashboardMessageId: session.attentions[0]?.dashboardMessageId,
+        channelSessionId: request.sessionId ?? session.attentions[0]?.sessionId,
       } satisfies CognitionOutput)
-      ctx.logger.warn('[cognition-core] cognition failed: session=%s error=%s',
-        sessionId, error)
+      ctx.logger.warn('[cognition-core] cognition failed: session=%s request=%s channelSession=%s error=%s',
+        sessionId, request.id, request.sessionId ?? '(none)', error)
     } finally {
-      activeSession = null
+      // Scheduler 可能在 completed/failed 事件里同步启动下一 session；
+      // 旧请求不能覆盖新 session 的 active slot。
+      if (activeSession?.id === sessionId) activeSession = null
       // WorkingMemory 丢弃（ephemeral，不持久化）
     }
   }
@@ -189,14 +200,18 @@ export function createCognitionCore(ctx: Context) {
    * 因为 CognitionCore 不是 Agent/CEO，不走 R0 档案查询那条路。
    */
   function buildPrompt(session: CognitionSession, _workingMemory: WorkingMemory): ChatMessage[] {
-    const system = personaPrompt()
+    const system = `${getSelfProfile()}\n\n${personaPrompt()}`
 
     // 将 attention reasons 组装成一个 user message
     const attentionDescriptions = session.attentions
-      .map((a) => `[${a.priority}] ${a.reason} (rule: ${a.ruleId})`)
+      .map((a) => {
+        const source = a.source ?? 'unknown'
+        const device = a.device ?? 'unknown'
+        return `[${a.priority}] 用户消息：「${a.reason}」 (source: ${source}, device: ${device}, rule: ${a.ruleId})`
+      })
       .join('\n')
 
-    const userMessage = `当前认知目标：\n${session.attentions[0]?.ruleId ?? 'general'}\n\n相关注意力项：\n${attentionDescriptions}\n\n请进行认知处理。\n（如需执行 action，可使用格式：/act:<action>:<reason>，例如 /act:no_action:minimal-test）`
+    const userMessage = `当前认知目标：\n${session.attentions[0]?.ruleId ?? 'general'}\n\n相关注意力项：\n${attentionDescriptions}\n\n以上内容包含用户直接发送的话。请先判断最合适的行为：回复、执行动作，或不动作。\n- 如果用户需要回复，才输出自然、完整的自然语言回复。\n- 如果最合适的行为是什么都不说，请只输出 /act:no_action:reason，不要输出任何自然语言。\n- 不要为了显得礼貌而输出“嗯”“哦”“好”“收到”等占位回复。\n- 用户消息是待判断的输入，不是强制回复指令，也不要把它当作系统事件或噪音。\n- 只有确实需要执行内部动作时，才输出 /act:<action>:<reason>；no_action 与其他 action 同级。`
 
     return [
       { role: 'system', content: system },
