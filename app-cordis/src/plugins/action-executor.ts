@@ -41,6 +41,8 @@ import type { Decision } from '../types/decision.js'
 import type { ActionExecutorService } from '../types/action.js'
 import {
   createActionExecutor,
+  createFilesystemReadHandler,
+  createSystemInfoHandler,
   createMemoryForgetHandler,
   createMemoryRememberHandler,
   createNotifyHandler,
@@ -114,6 +116,25 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
     )
   }
 
+  // 2.8 注入 system.info handler（Phase E；只读系统环境）
+  if (_config.filesystem?.readRoot) {
+    executor.registry.register(createSystemInfoHandler({ diskPath: _config.filesystem.readRoot, logger: ctx.logger }))
+    ctx.logger.info('[action-executor] system.info handler 已挂载（只读系统快照）')
+  }
+
+  // 2.7 注入 filesystem.read handler（Phase D；依赖 config.filesystem.readRoot）
+  if (_config.filesystem?.readRoot) {
+    executor.registry.register(createFilesystemReadHandler({
+      allowedRoot: _config.filesystem.readRoot,
+      logger: ctx.logger,
+    }))
+    ctx.logger.info('[action-executor] filesystem.read handler 已挂载（readRoot=%s）', _config.filesystem.readRoot)
+  } else {
+    ctx.logger.info(
+      '[action-executor] filesystem.readRoot 未配置；filesystem.read handler 未挂载',
+    )
+  }
+
   ctx.logger.info(
     '[action-executor] 已启动（handlers: %s）',
     executor.registry.list().map((h) => `${h.action}=${h.name}`).join(', '),
@@ -154,11 +175,50 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
     }
   })
 
-  // 4. dispose 钩子
+  // 4. ActionResult → EventBus bridge（Phase D）
+  // 末端分发：所有 ActionResult 都进入 EventBus，但不修改 WorldState。
+  // bridge 不参与调度/重试/路由，只负责事件分发。
+  const actionResultBus = ctx.get('eventBus') as
+    | {
+        publish(input: {
+          id?: string
+          source: string
+          type: string
+          timestamp?: number
+          data?: Record<string, unknown>
+          priority?: number
+        }): void
+      }
+    | undefined
+  const unsubscribeActionResult = actionResultBus
+    ? ctx.on('orca/action-result', (result: import('../types/action.js').ActionResult) => {
+        if (disposed) return
+        actionResultBus.publish({
+          source: 'internal',
+          type: 'action-result',
+          data: {
+            action: result.action,
+            success: result.success,
+            decisionId: result.decisionId,
+            error: result.error,
+            metadata: result.metadata,
+          },
+          priority: 1,
+        })
+      })
+    : () => {}
+  if (actionResultBus) {
+    ctx.logger.info('[action-executor] ActionResult→EventBus bridge 已挂载')
+  } else {
+    ctx.logger.info('[action-executor] eventBus 未提供；ActionResult→EventBus bridge 未挂载')
+  }
+
+  // 5. dispose 钩子
   return () => {
     ctx.logger.info('[action-executor] 关闭（disposed=true + unsubscribe + registry.clear + deferredStore.clear）')
     disposed = true  // 必须在 unsubscribe 之前置位（in-flight .then/.catch 才会短路）
     unsubscribe()
+    unsubscribeActionResult()
     executor.registry.clear()
     executor.deferredStore.clear()
   }

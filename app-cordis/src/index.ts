@@ -15,6 +15,9 @@ import { orcaRuntime } from './plugins/orca-runtime.js'
 import { worldStateUpdater } from './plugins/world-state-updater.js'
 import { attentionEngine } from './plugins/attention-engine.js'
 import { decisionEngine } from './plugins/decision-engine.js'
+import { cognitiveSchedulerPlugin } from './plugins/cognitive-scheduler-plugin.js'
+import { cognitionCorePlugin } from './plugins/cognition-core-plugin.js'
+import { cognitionOutputPlugin } from './plugins/cognition-output-plugin.js'
 import { actionExecutor } from './plugins/action-executor.js'
 import { deferredScheduler } from './plugins/deferred-scheduler.js'
 import { pcAdapter } from './plugins/input-adapters/pc-adapter.js'
@@ -29,14 +32,27 @@ import { createMemoryStore } from './services/memoryStore.js'
 import { episodeEnginePlugin } from './plugins/episode-engine.js'
 import { memoryAttentionAdapter } from './plugins/memory-attention-adapter.js'
 import { reflectionEnginePlugin } from './plugins/reflection-engine.js'
+import { contextAssemblerProvider } from './plugins/context-assembler-provider.js'
 
 loadOrcaEnv()
 const config = getConfig()
 
-if (!config.llm.apiKey) {
-  console.error('[orca-cordis] 缺少 DEEPSEEK_API_KEY：请在仓库根 .env 或 app-cordis/.env 配置')
+// 仅 dashscope/backend 模式强制要求 apiKey；ollama 模式免 key
+if (config.llm.backend === 'dashscope' && !config.llm.apiKey) {
+  console.error('[orca-cordis] 缺少 DEEPSEEK_API_KEY：请在仓库根 .env 或 app-cordis/.env 配置（dashscope 模式必需；ollama 模式请设 ORCA_LLM_BACKEND=ollama）')
   process.exit(1)
 }
+
+console.log(
+  '[orca-cordis] LLM backend=%s model=%s baseUrl=%s%s%s',
+  config.llm.backend,
+  config.llm.model,
+  config.llm.baseUrl,
+  config.llm.backend === 'ollama' ? '（本地，Ollama OpenAI 兼容）' : '',
+  config.llm.fallback && config.llm.fallback.apiKey
+    ? ` [fallback: dashscope model=${config.llm.fallback.model}]`
+    : '',
+)
 
 const ctx = new Context()
 
@@ -69,29 +85,15 @@ if (config.memory.enabled) {
   ctx.logger.info('[orca-cordis] MemoryStore 未启用（ORCA_MEMORY_ENABLED=0 关闭）')
 }
 
-// Phase 6.A：ContextAssembler（CEO Context Assembly）
-import { createContextAssembler } from './services/contextAssembler.js'
-import type { JsonlInfoRecordStore } from './agents/store.js'
-if (config.contextAssembler.enabled) {
-  const memory = ctx.get('memory')
-  const infoStore = ctx.get('infoStore') as JsonlInfoRecordStore | undefined
-  if (memory && infoStore) {
-    ctx.provide('contextAssembler', createContextAssembler(memory, infoStore, config.contextAssembler, {
-      info: ctx.logger.info.bind(ctx.logger),
-      warn: ctx.logger.warn.bind(ctx.logger),
-    }))
-    ctx.logger.info('[orca-cordis] Phase 6.A ContextAssembler 已启用（memoryTopK=%d, budgetChars=%d）',
-      config.contextAssembler.memoryTopK, config.contextAssembler.memoryBudgetChars)
-  } else {
-    ctx.logger.warn('[orca-cordis] ContextAssembler 跳过：memory=%s, infoStore=%s（需 MemoryStore + InfoRecordStore 均启用）',
-      !!memory, !!infoStore)
-  }
-}
-
 // 插件装配
 ctx.plugin(feishuChannel, config)
-ctx.plugin(infoAgents, config) // 信息获取框架（InfoAgent 注册表 + 档案室）
+ctx.plugin(infoAgents, config) // 信息获取框架（InfoAgent 注册表 + 档案室；内部 provide infoAgents/infoExecutor/infoStore）
 ctx.plugin(infoReceiver, config) // 外部 App Push 通道（POST /info/records）
+
+// Phase 6.A：ContextAssembler（CEO Context Assembly）
+// 通过独立 plugin + inject[memory, infoStore] 依赖 Cordis DI 同步解析，
+// 避免顶层 ctx.get('infoStore') 抢时机的异步问题（cordis v4 ctx.plugin() 是异步 Fiber 激活）
+ctx.plugin(contextAssemblerProvider, config)
 
 // Phase 7.1A：RuntimeAdapters 统一生命周期管理（GPT Review Phase 7.0）
 // 在 if (runtime.enabled) 外部声明，以便在 shutdown handler 中引用
@@ -114,6 +116,15 @@ if (config.runtime.enabled) {
   if (config.runtime.attention.enabled) {
     ctx.plugin(attentionEngine, config)
     ctx.logger.info('[orca-cordis] Attention Engine 已启用（Phase 3）')
+    // Phase A：Cognitive Scheduler 在 Attention 之后（订阅 orca/attention，维护 pending 队列）
+    ctx.plugin(cognitiveSchedulerPlugin, config)
+    ctx.logger.info('[orca-cordis] Cognitive Scheduler 已启用（Phase A）')
+    // Phase B：CognitionCore 在 Scheduler 之后（消费 orca/cognition-request）
+    ctx.plugin(cognitionCorePlugin, config)
+    ctx.logger.info('[orca-cordis] CognitionCore 已启用（Phase B）')
+    // Phase C：Cognition Output 在 CognitionCore 之后（消费 orca/cognition-output，路由 text/reply → Feishu）
+    ctx.plugin(cognitionOutputPlugin, config)
+    ctx.logger.info('[orca-cordis] Cognition Output Handler 已启用（Phase C）')
     // Phase 4.A：Decision Engine 必须在 Attention 之后（订阅 orca/attention emit）
     if (config.runtime.decision.enabled) {
       ctx.plugin(decisionEngine, config)
@@ -191,13 +202,13 @@ if (config.runtime.enabled) {
 
   // Phase 5.1：EpisodeEngine（依赖 EventBus + WorldState，仅在 Runtime 启用时挂载）
   if (config.memory.enabled) {
-    ctx.plugin(episodeEnginePlugin)
+    ctx.plugin(episodeEnginePlugin, config)
     ctx.logger.info('[orca-cordis] EpisodeEngine 已启用（Phase 5.1：message.burst + state.transition）')
     // Phase 5.3：ReflectionEngine（依赖 ctx.memory）
-    ctx.plugin(reflectionEnginePlugin)
+    ctx.plugin(reflectionEnginePlugin, config)
     ctx.logger.info('[orca-cordis] ReflectionEngine 已启用（Phase 5.3：deterministic rule only）')
     // Phase 5.4.A：MemoryAttentionAdapter（依赖 ctx.memory；通过 ctx.emit 注入 AttentionItems）
-    ctx.plugin(memoryAttentionAdapter)
+    ctx.plugin(memoryAttentionAdapter, config)
     ctx.logger.info('[orca-cordis] MemoryAttentionAdapter 已挂载（Phase 5.4.A：Memory → Attention）')
   }
 } else {

@@ -40,6 +40,8 @@ export const ORCA_EVENT_KNOWN_TYPES = [
   // IM Bridge（IM-1.0 新增）
   'im.message.received', // IM 收到消息
   'im.message.sent',    // IM Orca 发出消息
+  // Phase D：Cognition → Action 闭环（ActionResult 进入 EventBus）
+  'action-result',       // ActionExecutor 执行结果（source='internal'）
 ] as const
 
 export type OrcaEventType = (typeof ORCA_EVENT_KNOWN_TYPES)[number] | (string & {})

@@ -253,7 +253,7 @@ const logger = {
   check('R4.7: OrcaEvent.data.chatId 透传', evt?.data.chatId === 'oc_test_chat')
   check('R4.8: OrcaEvent.data.messageId 透传', evt?.data.messageId === 'om_test_msg_p2b_001')
   check('R4.9: OrcaEvent.data.openId 透传', evt?.data.openId === 'ou_test_user')
-  check('R4.10: OrcaEvent.sessionId 透传', evt?.sessionId === 'ou_test_session')
+  check('R4.10: OrcaEvent.sessionId 使用 Feishu channel:chat 会话标识', evt?.sessionId === 'feishu:oc_test_chat')
   check('R4.11: OrcaEvent.id === feishu eventId（adapter 透传作为幂等键）', evt?.id === feishuEventId)
   // timestamp 用 Date.now()（adapter 显式设置，不从 eventId 推导）
   check('R4.12: OrcaEvent.timestamp 在 [tBeforeEmit, tAfterEmit] 区间内',

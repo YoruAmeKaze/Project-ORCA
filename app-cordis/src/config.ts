@@ -8,12 +8,23 @@ export interface FeishuConfig {
   baseUrl: string
 }
 
+export type LlmBackend = 'dashscope' | 'ollama'
+
 export interface LlmConfig {
+  /** 后端类型；决定请求协议细节（auth header、超时、错误语义） */
+  backend: LlmBackend
   apiKey: string
+  /** 统一根地址，不含 /chat/completions；不同后端语义一致 */
   baseUrl: string
   model: string
   temperature: number
   maxTokens: number
+  /**
+   * 可选 dashscope 备份配置。当 backend='ollama' 且首次 chat() 时探测 ollama 失败，
+   * LlmClient 切到此配置继续运行（无感知切换，agent.ts 异常处理路径不变）。
+   * 由 buildLlmConfig() 自动从 DEEPSEEK_* 构造；未配置则 fallback 不可用。
+   */
+  fallback?: LlmConfig
 }
 
 export interface QwenConfig {
@@ -223,6 +234,11 @@ export interface OrcaContextAssemblerConfig {
   detectSemanticConflict: boolean
 }
 
+export interface OrcaFilesystemConfig {
+  /** filesystem.read handler 允许读取的根目录（默认 appRoot/data）；空字符串表示不限制（不推荐） */
+  readRoot: string
+}
+
 export interface OrcaConfig {
   host: string
   port: number
@@ -230,6 +246,7 @@ export interface OrcaConfig {
   llm: LlmConfig
   qwen: QwenConfig
   dryRun: boolean
+  filesystem: OrcaFilesystemConfig
   historyTurns: number
   infoRecordsDir: string
   imagesDir: string
@@ -310,19 +327,16 @@ export function getConfig(): OrcaConfig {
       appSecret: process.env.FEISHU_APP_SECRET ?? '',
       baseUrl: (process.env.FEISHU_API_URL ?? 'https://open.feishu.cn').replace(/\/$/, ''),
     },
-    llm: {
-      apiKey: process.env.DEEPSEEK_API_KEY ?? '',
-      baseUrl: rawApiUrl.replace(/\/chat\/completions$/, ''),
-      model: process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash',
-      temperature: Number(process.env.ORCA_TEMPERATURE ?? 0.3),
-      maxTokens: Number(process.env.ORCA_MAX_TOKENS ?? 2000),
-    },
+    llm: buildLlmConfig(rawApiUrl),
     qwen: buildVisionConfig(),
     dryRun: process.env.ORCA_DRY_RUN === '1',
     historyTurns: Number(process.env.ORCA_HISTORY_TURNS ?? 10),
     infoRecordsDir: process.env.INFO_RECORDS_DIR || resolve(appRoot, 'data', 'records'),
     imagesDir: process.env.IMAGES_DIR || resolve(appRoot, 'data', 'images'),
     sessionsDir: process.env.ORCA_SESSIONS_DIR || resolve(appRoot, 'data', 'sessions'),
+    filesystem: {
+      readRoot: process.env.ORCA_FS_READ_ROOT || resolve(appRoot, 'data'),
+    },
     infoReceiver: {
       port: Number(process.env.INFO_RECEIVER_PORT ?? 8101),
       tokens: receiverTokens,
@@ -450,5 +464,63 @@ function buildVisionConfig(): QwenConfig {
     apiKey: process.env.QWEN_API_KEY ?? '',
     baseUrl: (process.env.QWEN_API_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions').replace(/\/$/, ''),
     model: process.env.QWEN_VL_MODEL ?? 'qwen3.7-plus',
+  }
+}
+
+/**
+ * LLM 文本对话配置：ORCA_LLM_BACKEND=ollama 走本地 Ollama（OLLAMA_HOST + OLLAMA_LM_MODEL，免 apiKey）；
+ * 默认 dashscope（DeepSeek 云端，DEEPSEEK_API_KEY + DEEPSEEK_API_URL）。
+ *
+ * 设计约束：
+ * - baseUrl 统一根地址（如 http://localhost:11434/v1 或 https://api.deepseek.com），不含 /chat/completions
+ * - 不同后端的 baseUrl 语义一致：拼接 `${baseUrl}/chat/completions` 即可
+ * - 后端细节（auth header / 超时 / 错误语义）由 backend 字段显式声明，LlmClient 据此分支
+ * - 不依赖 localhost/127.0.0.1 字符串嗅探
+ *
+ * rawApiUrl 由 getConfig() 预解析（DEEPSEEK_API_URL 兼容完整端点形式），归一化为根地址后传入。
+ */
+export function buildLlmConfig(rawApiUrl?: string): LlmConfig {
+  const temperature = Number(process.env.ORCA_TEMPERATURE ?? 0.3)
+  const maxTokens = Number(process.env.ORCA_MAX_TOKENS ?? 2000)
+
+  const backendRaw = process.env.ORCA_LLM_BACKEND ?? 'dashscope'
+  const backend: LlmBackend = backendRaw === 'ollama' ? 'ollama' : 'dashscope'
+
+  // 构造 dashscope fallback 配置（仅在 backend='ollama' 且 DEEPSEEK_API_KEY 非空时附加）
+  const dashscopeUrl = (rawApiUrl ?? process.env.DEEPSEEK_API_URL ?? 'https://api.deepseek.com').replace(/\/$/, '').replace(/\/chat\/completions$/, '')
+  const dashscopeFallback: LlmConfig | undefined = (() => {
+    if (backend !== 'ollama') return undefined // ollama 模式下才需要 fallback
+    if (!process.env.DEEPSEEK_API_KEY) return undefined // 未配 key 不构造 fallback
+    return {
+      backend: 'dashscope',
+      apiKey: process.env.DEEPSEEK_API_KEY,
+      baseUrl: dashscopeUrl,
+      model: process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash',
+      temperature,
+      maxTokens,
+    }
+  })()
+
+  if (backend === 'ollama') {
+    const ollamaBase = (process.env.OLLAMA_HOST ?? 'http://localhost:11434').replace(/\/$/, '')
+    return {
+      backend,
+      apiKey: '', // ollama 不校验 key；空字符串显式表示"无 key"语义
+      baseUrl: `${ollamaBase}/v1`, // 统一根地址（含 /v1，Ollama OpenAI 兼容前缀）
+      model: process.env.OLLAMA_LM_MODEL ?? 'qwythos:latest',
+      temperature,
+      maxTokens,
+      fallback: dashscopeFallback,
+    }
+  }
+
+  // dashscope / DeepSeek 默认（无 fallback）
+  return {
+    backend,
+    apiKey: process.env.DEEPSEEK_API_KEY ?? '',
+    baseUrl: dashscopeUrl,
+    model: process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash',
+    temperature,
+    maxTokens,
   }
 }

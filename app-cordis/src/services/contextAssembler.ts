@@ -43,6 +43,7 @@ import { detectSemanticConflicts, getScoringFunction } from '../types/context.js
 import type { FactType, LongMemoryFact } from '../types/memory.js'
 import type { MemoryUsageTracker } from './memoryUsageTracker.js'
 import type { MemoryUsageRecord } from './memoryUsageTracker.js'
+import { getSelfProfileLoader, type SelfProfileLoader } from './selfProfileLoader.js'
 
 const DEFAULT_CONFIG: Required<ContextAssemblerConfig> = {
   enabled: true,
@@ -76,6 +77,7 @@ export function createContextAssembler(
   config: Partial<ContextAssemblerConfig> = {},
   logger?: { info?: LogFn; warn?: LogFn },
   memoryUsageTracker?: MemoryUsageTracker,
+  selfProfileLoader: SelfProfileLoader = getSelfProfileLoader(),
 ): ContextAssembler {
   const cfg: Required<ContextAssemblerConfig> = { ...DEFAULT_CONFIG, ...config }
 
@@ -303,6 +305,10 @@ export function createContextAssembler(
   ): string {
     const lines: string[] = []
 
+    // Fixed identity is the first system-context section.
+    lines.push(selfProfileLoader.get())
+    lines.push('')
+
     // R1: WorldState
     lines.push('## WorldState')
     lines.push(`user: status=${worldState.user.status}, dnd=${worldState.user.doNotDisturb}`)
@@ -344,6 +350,7 @@ export function createContextAssembler(
     return {
       input,
       worldState,
+      selfProfile: selfProfileLoader.get(),
       infoRecords: [],
       memoryFacts: [],
       memoryCharsUsed: 0,
@@ -391,6 +398,7 @@ export function createContextAssembler(
     const result: ContextAssemblyResult = {
       input,
       worldState,
+      selfProfile: selfProfileLoader.get(),
       infoRecords,
       memoryFacts: memoryResult.facts,
       memoryCharsUsed: memoryResult.charsUsed,

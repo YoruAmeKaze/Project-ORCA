@@ -2019,3 +2019,316 @@ SchedulerAdapter → scheduler:tick → ScheduledRuleRegistry
 | `ORCA_IM_PLATFORM` | mock | 平台（mock/qq） |
 | `ORCA_IM_MOCK_INTERVAL_MS` | 60000 | Mock 轮询间隔 |
 
+---
+
+## app-cordis v1.8.0 hotfix（2026-09-08，未单独升 PATCH）
+
+### 修复：ContextAssembler 插件激活顺序（Cordis DI）
+
+#### 现象
+
+飞书发消息 Orca 不回复。启动日志含：
+
+```
+[orca-cordis] ContextAssembler 跳过：memory=true, infoStore=false（需 MemoryStore + InfoRecordStore 均启用）
+```
+
+无 `[agent]` 日志，feishu/message handler 从未触发。
+
+#### 根因
+
+Cordis v4 `ctx.plugin()` 是**异步 Fiber 激活**（plugin 函数在 fiber 进入 activate 状态时才跑），不是同步立即生效。
+
+旧 index.ts 用顶层 `ctx.plugin(infoAgents, config)` 紧跟 `ctx.get('infoStore')`——后者在 infoAgents fiber 还没激活时就执行，永远拿到 undefined。ContextAssembler 跳过 → `agent.inject['contextAssembler']` 缺失 → agent fiber INACTIVE → `ctx.on('feishu/message', ...)` 从未注册 → 飞书不回。
+
+Phase 6.A 引入时假设了同步语义，从未被发现——因为 ContextAssembler 跳过 warn 不会崩进程，bat 看着启动正常；v1.0.0→v1.8.0 多版本无人触发 feishu 主路径（仅食物图片走 image-router 分支）。
+
+#### 修复
+
+采用方案：新建独立 Cordis plugin，让 Cordis DI 同步解析依赖（替代顶层 Service Locator 抢时机）。
+
+| 文件 | 变更 |
+|------|------|
+| `src/plugins/context-assembler-provider.ts` | **新增** —— `inject=['memory','infoStore']`；plugin 体内同步 `ctx.provide('contextAssembler', ...)`；依赖由 Cordis DI 在 fiber 激活时保证就绪 |
+| `src/index.ts` | 删旧 L77-95 顶层 ContextAssembler 块（`ctx.get('infoStore')` + `ctx.provide` 模式）；新增 `ctx.plugin(contextAssemblerProvider, config)`；加 import |
+| `src/index.ts` L195/L198/L201 | 顺手补 `, config` —— `episodeEnginePlugin` / `reflectionEnginePlugin` / `memoryAttentionAdapter` 三个 function plugin 调用从 v0.6.4 漏传 config，导致 `config.memory.xxx` TypeError（与 ContextAssembler 无关的并行 bug） |
+
+#### 边界（按要求保持）
+
+- ✓ 不修改 infoAgents 插件职责
+- ✓ 不修改 ContextAssembler API
+- ✓ 不修改 agent.inject
+- ✓ 不修改 Memory 系统 / Runtime 架构
+- ✓ 顶层 bootstrap 不改 async
+- ✓ 不用 `await ctx.plugin()`（仅依赖 Cordis DI）
+
+#### 验证
+
+- ✓ `tsc --noEmit` 通过（exit=0）
+- ✓ dist 启动日志确认：`[orca-cordis] Phase 6.A ContextAssembler 已启用（memoryTopK=10, memoryBudgetChars=500）`（替换原"跳过"warn）
+- ✓ infoAgents（L.374）在 ContextAssembler（L.377）之前激活，依赖注入顺序正确
+- ✓ 启动端口 8100 / 8101 / 8200 全部 listen 成功（无 EADDRINUSE）
+- ✓ Agent fiber inject 完整满足，可正常响应 feishu/message
+
+#### 配套
+
+- decisions.md 新增 **D-AGENT-22**：Cordis DI 边界冻结（顶层禁用 `ctx.get()` 抢 Service Locator 模式，依赖解析必须走 plugin inject）
+- AGENT.md 第 4.3 节 Phase 6.A 描述同步：`src/plugins/context-assembler.ts`（不存在）→ 实际为 `context-assembler-provider.ts` + 新增 DI 边界说明
+- 运行时记忆已存：`Orca app-cordis 启动顺序 bug（2026-09-08 实测已修复）`
+
+### 新增：ORCA_LLM_BACKEND（dashscope / ollama 二选一）
+
+#### 背景
+
+DeepSeek API 余额不足（402 Insufficient Balance）时无 fallback。需要支持本地 Ollama OpenAI 兼容端点。
+
+#### 设计约束（用户指定）
+
+- baseUrl 统一为根地址（如 `http://localhost:11434/v1` 或 `https://api.deepseek.com`），不含 `/chat/completions`
+- 新增 `backend: 'dashscope' | 'ollama'` 字段显式声明
+- 不依赖 localhost/127.0.0.1 字符串嗅探
+- 不同后端的 baseUrl 语义一致：拼接 `${baseUrl}/chat/completions` 即为端点
+
+#### 新增配置键
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `ORCA_LLM_BACKEND` | `dashscope` | LLM 后端：`dashscope`（云端 DeepSeek）\| `ollama`（本地） |
+| `OLLAMA_HOST` | `http://localhost:11434` | 本地 Ollama 地址（仅 ollama 模式） |
+| `OLLAMA_LM_MODEL` | `qwythos:latest` | 本地 LLM 模型（仅 ollama 模式） |
+
+#### 修改文件
+
+| 文件 | 变更 |
+|---|---|
+| `src/config.ts` | `LlmConfig` 新增 `backend: LlmBackend` 字段；新增 `export function buildLlmConfig(rawApiUrl?: string): LlmConfig`；`getConfig()` 调用 `buildLlmConfig(rawApiUrl)`；baseUrl 统一根地址（去尾 `/`，去除 `/chat/completions` 后缀） |
+| `src/services/llm.ts` | 按 `config.backend` 分支：ollama 模式免 apiKey、不发送 Authorization header；dashscope 模式要求 apiKey、发送 Bearer auth；error message 区分后端 |
+| `src/index.ts` | L37-39 apiKey 守卫改为 `if (config.llm.backend === 'dashscope' && !config.llm.apiKey)`；新增启动行 `[orca-cordis] LLM backend=%s model=%s baseUrl=%s` |
+| `app-cordis/.env` | 新增 ORCA_LLM_BACKEND / OLLAMA_HOST / OLLAMA_LM_MODEL 配置说明 + 默认 `dashscope` |
+
+#### 边界
+
+- ✗ 不依赖字符串嗅探（如 `baseUrl.includes('localhost')`）判断后端
+- ✗ 不让 baseUrl 在不同后端拥有不同语义（dashscope 用根地址 + `/v1/chat/completions`，ollama 用根地址 + `/v1/chat/completions`，两者拼接一致）
+- ✓ `LlmClient.chat()` 只读 `config.backend` / `config.apiKey` / `config.baseUrl`，协议层零分支（OpenAI Chat Completions）
+- ✓ 视觉后端的 `ORCA_VISION_BACKEND` 走相同的 `dashscope / ollama` 双选模式（已存在），本次未动
+
+#### 验证
+
+- ✓ `tsc --noEmit` 通过
+- ✓ `npm run build` 通过
+- ✓ dist 启动日志确认：`[orca-cordis] LLM backend=ollama model=qwythos:latest baseUrl=http://localhost:11434/v1（本地，Ollama OpenAI 兼容）`
+- ✓ 默认 dashscope 模式行为不变（DEEPSEEK_API_KEY 仍为必需；apiKey 缺失时启动守卫仍生效）
+
+#### 配套
+
+- AGENT.md §6 配置项表新增 3 行（ORCA_LLM_BACKEND / OLLAMA_HOST / OLLAMA_LM_MODEL）
+- AGENT.md §8.1 §8.1 已完成追加 v1.8.0 hotfix + 本次新增条目
+
+---
+
+## 2026-09-09 Phase A — Cognitive Scheduler 最小骨架
+
+**目标**：建立「Attention → Scheduler → CognitiveRequest」新边界；Scheduler 不调 LLM、不执行 Action、不写 WorldState；DecisionEngine 保持向后兼容
+
+### 新增文件
+
+| 文件 | 说明 |
+|---|---|
+| `app-cordis/src/types/cognition.ts` | `CognitiveRequest` 接口（id / attentions[] / createdAt / trigger）+ `CognitiveSchedulerService` 接口 |
+| `app-cordis/src/services/cognitive-scheduler.ts` | `createCognitiveScheduler(ctx)` 实现：pendingAttentions Map + cognition 生命周期事件订阅 + evaluate() 策略 |
+| `app-cordis/src/plugins/cognitive-scheduler-plugin.ts` | Cordis plugin：订阅 `orca/attention` → `scheduler.enqueue()` → emit `orca/cognition-request` |
+| `app-cordis/scripts/smoke-cognitive-scheduler.mjs` | 42 用例 RA.1~RA.19（42/42 PASS ✅） |
+
+### 修改文件
+
+| 文件 | 变更 |
+|---|---|
+| `app-cordis/src/context.ts` | Context interface 新增 `cognitiveScheduler: CognitiveSchedulerService`；Events interface 新增 `orca/cognition-request` + `cognition/started/completed/failed` |
+| `app-cordis/src/index.ts` | 在 `attentionEngine` 之后、`decisionEngine` 之前插入 `cognitiveSchedulerPlugin` |
+| `app-cordis/scripts/smoke-decision.mjs` | R13.10.15 处加 FIXME 注释（Cordis fork emit 不隔离 listener 异常，非本次引入） |
+
+### Runtime Flow
+
+```
+Event → EventBus → WorldStateUpdater → Reducer → WorldState
+                                      ↓
+                              AttentionEngine
+                                      ↓ emit('orca/attention')
+                    ┌─────────────────┴─────────────────┐
+        DecisionEngine（旧路径）          CognitiveScheduler（新路径）
+                    ↓                          ↓
+              orca/decision              orca/cognition-request
+         （ActionExecutor/Deferred）     （CognitionCore Phase B 消费）
+```
+
+### Scheduler 职责边界（Phase A）
+
+**做**：enqueue / pendingAttentions 私有维护 / cognition 生命周期状态追踪 / evaluate() 决定何时发 CognitiveRequest
+
+**不做**：调 LLM / 执行 Action / 写 WorldState / 持久化 / priority scheduling / attention merging
+
+### 验证结果
+
+| 测试 | 结果 | 分类 |
+|---|---|---|
+| `smoke-cognitive-scheduler.mjs` | **42/42 PASS** ✅ | Scheduler/Orca regression |
+| `smoke-attention.mjs` | **138/138 PASS** ✅ | Scheduler/Orca regression |
+| `smoke-action.mjs` | **86/86 PASS** ✅ | Scheduler/Orca regression |
+| `smoke-world-state.mjs` | **94/94 PASS** ✅ | Scheduler/Orca regression |
+| `smoke-info-agent.mjs` | **69/69 PASS** ✅ | Scheduler/Orca regression |
+| `smoke-decision.mjs` R13.10.15 | **CRASH** | pre-existing Cordis fork limitation（非回归）|
+
+### pre-existing failure 说明
+
+- **测试**：smoke-decision.mjs R13.10.15
+- **根因**：Cordis fork `ctx.emit()` 不隔离 listener 抛错——任何一个 listener 抛错会导致整个 emit 崩溃；测试依赖的 listener 异常隔离能力在当前 Cordis fork 版本未实现
+- **本次引入**：否
+- **阻塞迁移**：否
+- **处理**：已加 FIXME 注释，不修改 Cordis，不改变 EventBus 语义
+
+### Phase B 前的 Architecture Gap
+
+| 缺项 | 说明 |
+|---|---|
+| CognitionCore | 消费 `orca/cognition-request`，emit `cognition/started/completed/failed` |
+| LLM 调用层 | Scheduler 不调 LLM，CognitionCore 需要接入 LlmClient |
+| WorkingMemory / CapabilitySpace / TaskManager / SelfStateManager | 后续 phase |
+
+### AGENT.md 同步
+
+- §3 架构图中 CognitiveScheduler 位置已更新（见 AGENT.md 本次变更）
+
+---
+
+## v1.9.0（2026-09-09）
+
+### Phase B：CognitionCore 最小骨架 —— 实现 Scheduler ↔ CognitionCore 闭环
+
+#### 目标
+实现完整认知闭环：`Attention → Scheduler → CognitiveRequest → CognitionCore → LLM → cognition/completed → Scheduler`
+
+#### 新增文件
+
+| 文件 | 说明 |
+|---|---|
+| `app-cordis/src/types/cognition-core.ts` | `CognitionSession`（id/requestId/createdAt/startedAt/status/attentions）+ `WorkingMemory`（goal/observations）+ `CognitionResult`（cognitionId/requestId/status/output?/error?/durationMs）|
+| `app-cordis/src/services/cognition-core.ts` | `createCognitionCore(ctx)`：订阅 `orca/cognition-request`，创建 CognitionSession，发 `cognition/started/completed/failed`，调 LLM，并发防御（running 时拒绝新 request）|
+| `app-cordis/src/plugins/cognition-core-plugin.ts` | Cordis plugin：`inject: ['llm']`，订阅 `orca/cognition-request` → `core.onCognitionRequest()`，提供 `ctx.cognitionCore` service |
+| `app-cordis/scripts/smoke-cognition-core.mjs` | 30 个测试用例：生命周期 + Scheduler 闭环 + 并发防御 + 边界验证 |
+
+#### 修改文件
+
+| 文件 | 变更 |
+|---|---|
+| `app-cordis/src/context.ts` | 新增 `cognitionCore: CognitionCoreService` service 声明；Events 新增 `cognition/started(sessionId, requestId)` / `cognition/completed(sessionId, result)` / `cognition/failed(sessionId, error)` |
+| `app-cordis/src/services/cognitive-scheduler.ts` | **关键修复**：`cognition/completed` handler 加 `evaluate()` 调用——cognition 结束后立即处理 pending 队列；`cognition/failed` 同理 |
+| `app-cordis/src/index.ts` | 导入并挂载 `cognitionCorePlugin`（位于 `cognitiveSchedulerPlugin` 之后，`decisionEngine` 之前）|
+
+#### 事件流闭环
+
+```
+AttentionItem → orca/attention
+  → CognitiveScheduler.enqueue() → pending 累积
+  → evaluate() → orca/cognition-request
+    → CognitionCore.onCognitionRequest()
+      1. 创建 CognitionSession（status=running）
+      2. 发 cognition/started（Scheduler 更新 isCognitionRunning=true）
+      3. 构造 prompt（persona + attention reasons）
+      4. 调用 LLM.chat()
+      5. 成功 → 发 cognition/completed；失败 → 发 cognition/failed
+      6. activeSession = null
+    → CognitionCore 发 cognition/completed
+      → Scheduler：activeCognitionId = null + evaluate() → pending > 0 → 发下一个 orca/cognition-request
+```
+
+#### 关键设计决策
+
+- **CognitionCore 不接入 ContextAssembler**：ContextAssembler 是 Agent/CEO 的 context 注入工具（被动投影），CognitionCore 只用 persona + attention reasons
+- **WorkingMemory ephemeral**：属于 CognitionSession，cognition 结束后丢弃，不持久化，不进 WorldState
+- **并发防御 Phase B**：running 时拒绝新 request；Phase B+ 改为 queue/defer
+- **prompt 构造**：system=personaPrompt()，user=attention reasons 拼接（极简版，Phase C+ 可扩展）
+
+#### 关键 bug 修复
+
+- **Scheduler 闭环缺失**：Phase A 的 `cognition/completed` handler 只清 `activeCognitionId = null`，未调用 `evaluate()`——导致 pending 永远不清零，闭环未形成。Phase B 在 completed/failed handler 中加入 `evaluate()` 调用
+
+#### 验证结果
+
+| 测试 | 结果 | 分类 |
+|---|---|---|
+| `smoke-cognition-core.mjs` | **30/30 PASS** ✅ | Phase B 新增 |
+| `smoke-cognitive-scheduler.mjs` | **44/44 PASS** ✅（含 RA.13 更新）| Phase A 回归 + Phase B 闭环 |
+| `smoke-decision.mjs` | **40/42 PASS** | pre-existing R13.10.15（非回归）|
+
+#### AGENT.md 同步
+
+- §3 架构图中 CognitionCore + cognition/started/completed/failed 事件链路已补充（见 AGENT.md 本次变更）
+
+
+
+## 2026-09-14 Phase E — system.info 只读环境能力
+
+- 新增 `createSystemInfoHandler`，直接接入现有 `ActionHandlerRegistry`，不引入 Capability 中间层。
+- 使用 Node `os` / `fs.statfs` API 返回 cpu、memory、disk、process、environment 白名单信息。
+- 参数复用 `Decision.reason`：空或 `{}` 返回全部，可选 `{"scope":["cpu","memory"]}`。
+- 不执行 shell、不写 WorldState；磁盘路径复用 `ORCA_FS_READ_ROOT`。
+- `npm run build` 通过；直接 handler 冒烟通过。
+- AGENT.md 已同步。
+
+## 2026-09-20 Dashboard Runtime 输入接入
+
+- 新增 `dashboard-adapter`：`dashboard/message` → EventBus `dashboard:message`，沿用飞书 adapter 的旁路翻译模式。
+- Dashboard `/api/chat` 不再直接调用 `eventBus.publish()`；通道只发射 Cordis 输入事件。
+- 新增 `dashboard-message` AttentionRule，复用现有 Scheduler → CognitionCore 链路。
+- CognitionOutput 按 `dashboardMessageId` 发布 `orca:dashboard-reply`，前端继续通过 SSE 收取回复。
+- Runtime 开启时禁用 Dashboard Agent 的旧直连 LLM 路径，避免重复认知和重复回复；Runtime 关闭时保持 legacy 行为。
+- `smoke:dashboard-runtime`：5/5 PASS；`npm run build` 通过。
+- AGENT.md 已同步。
+
+## 2026-09-20 Frontend Runtime Presentation Contract
+
+- 新增 `src/types/runtime-presentation.ts`：定义 versioned `RuntimePresentationState` 和 `RuntimePresentationEvent`，表达模式、焦点、认知活动、任务、在线能力、记忆汇总与可呈现事件；不向前端公开 WorldState、AttentionRule、CognitiveScheduler 或 ActionHandler 的内部结构。
+- `plugins/dashboard.ts` 增加薄 API 投影：`GET /api/runtime/state`、`GET /api/runtime/events`、`GET /api/runtime/stream`（SSE）和 `POST /api/runtime/commands`。投影只读取现有 Runtime 服务与 EventBus，不保存前端副本状态，也不参与 Agent / Cognition 推导。
+- `/api/runtime/stream` 分别发送 `runtime-state` 和 `runtime-event`：状态用于 Runtime Store 快照同步，事件用于各风格前端独立编排 UI / SVG / Canvas / GSAP 动效；现有内嵌 Dashboard 已切换为消费新契约，旧 API 只保留兼容和调试。
+- `tsc --noEmit -p app-cordis/tsconfig.json` 与 `git diff --check` 通过。AGENT.md 已同步。
+
+## 2026-09-19 Dashboard 首页交互优化
+
+- 首页标题改为单层发光文字，消除多层动画字导致的视觉重合。
+- 首页与工作区的滚动切换改为 1.45 秒五次缓动；输入栏移至 Core 状态区下方。
+- 提交消息后进入首页对话态：待机元素平滑收拢，原地展开实时聊天线程；SSE 回复会同步更新该线程，关闭按钮可回到待机态。
+- 使用项目内 TypeScript 编译器执行 `tsc --noEmit -p app-cordis/tsconfig.json`，检查通过。AGENT.md 已同步。
+
+## 2026-09-19 Dashboard 滚轮与首页布局修复
+
+- 主视口禁用原生滚动与 CSS snap；滚轮只按方向触发一次完整页面切换，切换动画使用 1.45 秒五次缓动，并通过 cooldown 拦截连续滚轮脉冲。
+- 修复首页标题容器裁切、眉题与副标题负边距重叠，并将首页 Core 动画压缩至可在首屏显示对话栏的尺寸。
+- 对话态禁止滚轮切页，聊天窗口不产生页面级小滚动。AGENT.md 已同步。
+
+## 2026-09-19 Dashboard 无框 Runtime 视图
+
+- 按 Orca 架构重排仪表盘：Info Agents → Persistent Context Runtime（EventBus / WorldState / Attention / Cognition / Action）→ Long Memory / Event Stream。
+- 去掉工作区卡片的圆角、填充、阴影和嵌套容器，改为编号分区、细分隔线和中心运行链；首页命令栏改为底线输入样式。
+- 接入 `/api/attention` 与 EventBus `bufferSize`，在 Runtime 中展示实时遥测。AGENT.md 已同步。
+
+## 2026-09-19 Dashboard V2 Runtime 重构
+
+- 删除首屏 Hero、架构介绍文本、流水线动画与发光圆球；替换为 3/6/3 无框 Runtime Dashboard。
+- 中央 `Current Focus` 通过 Dashboard 只读投影消费 `orca/attention`、`cognition/started|completed|failed`、`orca/action-result`：展示当前状态、触发源、Attention Rule、Scheduler pending 任务数与最近 3 条认知时间线；不写入任何 Runtime 状态。
+- 左侧展示已注册 InfoAgents，右侧保留四层 Long Memory 的数量节点，底部将 EventBus 最近事件渲染为终端时间流。
+- 现有架构未暴露 Cognitive Budget、每日 memory retrieval、Last Reflection 的可靠指标，界面显示未配置/—，不伪造运行数据。AGENT.md 已同步。
+
+## 2026-09-20 Dashboard 对话态修复
+
+- 修复聊天态消息线程未从 `opacity: 0` 变为可见的问题；用户消息和等待态现在会直接显示。
+- 聊天态改为固定高度工作区：输入栏保持在可视区底部；仅鼠标位于聊天记录区域时允许原生纵向滚动，区域外滚轮继续触发第一页/第二页的整屏缓动切换。
+- `POST /api/chat` 现在先向 EventBus 发布 `{source:'dashboard', type:'message', sessionId:'dashboard'}`，再 emit Cordis `dashboard/message` 供 Agent 处理；Agent 回复继续以 `orca/dashboard-reply` 进入 EventBus。该输入事件目前用于可观测性，不复用 feishu adapter/reducer 语义。AGENT.md 已同步。
+- 前端收到 `action.executed` 且当前存在 pending thinking 气泡时，将其收束为“已处理。”；不改变 Cognition prompt 或 `no_action` Runtime 语义，避免无文本回复导致界面永久等待。
+
+## 2026-09-19 Dashboard 前端视觉优化
+
+- 保留现有 Dashboard API、SSE 实时回复和命令输入逻辑，仅更新 `src/plugins/dashboard.ts` 内嵌样式。
+- 增加网格背景、玻璃质感模块、层级化状态条、聚焦态和 hover 反馈，并补齐 900px/560px 移动端布局与 reduced-motion 支持。
+- 使用项目内 TypeScript 编译器执行 `tsc --noEmit -p app-cordis/tsconfig.json`，检查通过。
+- AGENT.md 已同步。
