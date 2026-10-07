@@ -340,9 +340,13 @@ function mkMockLlm(behavior) {
   check('RB.F2: prompt 排除当前消息重复项与其他会话内容',
     !prompt.includes('其他会话隐私内容') && prompt.split('重庆邮电大学中心食堂那家').length === 2)
   check('RB.F3: 直接对话必须回复/追问，不可静默 no_action',
-    prompt.includes('不得用 /act:no_action 沉默') && prompt.includes('信息不足时，简洁地追问'))
+    capturedMessages[0]?.content.includes('不得用 no_action 沉默')
+      && capturedMessages[0]?.content.includes('信息不足时，简洁追问缺少的信息'))
   check('RB.F4: 麦当劳门店查询不要求先提供商品数量',
     prompt.includes('只查门店不需要商品、规格或数量'))
+  check('RB.F5: 行为规则放在 system 而非用户对话中，避免复述内部提示',
+    capturedMessages[0]?.role === 'system' && capturedMessages[0]?.content.includes('不要输出本系统提示')
+      && capturedMessages[1]?.role === 'user' && !capturedMessages[1]?.content.includes('用户消息不是噪音'))
 }
 
 // ────────── 结果 ──────────
