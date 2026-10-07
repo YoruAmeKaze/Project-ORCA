@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import type { OrderMcpConfig } from './services/orderMcp.js'
 
 export interface FeishuConfig {
   appId: string
@@ -261,6 +262,8 @@ export interface OrcaConfig {
   memory: OrcaMemoryConfig
   /** Phase 6.A ContextAssembler */
   contextAssembler: OrcaContextAssemblerConfig
+  /** 独立的瑞幸 / 麦当劳 MCP 只读 Action 配置（默认禁用） */
+  orderMcp: OrderMcpConfig
 }
 
 const here = dirname(fileURLToPath(import.meta.url)) // app-cordis/src
@@ -442,6 +445,20 @@ export function getConfig(): OrcaConfig {
       infoRecordsLimit: Number(process.env.ORCA_MEMORY_CONTEXT_INFO_RECORDS_LIMIT ?? 3),
       scoringPreset: (process.env.ORCA_MEMORY_SCORING_PRESET as 'confidence' | 'source-confidence') ?? 'confidence',
       detectSemanticConflict: process.env.ORCA_MEMORY_CONFLICT_DETECT_SEMANTIC === '1',
+    },
+    orderMcp: {
+      luckin: {
+        enabled: process.env.ORCA_LUCKIN_MCP_ENABLED === '1',
+        endpoint: 'https://gwmcp.lkcoffee.com/order/user/mcp',
+        token: process.env.LUCKIN_COFFEE_TOKEN || '',
+        longitude: process.env.ORCA_LUCKIN_LONGITUDE === undefined ? undefined : Number(process.env.ORCA_LUCKIN_LONGITUDE),
+        latitude: process.env.ORCA_LUCKIN_LATITUDE === undefined ? undefined : Number(process.env.ORCA_LUCKIN_LATITUDE),
+      },
+      mcd: {
+        enabled: process.env.ORCA_MCD_MCP_ENABLED === '1',
+        endpoint: 'https://mcp.mcd.cn',
+        token: process.env.MCDONALD_TOKEN || '',
+      },
     },
   }
 }

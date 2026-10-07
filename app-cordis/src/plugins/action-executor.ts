@@ -180,6 +180,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   // bridge 不参与调度/重试/路由，只负责事件分发。
   const actionResultBus = ctx.get('eventBus') as
     | {
+        get(id: string): { source: string; data: Record<string, unknown> } | undefined
         publish(input: {
           id?: string
           source: string
@@ -191,8 +192,21 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
       }
     | undefined
   const unsubscribeActionResult = actionResultBus
-    ? ctx.on('orca/action-result', (result: import('../types/action.js').ActionResult) => {
+      ? ctx.on('orca/action-result', (result: import('../types/action.js').ActionResult) => {
         if (disposed) return
+        // 查询 Action 只向触发它的原 Feishu 会话回传整理后的中文结果；不回传 MCP 原始报文。
+        if (result.action.startsWith('order.') && result.message && result.sourceEventId && !_config.dryRun) {
+          const sourceEvent = actionResultBus.get(result.sourceEventId)
+          const chatId = sourceEvent?.source === 'feishu' && typeof sourceEvent.data.chatId === 'string'
+            ? sourceEvent.data.chatId
+            : undefined
+          const feishu = ctx.get('feishu') as { sendToChat(chatId: string, text: string): Promise<void> } | undefined
+          if (chatId && feishu) {
+            void feishu.sendToChat(chatId, result.message).catch(() => {
+              ctx.logger.warn('[action-executor] 点餐查询结果回传失败（敏感响应未记录）')
+            })
+          }
+        }
         actionResultBus.publish({
           source: 'internal',
           type: 'action-result',

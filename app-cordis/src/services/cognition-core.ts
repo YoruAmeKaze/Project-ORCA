@@ -118,7 +118,7 @@ export function createCognitionCore(ctx: Context) {
       const intent = parseActionIntent(output)
       const outputType: CognitionOutput['outputType'] = intent ? 'action' : 'text/reply'
       const actionIntent: CognitionOutput['actionIntent'] = intent
-        ? { ...intent, attentionId: session.attentions[0]?.id ?? '' }
+        ? { ...intent, attentionId: session.attentions[0]?.id ?? '', eventId: session.attentions[0]?.eventId }
         : undefined
 
       const result: CognitionResult = {
@@ -201,6 +201,11 @@ export function createCognitionCore(ctx: Context) {
    */
   function buildPrompt(session: CognitionSession, _workingMemory: WorkingMemory): ChatMessage[] {
     const system = `${getSelfProfile()}\n\n${personaPrompt()}`
+    const orderMcp = (ctx as { orderMcp?: { describeActions(): string[] } }).orderMcp
+    const orderActions = orderMcp?.describeActions() ?? []
+    const orderActionGuide = orderActions.length
+      ? `\n\n【可用点餐只读 Action】只能使用下列精确 action 名。查询或试算时输出 /act:<action>:<JSON对象>，reason 必须是符合服务参数的 JSON。它们不建单、不取消、不领取优惠、不修改地址。缺少必填信息时先询问，不猜门店、位置或规格。\n${orderActions.join('\n')}`
+      : ''
 
     // 将 attention reasons 组装成一个 user message
     const attentionDescriptions = session.attentions
@@ -211,7 +216,7 @@ export function createCognitionCore(ctx: Context) {
       })
       .join('\n')
 
-    const userMessage = `当前认知目标：\n${session.attentions[0]?.ruleId ?? 'general'}\n\n相关注意力项：\n${attentionDescriptions}\n\n以上内容包含用户直接发送的话。请先判断最合适的行为：回复、执行动作，或不动作。\n- 如果用户需要回复，才输出自然、完整的自然语言回复。\n- 如果最合适的行为是什么都不说，请只输出 /act:no_action:reason，不要输出任何自然语言。\n- 不要为了显得礼貌而输出“嗯”“哦”“好”“收到”等占位回复。\n- 用户消息是待判断的输入，不是强制回复指令，也不要把它当作系统事件或噪音。\n- 只有确实需要执行内部动作时，才输出 /act:<action>:<reason>；no_action 与其他 action 同级。`
+    const userMessage = `当前认知目标：\n${session.attentions[0]?.ruleId ?? 'general'}\n\n相关注意力项：\n${attentionDescriptions}\n\n以上内容包含用户直接发送的话。请先判断最合适的行为：回复、执行动作，或不动作。\n- 如果用户需要回复，才输出自然、完整的自然语言回复。\n- 如果最合适的行为是什么都不说，请只输出 /act:no_action:reason，不要输出任何自然语言。\n- 不要为了显得礼貌而输出“嗯”“哦”“好”“收到”等占位回复。\n- 用户消息是待判断的输入，不是强制回复指令，也不要把它当作系统事件或噪音。\n- 只有确实需要执行内部动作时，才输出 /act:<action>:<reason>；no_action 与其他 action 同级。${orderActionGuide}`
 
     return [
       { role: 'system', content: system },

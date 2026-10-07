@@ -1901,15 +1901,28 @@ body { background: #080d18; }
 .timeline-row span { color: var(--text); }
 .timeline-empty { padding: 16px 0; color: var(--dim); font-family: var(--mono); font-size: 10px; }
 
-.memory-map { position: relative; height: 276px; margin-top: 16px; border-bottom: 1px solid rgba(255,255,255,.1); background-image: linear-gradient(rgba(125,211,252,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(125,211,252,.04) 1px, transparent 1px); background-size: 24px 24px; }
-.memory-node { position: absolute; display: grid; place-items: center; aspect-ratio: 1; border: 1px solid currentColor; border-radius: 50%; color: var(--accent); background: rgba(125,211,252,.035); text-align: center; }
-.memory-node span { display: block; font-size: 9px; }
-.memory-node b { display: block; margin-top: 3px; font-family: var(--mono); font-size: 12px; font-weight: 400; }
-.memory-node.projects { left: 6%; top: 12%; width: 88px; }
-.memory-node.knowledge { right: 6%; top: 9%; width: 114px; color: var(--green); }
-.memory-node.preferences { left: 18%; bottom: 12%; width: 72px; color: var(--cyan); }
-.memory-node.experiences { right: 14%; bottom: 10%; width: 94px; color: var(--amber); }
+.library-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 15px 0 10px; padding: 3px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(255,255,255,.025); }
+.library-tab { padding: 8px 5px; border: 0; border-radius: 5px; background: transparent; color: var(--dim); font: 10px var(--mono); cursor: pointer; }
+.library-tab.active { background: rgba(125,211,252,.1); color: var(--accent); }
+.library-list { min-height: 190px; max-height: 290px; overflow: auto; }
+.library-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 9px; width: 100%; padding: 12px 3px; border: 0; border-bottom: 1px solid rgba(255,255,255,.07); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.library-row:hover, .library-row.selected { background: rgba(125,211,252,.045); }
+.library-row-title { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.library-row small { color: var(--dim); font: 9px var(--mono); }
+.library-arrow { color: var(--accent); font: 16px var(--mono); }
+.library-empty { padding: 22px 4px; color: var(--dim); font-size: 10px; line-height: 1.6; }
+.library-detail { display: none; margin-top: 10px; }
+.library-detail.open { display: block; animation: libraryIn .32s ease both; }
+@keyframes libraryIn { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: translateX(0); } }
+.library-back { padding: 5px 0 12px; border: 0; background: none; color: var(--accent); font: 9px var(--mono); cursor: pointer; }
+.library-tree { display: flex; align-items: stretch; gap: 7px; overflow-x: auto; padding: 4px 0 12px; }
+.library-tree-col { flex: 0 0 112px; min-width: 0; border-left: 1px solid rgba(125,211,252,.22); padding-left: 8px; }
+.library-tree-col label { display: block; margin-bottom: 8px; color: var(--dim); font: 8px var(--mono); text-transform: uppercase; }
+.library-tree-node { display: block; width: 100%; margin: 0 0 5px; padding: 7px 6px; border: 1px solid rgba(255,255,255,.08); border-radius: 4px; background: rgba(255,255,255,.025); color: var(--muted); font-size: 9px; text-align: left; }
+.library-tree-node.current { border-color: rgba(125,211,252,.35); color: var(--accent); }
+.library-tree-note { color: var(--dim); font-size: 9px; line-height: 1.55; }
 .memory-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding-top: 15px; }
+.memory-stats span { display: block; color: var(--dim); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
 .memory-stats b { display: block; margin-top: 6px; color: var(--text); font-family: var(--mono); font-size: 11px; font-weight: 400; }
 
 .stream-panel { margin-top: 36px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.14); }
@@ -2030,14 +2043,14 @@ body { background: #080d18; }
         </section>
 
         <aside class="memory-panel">
-          <div class="panel-head"><span>Memory Ocean</span><b id="memory-total">0</b></div>
-          <div class="memory-map" id="memory-map">
-            <div class="memory-node projects"><span>Projects</span><b id="mc-projects">0</b></div>
-            <div class="memory-node knowledge"><span>Knowledge</span><b id="mc-knowledge">0</b></div>
-            <div class="memory-node preferences"><span>Preferences</span><b id="mc-preferences">0</b></div>
-            <div class="memory-node experiences"><span>Experiences</span><b id="mc-experiences">0</b></div>
+          <div class="panel-head"><span>LIBRARIES</span><b id="memory-total">0</b></div>
+          <div class="library-tabs" role="tablist" aria-label="库类型">
+            <button class="library-tab active" type="button" data-library-tab="memory" role="tab" aria-selected="true">记忆库</button>
+            <button class="library-tab" type="button" data-library-tab="skills" role="tab" aria-selected="false">技能库</button>
           </div>
-          <div class="memory-stats"><div><span>Retrieved Today</span><b id="memory-retrieved">—</b></div><div><span>Last Reflection</span><b id="memory-reflection">—</b></div></div>
+          <div class="library-list" id="library-list" aria-live="polite"></div>
+          <div class="library-detail" id="library-detail"></div>
+          <div class="memory-stats" id="library-stats"><div><span>记忆条目</span><b id="memory-retrieved">—</b></div><div><span>最近更新</span><b id="memory-reflection">—</b></div></div>
         </aside>
       </section>
       <section class="stream-panel">
@@ -2252,14 +2265,79 @@ document.addEventListener('DOMContentLoaded', function() {
       var d = await r.json()
       var memory = d.state && d.state.memory
       if (!memory || !memory.layers) return
-      memory.layers.forEach(function(layer) {
-        var el = $('mc-' + layer.id)
-        if (el) el.textContent = layer.count ? String(layer.count) : '—'
-      })
+      currentMemorySnapshot = memory
       var memoryTotal = $('memory-total')
       if (memoryTotal) memoryTotal.textContent = String(memory.total || 0)
+      renderLibrary(memory)
     } catch (_) {}
   }
+
+  var libraryMode = 'memory'
+  var selectedLibrary = null
+  var currentMemorySnapshot = { total: 0, layers: [] }
+  var memoryLabels = { projects: '项目记忆', knowledge: '知识记忆', preferences: '偏好记忆', experiences: '经历记忆' }
+  function libraryEscape(value) {
+    return String(value).replace(/[&<>"']/g, function(char) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]
+    })
+  }
+  function renderLibrary(memory) {
+    var list = $('library-list')
+    var detail = $('library-detail')
+    var stats = $('library-stats')
+    if (!list || !detail) return
+    if (libraryMode === 'skills') {
+      if (stats) stats.style.display = 'none'
+      if (!selectedLibrary) {
+        list.innerHTML = '<button class="library-row" type="button" data-library-id="registered-skills"><span class="library-row-title">技能目录</span><small>未接入</small><span class="library-arrow">›</span></button><div class="library-empty">当前尚无独立技能目录；已注册的 Action Handler 不等同于技能目录项。</div>'
+        detail.classList.remove('open')
+        detail.innerHTML = ''
+        list.querySelector('[data-library-id]').onclick = function() { selectedLibrary = 'registered-skills'; renderLibrary(memory) }
+        return
+      }
+      list.innerHTML = ''
+      detail.innerHTML = '<button class="library-back" type="button">← 返回技能库</button><div class="library-tree"><div class="library-tree-col"><label>目录</label><div class="library-tree-node current">技能库</div></div><div class="library-tree-col"><label>状态</label><div class="library-tree-node">尚未接入</div></div><div class="library-tree-col"><label>说明</label><p class="library-tree-note">当前 Runtime 尚无稳定技能目录元数据；接入规格文档不会被显示为可执行能力。</p></div></div>'
+      detail.classList.add('open')
+      detail.querySelector('.library-back').onclick = function() { selectedLibrary = null; renderLibrary(memory) }
+      return
+    }
+    if (stats) stats.style.display = ''
+    var layers = memory && Array.isArray(memory.layers) ? memory.layers : []
+    list.innerHTML = layers.map(function(layer) {
+      return '<button class="library-row' + (selectedLibrary === layer.id ? ' selected' : '') + '" type="button" data-library-id="' + libraryEscape(layer.id) + '"><span class="library-row-title">' + libraryEscape(memoryLabels[layer.id] || layer.id) + '</span><small>' + (Number(layer.count) || 0) + ' 条</small><span class="library-arrow">›</span></button>'
+    }).join('') || '<div class="library-empty">记忆库尚无可展示数据。</div>'
+    var total = $('memory-retrieved')
+    var updated = $('memory-reflection')
+    if (total) total.textContent = String(memory && memory.total || 0)
+    if (updated) {
+      var latest = layers.reduce(function(max, layer) { return Math.max(max, Number(layer.updatedAt) || 0) }, 0)
+      updated.textContent = latest ? new Date(latest).toLocaleDateString() : '—'
+    }
+    list.querySelectorAll('[data-library-id]').forEach(function(row) {
+      row.onclick = function() { selectedLibrary = row.getAttribute('data-library-id'); renderLibrary(memory) }
+    })
+    if (!selectedLibrary) { detail.classList.remove('open'); detail.innerHTML = ''; return }
+    var chosen = layers.find(function(layer) { return layer.id === selectedLibrary })
+    if (!chosen) { selectedLibrary = null; detail.classList.remove('open'); return }
+    var nsByLayer = { projects: ['food-agent'], knowledge: ['knowledge'], preferences: ['preferences'], experiences: ['experiences', 'memory'] }
+    var namespaces = nsByLayer[chosen.id] || []
+    detail.innerHTML = '<button class="library-back" type="button">← 返回记忆库</button><div class="library-tree"><div class="library-tree-col"><label>记忆层</label><div class="library-tree-node current">' + libraryEscape(memoryLabels[chosen.id] || chosen.id) + '</div></div><div class="library-tree-col"><label>档案夹</label>' + namespaces.map(function(ns) { return '<div class="library-tree-node">' + libraryEscape(ns) + '</div>' }).join('') + '</div><div class="library-tree-col"><label>记录</label><div class="library-tree-node">' + (Number(chosen.count) || 0) + ' 条可检索记忆</div><p class="library-tree-note">此视图展示当前汇总；记忆分类字段尚未实施，未推断更细的功能类别。</p></div></div>'
+    detail.classList.add('open')
+    detail.querySelector('.library-back').onclick = function() { selectedLibrary = null; renderLibrary(memory) }
+  }
+
+  document.querySelectorAll('[data-library-tab]').forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      libraryMode = tab.getAttribute('data-library-tab')
+      selectedLibrary = null
+      document.querySelectorAll('[data-library-tab]').forEach(function(item) {
+        var active = item === tab
+        item.classList.toggle('active', active)
+        item.setAttribute('aria-selected', String(active))
+      })
+      renderLibrary(currentMemorySnapshot)
+    })
+  })
 
   /* ─── Command bar ─── */
   var inp = $('cmdIn')

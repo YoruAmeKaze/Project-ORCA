@@ -22,6 +22,7 @@ import type { ContextAssembler } from './types/context.js'
 import type { CognitiveSchedulerService, CognitiveRequest } from './types/cognition.js'
 import type { CognitionCoreService } from './services/cognition-core.js'
 import type { CognitionResult } from './types/cognition-core.js'
+import type { OrderMcpService } from './services/orderMcp.js'
 
 /**
  * CognitionActionIntent —— Phase D Cognition 产生的结构化 action 意图
@@ -40,6 +41,8 @@ export interface CognitionActionIntent {
   reason: string
   /** 关联的 AttentionItem.id */
   attentionId: string
+  /** 原始用户消息事件，用于 ActionResult 返回同一会话。 */
+  eventId?: string
 }
 
 /**
@@ -93,6 +96,7 @@ declare module '@deepseek-ai/cordis' {
     attention: AttentionEngineService
     decision: DecisionEngineService
     actionExecutor: ActionExecutorService
+    orderMcp: OrderMcpService
     contextAssembler: ContextAssembler
     cognitiveScheduler: CognitiveSchedulerService
     cognitionCore: CognitionCoreService

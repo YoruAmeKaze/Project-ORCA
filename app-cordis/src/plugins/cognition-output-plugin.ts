@@ -99,8 +99,8 @@ function cognitionIntentToDecision(intent: CognitionActionIntent): Decision {
     action: intent.action as Decision['action'],
     priority: 'normal',
     reason: intent.reason,
-    eventId: undefined,
     source: 'cognition',
+    eventId: intent.eventId,
     decidedAt: Date.now(),
   }
 }

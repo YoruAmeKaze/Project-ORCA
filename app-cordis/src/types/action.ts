@@ -81,6 +81,10 @@ export interface ActionResult {
   decisionId: string
   /** 错误描述（仅 success=false 时存在） */
   error?: string
+  /** 可回传给触发会话的中文结果；仅来自经 schema 校验并整理后的只读 handler。 */
+  message?: string
+  /** 触发该 Action 的原始 EventBus 事件 ID，用于安全地回到原会话。 */
+  sourceEventId?: string
   /** 执行完成时间戳 */
   executedAt: number
   /**

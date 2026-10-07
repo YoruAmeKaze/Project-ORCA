@@ -2,6 +2,13 @@
 
 > 提交惯例（见 `guide/decisions.md` D-VER-01~04）：每 commit 升版本（MAJOR/MINOR/PATCH）、写本日志、**同步更新 AGENT.md**、commit message 带版本前缀。本条不参与版本计数。
 
+## v0.7.0（2026-10-08）：瑞幸 / 麦当劳中国点餐只读 MCP MVP
+
+- 将两家供应商作为独立 MCP 服务，接入现有 `ActionExecutor → ActionHandler → ActionResult`；增加固定只读 Action、实时工具/schema 核验、参数校验、中文摘要及原 Feishu 会话结果回传。无通用 MCP Manager、Capability 层或新 Agent 框架。
+- 查询和试算范围以 `skills/order-food/SKILL.md` 为准。建单确认闭环未实现，因此建单、取消、领券、修改地址与支付均不开放；支付留在官方流程。
+- 本机私密配置下已分别成功完成瑞幸和麦当劳官方 MCP 初始化、工具清单核验及只读门店查询。`npm run smoke:order-mcp`、`npm run verify:order-mcp-live` 与构建通过；验证不执行写操作。
+- `AGENT.md` 已同步。
+
 ## v1.1.0（2026-06）
 
 ### 新增：瑞幸咖啡 AI 自动点单（WIP）
