@@ -102,9 +102,9 @@ function mkPcAppFocus(app) {
 // ────────────────────────────────────────────────────────────
 {
   const engine = createAttentionEngine()
-  check('R8.A0: ruleCount === 7（含 feishu-message + dashboard-message）', engine.ruleCount() === 7)
-  // 注意：ruleRegistrySize 也是 6（模块加载时硬编码注册）
-  check('R8.A0b: ruleRegistrySize === 7', ruleRegistrySize() === 7)
+  check('R8.A0: ruleCount === 8（含用户消息与点餐 Action 结果规则）', engine.ruleCount() === 8)
+  // 注意：ruleRegistrySize 包含用户消息与点餐 Action 结果规则。
+  check('R8.A0b: ruleRegistrySize === 8', ruleRegistrySize() === 8)
 
   // ── R8.A1: empty input ──
   const emptyItems = engine.evaluate({ event: null, state: mkState(), prevState: undefined })
@@ -559,11 +559,11 @@ function mkTestRule(id, trigger = true, action = 'remember_only') {
 
   // ── R11.5: 现有内置规则迁移后行为不变 ──
   const defaultReg = getDefaultRegistry()
-  check('R11.5.1: defaultRegistry.size() === 7（含 feishu-message + dashboard-message）', defaultReg.size() === 7)
-  check('R11.5.2: ruleRegistrySize() === 7（向后兼容）', ruleRegistrySize() === 7)
+  check('R11.5.1: defaultRegistry.size() === 8（含用户消息与点餐 Action 结果规则）', defaultReg.size() === 8)
+  check('R11.5.2: ruleRegistrySize() === 8（向后兼容）', ruleRegistrySize() === 8)
   // 不传参 createAttentionEngine → 使用默认 Registry
   const engine5 = createAttentionEngine()
-  check('R11.5.3: 默认 engine.ruleCount() === 7', engine5.ruleCount() === 7)
+  check('R11.5.3: 默认 engine.ruleCount() === 8', engine5.ruleCount() === 8)
   // 验证 R8 关键场景仍触发
   const r8sleep = engine5.evaluate({ event: null, state: mkState({ status: 'sleeping' }), prevState: undefined })
   check('R11.5.4: sleeping-quiet 仍触发（向后兼容）',

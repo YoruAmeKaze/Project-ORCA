@@ -195,32 +195,15 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   const unsubscribeActionResult = actionResultBus
       ? ctx.on('orca/action-result', (result: import('../types/action.js').ActionResult) => {
         if (disposed) return
-        // 查询 Action 回传触发它的原会话；不回传 MCP 原始报文。
-        if (result.action.startsWith('order.') && result.message && result.sourceEventId && !_config.dryRun) {
-          const sourceEvent = actionResultBus.get(result.sourceEventId)
-          if (sourceEvent?.source === 'dashboard') {
-            const messageId = typeof sourceEvent.data.id === 'string' ? sourceEvent.data.id : undefined
-            const sessionId = sourceEvent.sessionId
-            if (messageId) {
-              actionResultBus.publish({
-                source: 'orca',
-                type: 'dashboard-reply',
-                data: { id: messageId, reply: result.message, sessionId },
-                priority: 1,
-                sessionId,
-              })
-            }
-          }
-          const chatId = sourceEvent?.source === 'feishu' && typeof sourceEvent.data.chatId === 'string'
-            ? sourceEvent.data.chatId
-            : undefined
-          const feishu = ctx.get('feishu') as { sendToChat(chatId: string, text: string): Promise<void> } | undefined
-          if (chatId && feishu) {
-            void feishu.sendToChat(chatId, result.message).catch(() => {
-              ctx.logger.warn('[action-executor] 点餐查询结果回传失败（敏感响应未记录）')
-            })
-          }
-        }
+        // 工具结果作为内部事件进入 EventBus；Attention → Scheduler → CognitionCore
+        // 负责把结果转成 Orca 回复。这里不直接把函数结果展示到 Dashboard/Feishu。
+        const sourceEvent = result.sourceEventId ? actionResultBus.get(result.sourceEventId) : undefined
+        const dashboardMessageId = sourceEvent?.source === 'dashboard' && typeof sourceEvent.data.id === 'string'
+          ? sourceEvent.data.id
+          : undefined
+        const chatId = sourceEvent?.source === 'feishu' && typeof sourceEvent.data.chatId === 'string'
+          ? sourceEvent.data.chatId
+          : undefined
         actionResultBus.publish({
           source: 'internal',
           type: 'action-result',
@@ -228,10 +211,14 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
             action: result.action,
             success: result.success,
             decisionId: result.decisionId,
-            error: result.error,
+            message: result.message,
+            sourceEventId: result.sourceEventId,
+            dashboardMessageId,
+            chatId,
             metadata: result.metadata,
           },
           priority: 1,
+          sessionId: sourceEvent?.sessionId,
         })
       })
     : () => {}

@@ -433,17 +433,18 @@ function makeTmpStore() {
     typeof results14c[0]?.error === 'string' &&
     results14c[0].error.includes('no handler registered'))
 
-  // Dashboard 点餐查询结果回传同一消息会话，供 UI 展示和短期上下文复用。
+  // Dashboard 点餐函数结果只进 EventBus，留给 Attention/CognitionCore 生成用户回复。
   eventBus.publish({ id: 'dash-order-request', source: 'dashboard', type: 'message', sessionId: 'dashboard:test-client', data: { id: 'dash-order-request', text: '查麦当劳菜单', actor: 'user' } })
   executor.registry.register({ name: 'test-order-query', action: 'order.store.search', async execute(decision) {
     return { success: true, action: decision.action, decisionId: decision.decisionId, sourceEventId: decision.eventId, message: '测试菜单结果', executedAt: Date.now() }
   } })
   results14c.length = 0
   ctx.emit('orca/decision', mkDecision({ action: 'order.store.search', eventId: 'dash-order-request', decisionId: 'dec_dashboard_order' }))
-  await pollFor(() => eventBus.recent(10).some((e) => e.type === 'dashboard-reply' && e.data.id === 'dash-order-request'), 500)
-  const dashboardOrderReply = eventBus.recent(10).find((e) => e.type === 'dashboard-reply' && e.data.id === 'dash-order-request')
-  check('R14.8.19: Dashboard 点餐 Action 回复关联原消息', dashboardOrderReply?.data.reply === '测试菜单结果')
-  check('R14.8.20: Dashboard 点餐 Action 回复保留原会话', dashboardOrderReply?.sessionId === 'dashboard:test-client')
+  await pollFor(() => eventBus.recent(10).some((e) => e.source === 'internal' && e.type === 'action-result' && e.data.decisionId === 'dec_dashboard_order'), 500)
+  const orderResultEvent = eventBus.recent(10).find((e) => e.source === 'internal' && e.type === 'action-result' && e.data.decisionId === 'dec_dashboard_order')
+  check('R14.8.19: 点餐函数结果作为内部 ActionResult Event 发布', orderResultEvent?.data.message === '测试菜单结果')
+  check('R14.8.20: ActionResult Event 保留原消息关联与会话', orderResultEvent?.data.dashboardMessageId === 'dash-order-request' && orderResultEvent?.sessionId === 'dashboard:test-client')
+  check('R14.8.21: ActionExecutor 不直接向 Dashboard 发布函数结果', !eventBus.recent(10).some((e) => e.type === 'dashboard-reply' && e.data.id === 'dash-order-request'))
 
   // ── R14.8.x: 不阻塞其他 decision listener ──
   let otherListenerCalled = false
@@ -451,7 +452,7 @@ function makeTmpStore() {
   results14c.length = 0
   ctx.emit('orca/decision', mkDecision({ action: 'no_action', decisionId: 'dec_listener_check' }))
   await pollFor(() => results14c.length > 0 && otherListenerCalled, 500)
-  check('R14.8.21: 其他 decision listener 也被调（不阻塞）', otherListenerCalled === true)
+  check('R14.8.22: 其他 decision listener 也被调（不阻塞）', otherListenerCalled === true)
 
   // ── R14.10: dispose 后不再执行 ──
   dispose()

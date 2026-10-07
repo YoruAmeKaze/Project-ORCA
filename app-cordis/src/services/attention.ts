@@ -245,6 +245,24 @@ const ruleDashboardMessage: AttentionRule = {
   }),
 }
 
+/** Internal read-only Action results return to CognitionCore for user-facing wording. */
+const ruleOrderActionResult: AttentionRule = {
+  id: 'order-action-result',
+  description: '只读点餐 Action 结果交由 CognitionCore 汇总后回复原用户',
+  predicate: ({ event }) => event?.source === 'internal' && event.type === 'action-result' &&
+    typeof event.data.action === 'string' && event.data.action.startsWith('order.') &&
+    typeof event.data.message === 'string' && event.data.message.trim().length > 0 &&
+    (typeof event.data.dashboardMessageId === 'string' || typeof event.data.chatId === 'string'),
+  produce: ({ event }) => ({
+    priority: 'normal',
+    reason: String(event?.data.message ?? ''),
+    action: 'ignore',
+    eventId: event?.id,
+    dashboardMessageId: typeof event?.data.dashboardMessageId === 'string' ? event.data.dashboardMessageId : undefined,
+    chatId: typeof event?.data.chatId === 'string' ? event.data.chatId : undefined,
+  }),
+}
+
 // 模块加载时一次性注册（与 Phase 2.A reducer 模式一致）
 registerRule(ruleSleepingQuiet)
 registerRule(ruleFeishuDeadline)
@@ -253,6 +271,7 @@ registerRule(ruleAwayArrival)
 registerRule(ruleFocusInterrupt)
 registerRule(ruleFeishuMessage)
 registerRule(ruleDashboardMessage)
+registerRule(ruleOrderActionResult)
 
 // ── AttentionEngine 服务 ────────────────────────────────────────────────
 
