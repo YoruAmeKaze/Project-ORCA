@@ -106,7 +106,7 @@ dev-log.md / TODO.md / README.md
 ### 4.2 InfoAgent 框架（agents/）
 - **CEO-员工-档案室模型**：主 agent（CEO）只决策汇总；信息源 = InfoAgent（员工）；档案室 = 每 namespace 一 JSONL
 - **闭集注册表**（D-AGENT-02）：新增信息源 = 注册一个 InfoAgent，主循环零改动
-- **点餐 MCP（只读 MVP）**：`services/orderMcp.ts` + `plugins/order-mcp-actions.ts` 将瑞幸和麦当劳作为独立 MCP 服务，固定 Action 经现有 `ActionExecutor → ActionHandler → ActionResult` 执行；实时 `tools/list` / schema 变化即 fail closed，输出中文摘要并回传原 Feishu 会话。需显式启用 Runtime、ActionExecutor 和单独供应商开关；`.env.example` 列出配置键。`skills/order-food/SKILL.md` 记录原子操作和安全边界。已对两家官方只读门店查询做凭证下实查，测试入口为 `npm run smoke:order-mcp` 与 `npm run verify:order-mcp-live`。当前不注册建单、取消、领券、改地址、支付；确认闭环尚未实现。
+- **点餐 MCP（只读 MVP）**：`services/orderMcp.ts` + `plugins/order-mcp-actions.ts` 将瑞幸和麦当劳作为独立 MCP 服务，固定 Action 经现有 `ActionExecutor → ActionHandler → ActionResult` 执行；实时 `tools/list` / schema 变化即 fail closed，输出中文摘要并回传原 Feishu 会话。CognitionCore 将 `orderMcp` 作为可选服务通过 `ctx.get('orderMcp')` 读取，未注册时仍可正常回复。需显式启用 Runtime、ActionExecutor 和单独供应商开关；`.env.example` 列出配置键。`skills/order-food/SKILL.md` 记录原子操作和安全边界。已对两家官方只读门店查询做凭证下实查，测试入口为 `npm run smoke:order-mcp` 与 `npm run verify:order-mcp-live`。当前不注册建单、取消、领券、改地址、支付；确认闭环尚未实现。
 - **R0 查档优先**（D-AGENT-10）：饮食类问题先查档案，命中直接复用（零视觉调用，省钱核心）
 - **档案室**（D-AGENT-09/11/12）：append-only + supersedes 更正、软删/整夹清空 + ttl 清理、pending 待汇报队列
 

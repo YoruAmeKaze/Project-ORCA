@@ -30,6 +30,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { createCognitiveScheduler } from '../dist/services/cognitive-scheduler.js'
 import { createCognitionCore } from '../dist/services/cognition-core.js'
+import { cognitionCorePlugin } from '../dist/plugins/cognition-core-plugin.js'
 import { getInitialState } from '../dist/services/worldState.js'
 
 const results = []
@@ -290,6 +291,25 @@ function mkMockLlm(behavior) {
     decisions.length === 0)
   check('RB.15b: CognitionCore 不发 orca/action-result',
     actionResults.length === 0)
+}
+
+// ────────────────────────────────────────────────────────────
+// RB.E  可选点餐 MCP 服务缺席时仍可正常认知
+// ────────────────────────────────────────────────────────────
+{
+  const ctx = new Context()
+  ctx.logger.exporter({ colors: 0, levels: { default: 3 }, export() {} })
+  ctx.provide('llm', mkMockLlm(() => Promise.resolve('没有点餐服务时仍正常回复')))
+  const outputs = []
+  ctx.on('orca/cognition-output', (output) => outputs.push(output))
+
+  // 故意不提供 orderMcp，覆盖 Runtime 中对应供应商开关关闭的情况。
+  await ctx.plugin(cognitionCorePlugin, {})
+  ctx.emit('orca/cognition-request', mkRequest({ id: 'req_without_order_mcp' }))
+  await new Promise((r) => setTimeout(r, 30))
+
+  check('RB.E1: orderMcp 未注册时 CognitionCore 正常完成并发出回复',
+    outputs.length === 1 && outputs[0]?.output === '没有点餐服务时仍正常回复')
 }
 
 // ────────── 结果 ──────────

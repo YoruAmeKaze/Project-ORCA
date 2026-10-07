@@ -2,6 +2,12 @@
 
 > 提交惯例（见 `guide/decisions.md` D-VER-01~04）：每 commit 升版本（MAJOR/MINOR/PATCH）、写本日志、**同步更新 AGENT.md**、commit message 带版本前缀。本条不参与版本计数。
 
+## v0.7.1（2026-10-08）：修复未启用点餐 MCP 时 CognitionCore 崩溃
+
+- CognitionCore 将 `orderMcp` 作为可选服务读取，未启用或未注册点餐 MCP 时不再触发 Cordis 未声明 inject 的属性访问异常。
+- 新增插件级回归覆盖 MCP 服务缺席场景；构建、`smoke-cognition-core`（27/27）和 `smoke:order-mcp` 通过。
+- `AGENT.md` 已同步。
+
 ## v0.7.0（2026-10-08）：瑞幸 / 麦当劳中国点餐只读 MCP MVP
 
 - 将两家供应商作为独立 MCP 服务，接入现有 `ActionExecutor → ActionHandler → ActionResult`；增加固定只读 Action、实时工具/schema 核验、参数校验、中文摘要及原 Feishu 会话结果回传。无通用 MCP Manager、Capability 层或新 Agent 框架。

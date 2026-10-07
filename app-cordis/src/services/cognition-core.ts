@@ -201,7 +201,9 @@ export function createCognitionCore(ctx: Context) {
    */
   function buildPrompt(session: CognitionSession, _workingMemory: WorkingMemory): ChatMessage[] {
     const system = `${getSelfProfile()}\n\n${personaPrompt()}`
-    const orderMcp = (ctx as { orderMcp?: { describeActions(): string[] } }).orderMcp
+    // 点餐 MCP 是可选能力：关闭或未注册时返回 undefined。使用 Cordis 的 get()
+    // 读取可选服务，不走 ctx 属性代理（属性访问必须声明 inject，会让无 MCP 的运行时崩溃）。
+    const orderMcp = ctx.get('orderMcp') as { describeActions(): string[] } | undefined
     const orderActions = orderMcp?.describeActions() ?? []
     const orderActionGuide = orderActions.length
       ? `\n\n【可用点餐只读 Action】只能使用下列精确 action 名。查询或试算时输出 /act:<action>:<JSON对象>，reason 必须是符合服务参数的 JSON。它们不建单、不取消、不领取优惠、不修改地址。缺少必填信息时先询问，不猜门店、位置或规格。\n${orderActions.join('\n')}`
