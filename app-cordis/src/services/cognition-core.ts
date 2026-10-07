@@ -35,7 +35,7 @@ import { getSelfProfile } from './selfProfileLoader.js'
 /**
  * 解析 LLM 输出中的 action intent（Phase D 最小实现）
  *
- * 格式约定：/act:<action>:<reason>（兼容模型常见的 /orca.act 与 /acit 前缀偏差）
+ * 格式约定：/act:<action>:<reason>（兼容日志中观测到的模型前缀偏差）
  * 示例：/act:no_action:minimal-test
  * 示例：/act:remember:reminder-setup:please remember this
  *
@@ -46,7 +46,7 @@ import { getSelfProfile } from './selfProfileLoader.js'
  */
 function parseActionIntent(output: string): CognitionActionIntent | null {
   const trimmed = output.trim()
-  const match = trimmed.match(/^\/(?:act|orca\.act|acit):([^:]+):(.*)/)
+  const match = trimmed.match(/^\/(?:act|action|orca\.act|acit):([^:]+):(.*)/)
   if (!match || !match[1] || !match[2]) return null
   return {
     action: match[1].trim(),

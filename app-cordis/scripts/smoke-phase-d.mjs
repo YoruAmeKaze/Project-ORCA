@@ -273,7 +273,7 @@ async function pollFor(predicate, timeoutMs = 1000) {
 // ────────────────────────────────────────────────────────────
 // PD.5  兼容实测日志中模型偏差的 action 前缀
 // ────────────────────────────────────────────────────────────
-for (const [index, output] of ['/orca.act:no_action:alias', '/acit:no_action:alias'].entries()) {
+for (const [index, output] of ['/orca.act:no_action:alias', '/acit:no_action:alias', '/action:no_action:alias'].entries()) {
   const ctx = new Context()
   ctx.logger.exporter({ colors: 0, levels: { default: 3 }, export() {} })
   ctx.provide('llm', mkMockLlm(output))
