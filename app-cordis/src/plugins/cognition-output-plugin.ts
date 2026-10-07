@@ -149,6 +149,21 @@ function handleTextReply(
     return
   }
 
+  // Runtime 飞书回复也写入 EventBus 短期窗口；CognitionCore 下轮按同一 sessionId
+  // 读取，用于理解“那家/刚才那个”等多轮指代，不写入长期记忆。
+  if (output.channelSessionId) {
+    const eventBus = ctx.get('eventBus') as {
+      publish(input: { source: string; type: string; data: Record<string, unknown>; priority?: number; sessionId?: string }): void
+    } | undefined
+    eventBus?.publish({
+      source: 'orca',
+      type: 'conversation-reply',
+      data: { text: output.output, role: 'assistant' },
+      priority: 1,
+      sessionId: output.channelSessionId,
+    })
+  }
+
   feishu.sendToChat(output.chatId, output.output).catch((err: unknown) => {
     // 发送失败不抛异常（飞书接口问题不应该影响 cognition 本身的状态）
     const detail = err instanceof Error ? err.message : String(err)

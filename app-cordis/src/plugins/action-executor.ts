@@ -180,7 +180,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   // bridge 不参与调度/重试/路由，只负责事件分发。
   const actionResultBus = ctx.get('eventBus') as
     | {
-        get(id: string): { source: string; data: Record<string, unknown> } | undefined
+        get(id: string): { source: string; sessionId?: string; data: Record<string, unknown> } | undefined
         publish(input: {
           id?: string
           source: string
@@ -188,15 +188,29 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
           timestamp?: number
           data?: Record<string, unknown>
           priority?: number
+          sessionId?: string
         }): void
       }
     | undefined
   const unsubscribeActionResult = actionResultBus
       ? ctx.on('orca/action-result', (result: import('../types/action.js').ActionResult) => {
         if (disposed) return
-        // 查询 Action 只向触发它的原 Feishu 会话回传整理后的中文结果；不回传 MCP 原始报文。
+        // 查询 Action 回传触发它的原会话；不回传 MCP 原始报文。
         if (result.action.startsWith('order.') && result.message && result.sourceEventId && !_config.dryRun) {
           const sourceEvent = actionResultBus.get(result.sourceEventId)
+          if (sourceEvent?.source === 'dashboard') {
+            const messageId = typeof sourceEvent.data.id === 'string' ? sourceEvent.data.id : undefined
+            const sessionId = sourceEvent.sessionId
+            if (messageId) {
+              actionResultBus.publish({
+                source: 'orca',
+                type: 'dashboard-reply',
+                data: { id: messageId, reply: result.message, sessionId },
+                priority: 1,
+                sessionId,
+              })
+            }
+          }
           const chatId = sourceEvent?.source === 'feishu' && typeof sourceEvent.data.chatId === 'string'
             ? sourceEvent.data.chatId
             : undefined

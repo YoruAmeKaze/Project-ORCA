@@ -312,6 +312,35 @@ function mkMockLlm(behavior) {
     outputs.length === 1 && outputs[0]?.output === '没有点餐服务时仍正常回复')
 }
 
+// ────────────────────────────────────────────────────────────
+// RB.F  Runtime CognitionCore 注入同会话近期聊天上下文
+// ────────────────────────────────────────────────────────────
+{
+  const ctx = new Context()
+  ctx.logger.exporter({ colors: 0, levels: { default: 3 }, export() {} })
+  let capturedMessages = []
+  ctx.provide('llm', mkMockLlm((messages) => {
+    capturedMessages = messages
+    return Promise.resolve('结合前文继续处理')
+  }))
+  ctx.provide('eventBus', {
+    recent: () => [
+      { id: 'current-event', source: 'dashboard', type: 'message', timestamp: Date.now(), sessionId: 'dashboard:test-session', data: { actor: 'user', text: '重庆邮电大学中心食堂那家' } },
+      { id: 'assistant-previous', source: 'orca', type: 'dashboard-reply', timestamp: Date.now() - 1_000, sessionId: 'dashboard:test-session', data: { reply: '请告诉我麦当劳门店所在城市或地标。' } },
+      { id: 'user-previous', source: 'dashboard', type: 'message', timestamp: Date.now() - 2_000, sessionId: 'dashboard:test-session', data: { actor: 'user', text: '帮我查查麦当劳的菜品' } },
+      { id: 'other-session', source: 'dashboard', type: 'message', timestamp: Date.now() - 500, sessionId: 'dashboard:other-session', data: { actor: 'user', text: '其他会话隐私内容' } },
+    ],
+  })
+  const attention = { ...mkAttention('att_context'), eventId: 'current-event', sessionId: 'dashboard:test-session', reason: '重庆邮电大学中心食堂那家' }
+  createCognitionCore(ctx).onCognitionRequest(mkRequest({ id: 'req_recent_context', sessionId: 'dashboard:test-session', attentions: [attention] }))
+  await new Promise((r) => setTimeout(r, 30))
+  const prompt = capturedMessages.map((message) => message.content).join('\n')
+  check('RB.F1: prompt 包含同会话前文用户请求和 Orca 回复',
+    prompt.includes('帮我查查麦当劳的菜品') && prompt.includes('请告诉我麦当劳门店所在城市或地标'))
+  check('RB.F2: prompt 排除当前消息重复项与其他会话内容',
+    !prompt.includes('其他会话隐私内容') && prompt.split('重庆邮电大学中心食堂那家').length === 2)
+}
+
 // ────────── 结果 ──────────
 const failed = results.filter((r) => !r.ok)
 console.log(`\n==== smoke-cognition-core 结果：${results.length - failed.length}/${results.length} PASS ====`)

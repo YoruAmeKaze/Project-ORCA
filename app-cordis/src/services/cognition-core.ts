@@ -209,6 +209,13 @@ export function createCognitionCore(ctx: Context) {
       ? `\n\n【可用点餐只读 Action】只能使用下列精确 action 名。查询或试算时输出 /act:<action>:<JSON对象>，reason 必须是符合服务参数的 JSON。它们不建单、不取消、不领取优惠、不修改地址。缺少必填信息时先询问，不猜门店、位置或规格。\n${orderActions.join('\n')}`
       : ''
 
+    const currentEventIds = new Set(session.attentions.flatMap((attention) => attention.eventId ? [attention.eventId] : []))
+    const conversationContext = getRecentConversationContext(
+      ctx.get('eventBus') as { recent(n: number): Array<{ id: string; source: string; type: string; timestamp: number; sessionId?: string; data: Record<string, unknown> }> } | undefined,
+      session.attentions[0]?.sessionId,
+      currentEventIds,
+    )
+
     // 将 attention reasons 组装成一个 user message
     const attentionDescriptions = session.attentions
       .map((a) => {
@@ -218,7 +225,10 @@ export function createCognitionCore(ctx: Context) {
       })
       .join('\n')
 
-    const userMessage = `当前认知目标：\n${session.attentions[0]?.ruleId ?? 'general'}\n\n相关注意力项：\n${attentionDescriptions}\n\n以上内容包含用户直接发送的话。请先判断最合适的行为：回复、执行动作，或不动作。\n- 如果用户需要回复，才输出自然、完整的自然语言回复。\n- 如果最合适的行为是什么都不说，请只输出 /act:no_action:reason，不要输出任何自然语言。\n- 不要为了显得礼貌而输出“嗯”“哦”“好”“收到”等占位回复。\n- 用户消息是待判断的输入，不是强制回复指令，也不要把它当作系统事件或噪音。\n- 只有确实需要执行内部动作时，才输出 /act:<action>:<reason>；no_action 与其他 action 同级。${orderActionGuide}`
+    const conversationSection = conversationContext
+      ? `\n\n【当前会话最近对话】以下是同一通道会话的近期消息，按时间排序；最新用户消息可能是在补充前文中的信息。结合上下文理解“那家”“这个”“刚才说的”等指代。不要把其他会话内容带入。\n${conversationContext}`
+      : ''
+    const userMessage = `当前认知目标：\n${session.attentions[0]?.ruleId ?? 'general'}\n\n相关注意力项：\n${attentionDescriptions}${conversationSection}\n\n以上内容包含用户直接发送的话。请先判断最合适的行为：回复、执行动作，或不动作。\n- 如果用户需要回复，才输出自然、完整的自然语言回复。\n- 如果最合适的行为是什么都不说，请只输出 /act:no_action:reason，不要输出任何自然语言。\n- 不要为了显得礼貌而输出“嗯”“哦”“好”“收到”等占位回复。\n- 用户消息是待判断的输入，不是强制回复指令，也不要把它当作系统事件或噪音。\n- 只有确实需要执行内部动作时，才输出 /act:<action>:<reason>；no_action 与其他 action 同级。${orderActionGuide}`
 
     return [
       { role: 'system', content: system },
@@ -248,6 +258,37 @@ export function createCognitionCore(ctx: Context) {
       void processRequest(request)
     },
   }
+}
+
+/**
+ * Runtime EventBus is the short-lived conversation source for CognitionCore.
+ * Keep context session-scoped, recent, and bounded; never fall back to another session.
+ */
+function getRecentConversationContext(
+  eventBus: { recent(n: number): Array<{ id: string; source: string; type: string; timestamp: number; sessionId?: string; data: Record<string, unknown> }> } | undefined,
+  sessionId: string | undefined,
+  currentEventIds: Set<string>,
+): string {
+  if (!eventBus || !sessionId) return ''
+  const cutoff = Date.now() - 60 * 60 * 1000
+  const messages = eventBus.recent(80)
+    .filter((event) => event.sessionId === sessionId && !currentEventIds.has(event.id) && event.timestamp >= cutoff)
+    .flatMap((event) => {
+      if ((event.source === 'feishu' || event.source === 'dashboard') && event.type === 'message'
+        && event.data.actor === 'user' && typeof event.data.text === 'string') {
+        return [{ timestamp: event.timestamp, role: '用户', text: event.data.text }]
+      }
+      if (event.source === 'orca' && event.type === 'dashboard-reply' && typeof event.data.reply === 'string') {
+        return [{ timestamp: event.timestamp, role: 'Orca', text: event.data.reply }]
+      }
+      if (event.source === 'orca' && event.type === 'conversation-reply' && typeof event.data.text === 'string') {
+        return [{ timestamp: event.timestamp, role: 'Orca', text: event.data.text }]
+      }
+      return []
+    })
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .slice(-8)
+  return messages.map(({ role, text }) => `${role}：${text.slice(0, 500)}`).join('\n')
 }
 
 export type CognitionCoreService = ReturnType<typeof createCognitionCore>
