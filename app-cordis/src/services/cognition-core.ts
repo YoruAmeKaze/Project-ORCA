@@ -228,7 +228,7 @@ export function createCognitionCore(ctx: Context) {
     const conversationSection = conversationContext
       ? `\n\n【当前会话最近对话】以下是同一通道会话的近期消息，按时间排序；最新用户消息可能是在补充前文中的信息。结合上下文理解“那家”“这个”“刚才说的”等指代。不要把其他会话内容带入。\n${conversationContext}`
       : ''
-    const userMessage = `当前认知目标：\n${session.attentions[0]?.ruleId ?? 'general'}\n\n相关注意力项：\n${attentionDescriptions}${conversationSection}\n\n以上内容包含用户直接发送的话。请先判断最合适的行为：回复、执行动作，或不动作。\n- 如果用户需要回复，才输出自然、完整的自然语言回复。\n- 如果最合适的行为是什么都不说，请只输出 /act:no_action:reason，不要输出任何自然语言。\n- 不要为了显得礼貌而输出“嗯”“哦”“好”“收到”等占位回复。\n- 用户消息是待判断的输入，不是强制回复指令，也不要把它当作系统事件或噪音。\n- 只有确实需要执行内部动作时，才输出 /act:<action>:<reason>；no_action 与其他 action 同级。${orderActionGuide}`
+    const userMessage = `当前认知目标：\n${session.attentions[0]?.ruleId ?? 'general'}\n\n相关注意力项：\n${attentionDescriptions}${conversationSection}\n\n以上内容包含用户直接发送的话。请先判断最合适的行为：回复、执行动作，或不动作。\n- 这是用户对话：必须给出有用的回复，或执行匹配的只读查询；不得用 /act:no_action 沉默。信息不足时，简洁地追问缺少的那一项。\n- 用户提到品牌和门店/城市/地标并要求测试、查找或确认点餐能力时，优先调用对应的门店查询。只查门店不需要商品、规格或数量；不要把查询阶段误当成创建订单。\n- 只有后台通知、心跳等无需用户回应的非对话事件，才可输出 /act:no_action:reason。\n- 不要为了显得礼貌而输出“嗯”“哦”“好”“收到”等占位回复。\n- 用户消息不是噪音；结合近期对话识别补充信息，并在信息不足时追问，不要直接结束对话。\n- 只有确实需要执行内部动作时，才输出 /act:<action>:<reason>。${orderActionGuide}`
 
     return [
       { role: 'system', content: system },

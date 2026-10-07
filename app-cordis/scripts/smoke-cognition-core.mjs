@@ -339,6 +339,10 @@ function mkMockLlm(behavior) {
     prompt.includes('帮我查查麦当劳的菜品') && prompt.includes('请告诉我麦当劳门店所在城市或地标'))
   check('RB.F2: prompt 排除当前消息重复项与其他会话内容',
     !prompt.includes('其他会话隐私内容') && prompt.split('重庆邮电大学中心食堂那家').length === 2)
+  check('RB.F3: 直接对话必须回复/追问，不可静默 no_action',
+    prompt.includes('不得用 /act:no_action 沉默') && prompt.includes('信息不足时，简洁地追问'))
+  check('RB.F4: 麦当劳门店查询不要求先提供商品数量',
+    prompt.includes('只查门店不需要商品、规格或数量'))
 }
 
 // ────────── 结果 ──────────

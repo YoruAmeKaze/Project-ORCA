@@ -401,18 +401,21 @@ export function createOrderActionHandlers(deps: OrderActionDeps): ActionHandler[
     action,
     name: `${action}-readonly`,
     async execute(decision) {
+      const startedAt = Date.now()
+      deps.logger?.info('[order-action] 查询开始 action=%s decisionId=%s', action, decision.decisionId)
       try {
         let args: unknown
         try { args = JSON.parse(decision.reason) } catch { return fail(decision, '查询参数格式无效') }
         if (typeof args !== 'object' || args === null || Array.isArray(args)) return fail(decision, '查询参数必须是 JSON 对象')
         const message = await deps.service.execute(action, args as Record<string, unknown>)
+        deps.logger?.info('[order-action] 查询结束 action=%s decisionId=%s success=true durationMs=%d', action, decision.decisionId, Date.now() - startedAt)
         return {
           success: true, action: decision.action, decisionId: decision.decisionId,
           sourceEventId: decision.eventId, message, executedAt: Date.now(),
         }
       } catch (err) {
         const detail = err instanceof Error ? err.message : '查询失败'
-        deps.logger?.warn('[order-action] 只读 Action 失败 action=%s decisionId=%s reason=%s', action, decision.decisionId, detail.slice(0, 120))
+        deps.logger?.warn('[order-action] 查询结束 action=%s decisionId=%s success=false durationMs=%d reason=%s', action, decision.decisionId, Date.now() - startedAt, detail.slice(0, 120))
         return fail(decision, detail)
       }
     },
