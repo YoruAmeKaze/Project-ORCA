@@ -270,6 +270,26 @@ async function pollFor(predicate, timeoutMs = 1000) {
     decisions.length >= 1 && decisions[0]?.reason === 'reason with spaces')
 }
 
+// ────────────────────────────────────────────────────────────
+// PD.5  兼容实测日志中模型偏差的 action 前缀
+// ────────────────────────────────────────────────────────────
+for (const [index, output] of ['/orca.act:no_action:alias', '/acit:no_action:alias'].entries()) {
+  const ctx = new Context()
+  ctx.logger.exporter({ colors: 0, levels: { default: 3 }, export() {} })
+  ctx.provide('llm', mkMockLlm(output))
+  const emitted = []
+  ctx.on('orca/cognition-output', (event) => emitted.push(event))
+  const core = createCognitionCore(ctx)
+  core.onCognitionRequest({
+    id: `req_d_alias_${index}`,
+    attentions: [mkAttention(`att_d_alias_${index}`)],
+    createdAt: Date.now(),
+    trigger: 'action prefix compatibility test',
+  })
+  await pollFor(() => emitted.length > 0, 1000)
+  check(`PD.5.${index + 1}: ${output.split(':')[0]} 前缀解析为 action`, emitted[0]?.outputType === 'action')
+}
+
 // ────────── 结果 ──────────
 const failed = results.filter((r) => !r.ok)
 console.log(`\n==== smoke-phase-d 结果：${results.length - failed.length}/${results.length} PASS ====`)
