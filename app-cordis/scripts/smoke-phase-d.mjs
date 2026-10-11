@@ -271,12 +271,16 @@ async function pollFor(predicate, timeoutMs = 1000) {
 }
 
 // ────────────────────────────────────────────────────────────
-// PD.5  兼容实测日志中模型偏差的 action 前缀
+// PD.5  严格格式错误反馈与有限次重试
 // ────────────────────────────────────────────────────────────
-for (const [index, output] of ['/orca.act:no_action:alias', '/acit:no_action:alias', '/action:no_action:alias'].entries()) {
+for (const [index, malformed] of ['/orca.act:no_action:bad', '/acit:no_action:bad', '/action:no_action:bad'].entries()) {
   const ctx = new Context()
   ctx.logger.exporter({ colors: 0, levels: { default: 3 }, export() {} })
-  ctx.provide('llm', mkMockLlm(output))
+  const calls = []
+  ctx.provide('llm', { chat: async (messages) => {
+    calls.push(messages.map((message) => ({ ...message })))
+    return calls.length === 1 ? malformed : '/act:no_action:corrected'
+  } })
   const emitted = []
   ctx.on('orca/cognition-output', (event) => emitted.push(event))
   const core = createCognitionCore(ctx)
@@ -287,7 +291,27 @@ for (const [index, output] of ['/orca.act:no_action:alias', '/acit:no_action:ali
     trigger: 'action prefix compatibility test',
   })
   await pollFor(() => emitted.length > 0, 1000)
-  check(`PD.5.${index + 1}: ${output.split(':')[0]} 前缀解析为 action`, emitted[0]?.outputType === 'action')
+  check(`PD.5.${index + 1}: 非规范 ${malformed.split(':')[0]} 不直接执行，反馈后重试成功`,
+    calls.length === 2 && emitted[0]?.outputType === 'action' && emitted[0]?.actionIntent?.reason === 'corrected')
+  check(`PD.5.${index + 4}: Runtime 将格式错误反馈给模型`,
+    calls[1]?.some((message) => message.role === 'user' && message.content.includes('Runtime 格式校验错误')))
+}
+
+{
+  const ctx = new Context()
+  ctx.logger.exporter({ colors: 0, levels: { default: 3 }, export() {} })
+  let calls = 0
+  ctx.provide('llm', { chat: async () => { calls++; return '/action:no_action:still-wrong' } })
+  const emitted = []
+  const decisions = []
+  ctx.on('orca/cognition-output', (event) => emitted.push(event))
+  ctx.on('orca/decision', (decision) => decisions.push(decision))
+  const core = createCognitionCore(ctx)
+  core.onCognitionRequest({ id: 'req_d_retry_exhausted', attentions: [mkAttention('att_retry_exhausted')], createdAt: Date.now(), trigger: 'format retry exhaustion test' })
+  await pollFor(() => emitted.length > 0, 1000)
+  check('PD.5.7: 最多两次重试后停止且不执行错误 Action',
+    calls === 3 && decisions.length === 0 && emitted[0]?.outputType === 'text/reply'
+      && emitted[0]?.output.includes('没有执行查询'))
 }
 
 // ────────── 结果 ──────────

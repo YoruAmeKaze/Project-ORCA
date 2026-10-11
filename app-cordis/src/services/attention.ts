@@ -245,17 +245,17 @@ const ruleDashboardMessage: AttentionRule = {
   }),
 }
 
-/** Internal read-only Action results return to CognitionCore for user-facing wording. */
-const ruleOrderActionResult: AttentionRule = {
-  id: 'order-action-result',
-  description: '只读点餐 Action 结果交由 CognitionCore 汇总后回复原用户',
+/** User-facing internal Action results return to CognitionCore in the originating conversation. */
+const ruleInternalActionResult: AttentionRule = {
+  id: 'internal-action-result',
+  description: '带原会话路由的内部 Action 结果交由 CognitionCore 继续处理并回复用户',
   predicate: ({ event }) => event?.source === 'internal' && event.type === 'action-result' &&
-    typeof event.data.action === 'string' && event.data.action.startsWith('order.') &&
+    typeof event.data.action === 'string' &&
     typeof event.data.message === 'string' && event.data.message.trim().length > 0 &&
     (typeof event.data.dashboardMessageId === 'string' || typeof event.data.chatId === 'string'),
   produce: ({ event }) => ({
     priority: 'normal',
-    reason: String(event?.data.message ?? ''),
+    reason: `Action=${String(event?.data.action ?? 'unknown')} success=${String(event?.data.success === true)}\n${String(event?.data.message ?? '')}`,
     action: 'ignore',
     eventId: event?.id,
     dashboardMessageId: typeof event?.data.dashboardMessageId === 'string' ? event.data.dashboardMessageId : undefined,
@@ -271,7 +271,7 @@ registerRule(ruleAwayArrival)
 registerRule(ruleFocusInterrupt)
 registerRule(ruleFeishuMessage)
 registerRule(ruleDashboardMessage)
-registerRule(ruleOrderActionResult)
+registerRule(ruleInternalActionResult)
 
 // ── AttentionEngine 服务 ────────────────────────────────────────────────
 

@@ -2,6 +2,38 @@
 
 > 逐条讨论产生的决议，每次有新决议追加。按话题分组。
 
+## 分类与目录
+
+### D-ORG-01: Memory 与技能的功能分类目标（2026-10-08，待实施）
+
+**目标**：让 Memory 与可执行技能都能按“领域 / 子领域 / 功能”稳定浏览和检索，例如“点单 / 瑞幸 / 查找咖啡种类”“基础操控 / 屏幕 / 获取屏幕信息”。这是架构优化代办，不代表当前功能已经具备，也不授权立即重写运行时代码。
+
+**分类契约**：
+- 采用受控层级词表；类别有稳定 id、父级、显示名称和必要别名。分类路径用于组织和检索，不使用任意模型生成路径作为持久分类。
+- Memory 保留既有 `FactType`、`subject`、来源和 `(type, subject)` identity。分类是可选元数据/只读映射，不得替代事实语义，也不得进入 identity、ForgetMarker fingerprint 或审计敏感内容。
+- 技能分类挂在具体原子操作的描述元数据上；“基础操控 / 屏幕 / 获取屏幕信息”是单项操作，跨步骤“点单”流程是组合模板，不变成一个万能执行 handler。
+- 分类仅帮助查找、解释和呈现，不授予执行权限。风险级别、参数校验、确认与 handler 可用性仍由 Runtime 执行边界决定。
+
+**实施方法**：先定义最小词表和 `uncategorized` 兼容规则；Memory 先做可组合的分类过滤/呈现并保持 MemoryStore 唯一写入权威；技能侧建立轻量闭集目录，记录稳定 skill id、分类、输入/输出 schema、风险/确认级别、可用状态及现有 handler 映射；复用 `ActionExecutor → ActionHandler → ActionResult`，只有路由无法区分多项操作时才增加最小闭集 dispatch 接缝。分阶段落地，先文档/词表和只读展示，再评估持久 schema 变更。供应商写操作确认独立于分类。
+
+**验收目标**：旧 Memory 可无损读取；分类与原有事实查询可组合；分类更新不产生重复事实或绕过 forget 语义；技能可按类浏览筛选，但未注册、不可用、schema 不符或权限不足的项 fail closed；分类不改变 WorldState、Attention、DecisionEngine 职责。
+
+**状态**：仅设计与 TODO 登记，尚未实现分类字段、分类服务、技能目录或 UI。
+
+### D-WIN-01: Windows-MCP 桌面接入边界（2026-10-08，待实施）
+
+**目标**：让 Orca 在用户明确请求时，只读观察一台 Windows 主机的桌面；典型 Action 分类为“基础操控 / 屏幕 / 获取屏幕信息”。上游为 [CursorTouch/Windows-MCP](https://github.com/CursorTouch/Windows-MCP)，MIT，Windows 7–11，Python 3.13+。
+
+**部署拓扑**：Windows-MCP 必须运行在 Windows 交互式用户桌面，Orca Linux VM 通过受保护私网/VPN 的 Streamable HTTP 连接。它不是 Linux VM 的系统工具。若只在同一台 Windows 机器上运行，可使用 stdio；远程方式不得裸露公网，无鉴权连接禁止启用。运行版本需固定；Orca 默认关闭上游匿名遥测。
+
+**MVP 工具闭集**：服务端 `--tools` allowlist 与 Orca 客户端固定 allowlist 双重限制，仅开放 `Screenshot`、`Snapshot`、`DisplayInventory`、`ControlStatus`（逐版本验证实际 schema）。模型只能调用固定 `windows.desktop.*` 原子 Action。`PowerShell`、`FileSystem`、`Registry`、`Process`、`App`、`Notification`、`Scrape` 和所有键鼠交互工具首期禁用。server `tools/list` 不能直接扩展客户端权限。
+
+**执行与数据边界**：复用 `ActionExecutor → ActionHandler → ActionResult`，按固定 MCP endpoint/tool 映射执行；正确处理 Streamable HTTP 和 image/text content。桌面数据仅用于当次用户请求，不写 Memory/InfoStore，不自动修改 WorldState、不后台轮询。tool/schema 不符或返回未知即 fail closed。Windows-MCP 的用户接管提示不是安全隔离；未来开放键鼠操作须另行设计任务级授权及破坏性动作再次确认。
+
+**验收**：服务缺失不影响 Orca 启动；双 allowlist 能拒绝所有未批准工具；图片结果可正确处理且不落盘/进长期记忆；敏感信息不入日志；schema 变化、超时和认证错误 fail closed；首轮 live test 仅做截图、控制状态、显示器信息只读核验。
+
+**状态**：设计文档位于 `skills/windows-mcp/SKILL.md`；只登记待办，未安装、连接或实现 Windows-MCP。
+
 ---
 
 ## 文件结构
@@ -1312,4 +1344,3 @@ const x = ctx.get('infoStore')   // ← undefined，永远
 - `tsc --noEmit` 通过
 - 启动端口 8100/8101/8200 listen 成功
 - infoAgents（L.374）→ ContextAssembler（L.377）依赖注入顺序正确
-

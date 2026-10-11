@@ -64,7 +64,13 @@ const logExporter: Exporter = {
   colors: 2,
   levels: { default: 2 },
   export(message) {
-    console.log(`[${new Date(message.ts).toISOString()}] ${Logger.format(logExporter, message)}`)
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    }).formatToParts(message.ts)
+    const value = Object.fromEntries(parts.map(({ type, value }) => [type, value])) as Record<string, string>
+    const timestamp = `${value.year}-${value.month}-${value.day}T${value.hour}:${value.minute}:${value.second}.${String(message.ts % 1000).padStart(3, '0')}+08:00`
+    console.log(`[${timestamp}] ${Logger.format(logExporter, message)}`)
   },
 }
 ctx.logger.exporter(logExporter)

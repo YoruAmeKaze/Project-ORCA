@@ -39,6 +39,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { OrcaConfig } from '../config.js'
 import type { Decision } from '../types/decision.js'
 import type { ActionExecutorService } from '../types/action.js'
+import { createCurrentLocationHandler, createLocationService } from '../services/location.js'
 import {
   createActionExecutor,
   createFilesystemReadHandler,
@@ -59,6 +60,23 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   // 1. 创建 ActionExecutor（含 registry + deferred store）
   const executor: ActionExecutorService = createActionExecutor()
   ctx.provide('actionExecutor', executor)
+
+  const locationService = _config.location?.enabled
+    ? createLocationService(_config.location)
+    : undefined
+  if (locationService) {
+    ctx.provide('location', locationService)
+    executor.registry.register(createCurrentLocationHandler(locationService))
+    ctx.logger.info('[action-executor] location.current 已启用（系统授权定位；坐标仅短期保存在内存）')
+  } else {
+    ctx.logger.info('[action-executor] location.current 未启用（设置 ORCA_LOCATION_ENABLED=1 并授予系统定位权限后可用）')
+  }
+
+  ctx.provide('actionDescriptions', () => [
+    ...(locationService ? [
+      '- location.current: 获取本机当前定位，供需要当前位置的附近查询使用。仅在相关请求需要当前位置时调用；参数 JSON 为 {}。精确坐标不会返回给对话或写入日志。',
+    ] : []),
+  ])
 
   // 2. 注入 remember handler（依赖 infoStore）
   // infoStore 在 infoAgents plugin 中 provide；这里用 ctx.get 软获取（未启用时跳过）
@@ -204,6 +222,12 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
         const chatId = sourceEvent?.source === 'feishu' && typeof sourceEvent.data.chatId === 'string'
           ? sourceEvent.data.chatId
           : undefined
+        if (!sourceEvent || (!dashboardMessageId && !chatId)) {
+          ctx.logger.warn(
+            '[action-executor] ActionResult 缺少原会话路由信息；结果事件无法触发用户回复 action=%s decisionId=%s sourceEventFound=%s',
+            result.action, result.decisionId, String(Boolean(sourceEvent)),
+          )
+        }
         actionResultBus.publish({
           source: 'internal',
           type: 'action-result',
@@ -220,6 +244,11 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
           priority: 1,
           sessionId: sourceEvent?.sessionId,
         })
+        ctx.logger.info(
+          '[action-executor] ActionResult 已发布到 EventBus action=%s decisionId=%s sourceEventFound=%s replyTarget=%s',
+          result.action, result.decisionId, String(Boolean(sourceEvent)),
+          dashboardMessageId ? 'dashboard' : chatId ? 'feishu' : 'none',
+        )
       })
     : () => {}
   if (actionResultBus) {
@@ -236,5 +265,6 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
     unsubscribeActionResult()
     executor.registry.clear()
     executor.deferredStore.clear()
+    locationService?.clear()
   }
 }

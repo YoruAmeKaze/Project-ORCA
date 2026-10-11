@@ -116,6 +116,15 @@ export function attentionEngine(ctx: Context, _config: OrcaConfig) {
         prevState: ws.getPrevState() ?? undefined,
       }
       const items = engine.evaluate(input)
+      if (event.source === 'internal' && event.type === 'action-result') {
+        ctx.logger.info(
+          '[attention-engine] ActionResult 评估 action=%s matched=%s route=%s sessionId=%s',
+          String(event.data.action ?? 'unknown'),
+          items.map((item) => item.ruleId).join(',') || 'none',
+          typeof event.data.dashboardMessageId === 'string' ? 'dashboard' : typeof event.data.chatId === 'string' ? 'feishu' : 'none',
+          event.sessionId ?? '(none)',
+        )
+      }
       emitItemsWithDedupAndThrottle(
         ctx, items, `event ${event.source}:${event.type}`, dedup, throttle,
       )

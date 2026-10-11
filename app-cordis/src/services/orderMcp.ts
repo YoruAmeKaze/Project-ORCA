@@ -1,12 +1,11 @@
 import type { ActionHandler, ActionResult } from '../types/action.js'
 import type { Decision } from '../types/decision.js'
+import type { LocationService } from './location.js'
 
 export interface OrderMcpProviderConfig {
   enabled: boolean
   endpoint: string
   token: string
-  longitude?: number
-  latitude?: number
 }
 
 export interface OrderMcpConfig {
@@ -40,12 +39,12 @@ interface ProviderSpec {
   token: string
   enabled: boolean
   tools: Record<string, { action: string; tool: string; description: string; input: string }>
-  fixedArgs?: (action: string, input: Record<string, unknown>) => Record<string, unknown>
+  fixedArgs?: (action: string, input: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>
 }
 
 const PROVIDER_ACTIONS = {
   luckin: {
-    'order.luckin.stores': { tool: 'queryShopList', description: '查询瑞幸门店。依赖本机配置的经纬度，不询问用户索取坐标。', input: '{"deptName":"城市或门店关键词（可选）"}' },
+    'order.luckin.stores': { tool: 'queryShopList', description: '查询当前位置附近的瑞幸门店。先通过 location.current 获取本机位置，不询问用户索取坐标。', input: '{"deptName":"城市或门店关键词（可选）"}' },
     'order.luckin.products': { tool: 'searchProductForMcp', description: '按门店查询瑞幸商品。', input: '{"deptId":门店ID,"query":"商品关键词"}' },
     'order.luckin.product_detail': { tool: 'queryProductDetailInfo', description: '查询瑞幸单个商品详情。', input: '{"deptId":门店ID,"productId":商品ID}' },
     'order.luckin.preview': { tool: 'previewOrder', description: '只试算瑞幸订单，不创建订单。', input: '{"deptId":门店ID,"productList":[{"amount":数量,"productId":商品ID,"skuCode":"规格码"}]}' },
@@ -238,7 +237,7 @@ class ProviderClient {
     if (!this.initialized || this.disposed) throw new Error('该点餐 MCP 服务未就绪')
     const mapping = this.spec.tools[action]
     if (!mapping) throw new Error('此 Action 未注册')
-    const args = this.spec.fixedArgs?.(action, input) ?? input
+    const args = await (this.spec.fixedArgs?.(action, input) ?? input)
     // 每次调用前重新核验 tools/list，防止远端部署变更后盲调旧 schema。
     await this.refreshTools()
     const tool = this.tools.get(mapping.tool)
@@ -316,21 +315,22 @@ class ProviderClient {
   }
 }
 
-export function createOrderMcpService(config: OrderMcpConfig, logger?: OrderMcpLogger): OrderMcpService {
+export function createOrderMcpService(
+  config: OrderMcpConfig,
+  logger?: OrderMcpLogger,
+  location?: Pick<LocationService, 'getLatest'>,
+): OrderMcpService {
   const luckin = new ProviderClient({
     label: '瑞幸', endpoint: config.luckin.endpoint, token: config.luckin.token,
     enabled: config.luckin.enabled,
     tools: Object.fromEntries(Object.entries(PROVIDER_ACTIONS.luckin)
-      .filter(([action]) => action !== 'order.luckin.stores' || (
-        typeof config.luckin.longitude === 'number' && Number.isFinite(config.luckin.longitude)
-        && typeof config.luckin.latitude === 'number' && Number.isFinite(config.luckin.latitude)
-      ))
+      .filter(([action]) => action !== 'order.luckin.stores' || Boolean(location))
       .map(([action, item]) => [action, { ...item, action, input: item.input }])),
     fixedArgs: (action, input) => {
       if (action === 'order.luckin.stores') {
-        const { longitude, latitude } = config.luckin
-        if (longitude === undefined || latitude === undefined) throw new Error('瑞幸门店查询需要先在本机配置经纬度；不会在聊天中索取定位')
-        return { ...input, longitude, latitude }
+        const current = location?.getLatest()
+        if (!current) throw new Error('没有有效的本机定位；请先通过 location.current 获取当前位置后再查询附近门店。')
+        return { ...input, longitude: current.longitude, latitude: current.latitude }
       }
       return input
     },

@@ -323,14 +323,17 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       ctx.on('orca/attention', (item: { id: string; source?: string }) => {
         write({ id: item.id, type: 'attention.created', at: Date.now(), source: item.source ?? null, summary: 'New attention requires review' }); writeState()
       }),
-      ctx.on('cognition/started', (sessionId: string) => {
-        write({ id: sessionId, type: 'cognition.started', at: Date.now(), source: 'orca', summary: 'Cognition started' }); writeState()
+      ctx.on('cognition/started', (sessionId: string, requestId?: string) => {
+        write({ id: sessionId, type: 'cognition.started', at: Date.now(), source: 'orca', summary: 'Cognition started', correlationId: requestId }); writeState()
       }),
-      ctx.on('cognition/completed', (sessionId: string) => {
-        write({ id: sessionId, type: 'cognition.completed', at: Date.now(), source: 'orca', summary: 'Cognition completed' }); writeState()
+      ctx.on('cognition/completed', (sessionId: string, result?: { requestId?: string }) => {
+        write({ id: sessionId, type: 'cognition.completed', at: Date.now(), source: 'orca', summary: 'Cognition completed', correlationId: result?.requestId }); writeState()
       }),
-      ctx.on('cognition/failed', (sessionId: string) => {
-        write({ id: sessionId, type: 'cognition.failed', at: Date.now(), source: 'orca', summary: 'Cognition did not complete' }); writeState()
+      ctx.on('cognition/failed', (sessionId: string, detail?: unknown) => {
+        const requestId = detail && typeof detail === 'object' && 'requestId' in detail
+          ? String((detail as { requestId: unknown }).requestId)
+          : undefined
+        write({ id: sessionId, type: 'cognition.failed', at: Date.now(), source: 'orca', summary: 'Cognition did not complete', correlationId: requestId }); writeState()
       }),
     ]
     const ping = setInterval(() => res.write(': ping\n\n'), 15_000)
@@ -2464,11 +2467,12 @@ document.addEventListener('DOMContentLoaded', function() {
           var reply = ev.message && ev.message.text || 'No response received.'
           updateActivity(ev.correlationId, '◉', 'act-av-g', esc(reply), new Date(ev.at).toLocaleTimeString('zh-CN', { hour12: false }))
           updateChatMessage(ev.correlationId, 'orca', reply)
-        } else if (ev.type === 'action.executed') {
-          // no_action is intentionally silent. Remove the transient pending
-          // bubble without manufacturing a user-visible acknowledgement.
-          var pending = chatThread && chatThread.querySelector('.chat-msg.pending')
-          if (pending && pending.parentNode) pending.parentNode.removeChild(pending)
+        } else if (ev.type === 'cognition.completed' || ev.type === 'cognition.failed') {
+          // Cognition may intentionally produce no reply (for example no_action).
+          // End only the pending bubble associated with this dashboard request.
+          var pendingId = ev.correlationId && 'chat-' + ev.correlationId
+          var pending = pendingId ? $(pendingId) : null
+          if (pending && pending.classList.contains('pending') && pending.parentNode) pending.parentNode.removeChild(pending)
         }
       } catch (_) {}
     })

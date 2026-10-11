@@ -40,6 +40,8 @@ import type { Decision, DecisionAction } from './decision.js'
 export interface ActionHandler {
   /** 该 handler 处理的 action（一个 handler 一个 action） */
   action: DecisionAction
+  /** 可选的模型可见说明；未声明的内部 handler 不会作为可调用能力暴露给模型。 */
+  llmDescription?: string
   /**
    * 执行该 action。
    *

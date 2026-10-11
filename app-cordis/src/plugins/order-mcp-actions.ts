@@ -2,10 +2,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { OrcaConfig } from '../config.js'
 import { createOrderActionHandlers, createOrderMcpService } from '../services/orderMcp.js'
 import type { ActionExecutorService } from '../types/action.js'
+import type { LocationService } from '../services/location.js'
 
 /** 两个独立官方 MCP 服务的只读 ActionHandler 装配；不注册任何写工具。 */
 export function orderMcpActions(ctx: Context, config: OrcaConfig) {
-  const service = createOrderMcpService(config.orderMcp, ctx.logger)
+  const location = ctx.get('location') as LocationService | undefined
+  const service = createOrderMcpService(config.orderMcp, ctx.logger, location)
   ctx.provide('orderMcp', service)
   let disposed = false
 
