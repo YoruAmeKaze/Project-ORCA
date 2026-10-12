@@ -66,7 +66,7 @@ ctx.eventBus.publish({
   priority: 1,
 })
 await new Promise((resolve) => setTimeout(resolve, 120))
-const resultAttention = attentions.find((item) => item.ruleId === 'order-action-result')
+const resultAttention = attentions.find((item) => item.ruleId === 'internal-action-result')
 check('DR6 查询结果 Event 进入 Attention 并保留原 Dashboard 会话',
   resultAttention?.sessionId === dashboardEvent.sessionId && resultAttention?.dashboardMessageId === dashboardEvent.data.id)
 check('DR7 查询结果 Event 内容进入 CognitionCore prompt', prompts.length === 2 && prompts[1].includes('麦当劳中心食堂店'))

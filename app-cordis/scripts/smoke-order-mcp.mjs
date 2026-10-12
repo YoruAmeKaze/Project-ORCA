@@ -58,10 +58,11 @@ function createMockServer(label, expectedToken, toolNames) {
 const luckin = await createMockServer('luckin', 'luckin-test-secret', luckinNames)
 const mcd = await createMockServer('mcd', 'mcd-test-secret', mcdNames)
 try {
+  const location = { getLatest: () => ({ latitude: 31, longitude: 121, accuracyMeters: 50, capturedAt: Date.now(), expiresAt: Date.now() + 60_000 }) }
   const service = createOrderMcpService({
     luckin: { enabled: true, endpoint: luckin.endpoint, token: 'luckin-test-secret', longitude: 121, latitude: 31 },
     mcd: { enabled: true, endpoint: mcd.endpoint, token: 'mcd-test-secret' },
-  })
+  }, undefined, location)
   await service.initialize()
   assert.ok(service.availableActions().includes('order.luckin.stores'))
   assert.ok(service.availableActions().includes('order.mcd.server_time'))
