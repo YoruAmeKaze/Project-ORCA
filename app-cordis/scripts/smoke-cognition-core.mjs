@@ -339,9 +339,10 @@ function mkMockLlm(behavior) {
     prompt.includes('帮我查查麦当劳的菜品') && prompt.includes('请告诉我麦当劳门店所在城市或地标'))
   check('RB.F2: prompt 排除当前消息重复项与其他会话内容',
     !prompt.includes('其他会话隐私内容') && prompt.split('重庆邮电大学中心食堂那家').length === 2)
-  check('RB.F3: 直接对话必须回复/追问，不可静默 no_action',
-    capturedMessages[0]?.content.includes('不得用 no_action 沉默')
-      && capturedMessages[0]?.content.includes('简洁追问真正缺失的信息'))
+  check('RB.F3: 直接对话先判断是否值得回应，允许正式 no_action',
+    capturedMessages[0]?.content.includes('先判断是否值得回应')
+      && capturedMessages[0]?.content.includes('/act:no_action:reason')
+      && capturedMessages[0]?.content.includes('礼貌占位语'))
   check('RB.F4: 已满足运行时 Action 参数时应执行，缺什么才追问什么',
     capturedMessages[0]?.content.includes('若用户信息已满足某个可用只读 Action 的必填参数，立即调用该 Action')
       && capturedMessages[0]?.content.includes('只追问仍缺少且无法从上下文、Action 结果或本机配置获得的必填信息'))

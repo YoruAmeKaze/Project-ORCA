@@ -1,3 +1,5 @@
+import type { CategoryPath } from './category.js'
+
 /**
  * Orca LongMemory —— 类型契约（Phase 5.0 + 5.1）
  *
@@ -61,6 +63,8 @@ export interface LongMemoryFact {
   privacyLevel: 'L1'
   /** 不设 = 永久 */
   ttlDays?: number
+  /** Optional controlled classification; never part of identity or forget fingerprint. */
+  category?: CategoryPath
 }
 
 // ── MemoryCandidate（Reflection 推断的待晋升候选）────────────────────────────
@@ -81,6 +85,7 @@ export interface MemoryCandidate {
   evidenceEpisodeIds: string[]
   reason: string
   source: 'reflection' // 必填且固定
+  category?: CategoryPath
   state: CandidateState
   decidedAt?: number
   decidedBy?: 'auto-confidence-threshold' | 'user-confirmed'
@@ -195,6 +200,8 @@ export interface FactQuery {
   subjectPrefix?: string
   state?: FactState
   source?: 'user-explicit' | 'reflection'
+  /** Optional composable functional classification filter. */
+  category?: Partial<CategoryPath>
 }
 
 /** MemoryCandidate 查询条件（D-AGENT-18 正式纳入 contract；含 limit） */

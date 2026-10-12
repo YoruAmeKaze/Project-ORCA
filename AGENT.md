@@ -92,7 +92,7 @@ app-cordis/                    # ★ Cordis/TypeScript 版（唯一主线）
 │   └── scripts/               # smoke-info-agent / smoke-world-state / smoke-attention / smoke-cognitive-scheduler（Phase A） / smoke-cognition-core（Phase B） / smoke-decision / smoke-action / smoke-order-mcp / verify-order-mcp-live（只读真实服务核验） / smoke-memory（Phase 5.0） / smoke-episode（Phase 5.1） / smoke-memory-handler（Phase 5.2） / smoke-reflection（Phase 5.3） / smoke-d-agent-18（Phase 5.3.1） / smoke-memory-attention（Phase 5.4.A） / smoke-memory-event-bridge（Phase 5.4.B） / smoke-scheduled-rule-registry（Phase 7.1B） / smoke-briefing-rule（Phase 7.1B） / smoke-reflection-rule（Phase 7.1B） / smoke-reminder-rule（Phase 7.1B） / recognize-food / list-food
 guide/                         # 设计文档（memory-pack / decisions / orca-cordis-migration-plan / orca-info-agent-framework / orca-iphone-channel）
 skills/order-food/SKILL.md    # 瑞幸 / 麦当劳中国点餐 Skill：只读 MVP 已接入 ActionExecutor；写操作未开放
-skills/windows-mcp/SKILL.md  # Windows-MCP 桌面只读观察接入规格（待实施；不是已连接的 runtime skill）
+skills/windows-mcp/SKILL.md  # Windows-MCP 桌面只读观察接入规格（Orca 适配器已实现，默认关闭）
 AGENT.md                       # ★ 本文档
 dev-log.md / TODO.md / README.md
 ```
@@ -590,8 +590,9 @@ Memory → Attention（唯一路径）：
 - **v1.8.0 hotfix（2026-09-08）**：ContextAssembler 插件激活顺序修复。**根因**：Cordis v4 `ctx.plugin()` 是**异步 Fiber 激活**——顶层 `ctx.plugin(infoAgents, config)` 紧跟 `ctx.get('infoStore')` 时，infoStore 仍是 undefined（fiber 还没跑完），ContextAssembler 永远跳过 → `agent.inject['contextAssembler']` 缺失 → agent INACTIVE → `ctx.on('feishu/message', ...)` 从未注册 → 飞书不回。**修复**：新建独立 plugin `src/plugins/context-assembler-provider.ts`，`inject=['memory','infoStore']`，plugin 体内同步 `ctx.provide('contextAssembler', ...)`，依赖由 Cordis DI 在 fiber 激活时保证就绪；同时补 index.ts L195/L198/L201 三处 plugin 调用漏传 `config`（v0.6.4 漏传 bug，并行 fix）。**架构边界冻结（详见 `guide/decisions.md` D-AGENT-22）**：顶层禁用 `ctx.get()` 抢 Service Locator 模式，依赖解析必须走 plugin inject。`tsc --noEmit` 通过；dist 启动日志确认 `Phase 6.A ContextAssembler 已启用`。**AGENT.md 已同步**。
 
 ### 8.2 待办（TODO.md）
-- **D-WIN-01（2026-10-08，待实施）**：Windows-MCP 只读桌面观察接入。服务运行在 Windows 交互桌面，Orca Linux VM 经受保护网络连接；MVP 只开放 Screenshot / Snapshot / DisplayInventory / ControlStatus，系统命令、文件、注册表、进程和键鼠工具均禁用。详细规格见 `skills/windows-mcp/SKILL.md` 与 `guide/decisions.md` D-WIN-01；当前未接入。
-- **D-ORG-01（2026-10-08，待实施）**：Memory 与技能的功能分类架构优化。目标为统一按“领域 / 子领域 / 功能”浏览检索（如“点单 / 瑞幸 / 查找咖啡种类”“基础操控 / 屏幕 / 获取屏幕信息”），详细方法与验收标准见 `guide/decisions.md` D-ORG-01 和 `TODO.md`。分类不改变 Memory identity/mutation authority 或 ActionExecutor 边界；当前尚无统一分类/技能目录实现。
+- **D-REACT-01（2026-10-12，基础阶段已落地）**：采用受控技能发现与有限 ReAct：SkillCatalog 检索闭集技能 → SkillLoader 按需读受控说明 → 选择固定原子 Action → bounded loop 根据 ActionResult 继续/结束。已落地 JSON/`/act` 意图校验、4 轮/2 分钟/同 Action 2 次预算；写操作确认仍未开放。详细路径见 `guide/decisions.md` D-REACT-01 和 `TODO.md`。
+- **D-WIN-01（2026-10-08，只读适配器已落地）**：Windows-MCP 只读桌面观察接入。Orca 通过受保护 Streamable HTTP 连接，固定开放 Screenshot / Snapshot / DisplayInventory / ControlStatus，系统命令、文件、注册表、进程和键鼠工具均禁用；默认关闭，live endpoint 需用户环境验证。详细规格见 `skills/windows-mcp/SKILL.md` 与 `guide/decisions.md` D-WIN-01。
+- **D-ORG-01（2026-10-08，基础阶段已落地）**：Memory 与技能按“领域 / 子领域 / 功能”浏览检索；SkillCatalog 与 MemoryFact 分类过滤已实现，旧 Memory 兼容 `uncategorized`，不改变 Memory identity/mutation authority 或 ActionExecutor 边界。详细方法与验收标准见 `guide/decisions.md` D-ORG-01 和 `TODO.md`。
 - **Phase 6 设计稿（2026-08-27）**：Memory-aware CEO Context——`guide/orca-memory-consumption-design.md` §12 + D-AGENT-20。CEO Context 四元组：input / worldState / info / memory；R3 层注入 memoryFacts，按 subject 匹配 → type 过滤 → 全局查询三优先级；Top-K=10，字符限制每条 ≤ 80 / R3 总计 ≤ 500；Token 预算 500 token 固定配额。**Phase 6.A（ContextAssembler）已实现（见 Phase 6.A 条目）**。**Phase 6.B：MemoryCache（TTL 5 分钟，`memory_changed` 事件失效）未实现**。
 - **Phase 4.F**：ActionPlan 拆分（payload / channel / target）；真实 act handler（最小权限 + 白名单校验）；支持 bark / 邮件等其他通知渠道（NotifyHandler 按 event.source 分支扩展）；urgency=2 推送门控
 - 迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull）

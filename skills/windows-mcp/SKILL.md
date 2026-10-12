@@ -5,7 +5,7 @@ description: 在用户明确请求时读取 Windows 桌面状态；首期只读�
 
 # Windows-MCP 接入规格（Orca）
 
-> 状态：设计 / 待办，未接入 Orca。上游项目：[CursorTouch/Windows-MCP](https://github.com/CursorTouch/Windows-MCP)。本文件是 Orca 的集成边界，不代表 MCP 服务已安装、运行或连接。
+> 状态：Orca 侧只读适配器已实现，默认关闭；是否在线取决于本机 Windows-MCP endpoint/token 配置。上游项目：[CursorTouch/Windows-MCP](https://github.com/CursorTouch/Windows-MCP)。
 
 ## 目的与运行边界
 

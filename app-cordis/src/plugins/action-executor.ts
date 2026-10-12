@@ -40,6 +40,7 @@ import type { OrcaConfig } from '../config.js'
 import type { Decision } from '../types/decision.js'
 import type { ActionExecutorService } from '../types/action.js'
 import { createCurrentLocationHandler, createLocationService } from '../services/location.js'
+import { createSkillCatalog, createSkillLoader, defaultSkillsRoot } from '../services/skillCatalog.js'
 import {
   createActionExecutor,
   createFilesystemReadHandler,
@@ -60,6 +61,9 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   // 1. 创建 ActionExecutor（含 registry + deferred store）
   const executor: ActionExecutorService = createActionExecutor()
   ctx.provide('actionExecutor', executor)
+  const skillCatalog = createSkillCatalog(() => executor.registry.list())
+  ctx.provide('skillCatalog', skillCatalog)
+  ctx.provide('skillLoader', createSkillLoader(defaultSkillsRoot(), skillCatalog))
 
   const locationService = _config.location?.enabled
     ? createLocationService(_config.location)

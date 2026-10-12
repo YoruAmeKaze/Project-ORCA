@@ -59,7 +59,35 @@ export function cognitionOutputPlugin(ctx: Context, config: OrcaConfig) {
         // Phase D：action 类型输出 → 转换为 Decision → emit 'orca/decision'
         case 'action':
           if (output.actionIntent) {
-            const decision = cognitionIntentToDecision(output.actionIntent)
+            const executor = ctx.get('actionExecutor') as { registry?: { get(action: string): unknown } } | undefined
+            const catalog = ctx.get('skillCatalog') as { validateAction(skillId: string | undefined, action: string): { ok: true } | { ok: false; error: string } } | undefined
+            const validation = catalog?.validateAction(output.actionIntent.skillId, output.actionIntent.action)
+            if (validation && !validation.ok) {
+              ctx.logger.warn('[cognition-output] action validation rejected: action=%s reason=%s', output.actionIntent.action, validation.error)
+              const decision = cognitionIntentToDecision({
+                ...output.actionIntent, action: 'no_action', reason: `invalid-action:${validation.error}`,
+              })
+              ctx.emit('orca/decision', decision)
+              break
+            }
+            const registered = executor?.registry?.get(output.actionIntent.action)
+            if (!registered) {
+              ctx.logger.warn('[cognition-output] unknown action rejected: action=%s cognitionId=%s',
+                output.actionIntent.action, output.cognitionId)
+              const decision = cognitionIntentToDecision({
+                ...output.actionIntent,
+                action: 'no_action',
+                reason: `unknown-action:${output.actionIntent.action}`,
+              })
+              ctx.emit('orca/decision', decision)
+              break
+            }
+            const decision = cognitionIntentToDecision({
+              ...output.actionIntent,
+              reason: output.actionIntent.arguments
+                ? JSON.stringify(output.actionIntent.arguments)
+                : output.actionIntent.reason,
+            })
             ctx.emit('orca/decision', decision)
             ctx.logger.info('[cognition-output] action intent → decision: action=%s decisionId=%s',
               decision.action, decision.decisionId)

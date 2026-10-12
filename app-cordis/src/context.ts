@@ -22,6 +22,7 @@ import type { ContextAssembler } from './types/context.js'
 import type { CognitiveSchedulerService, CognitiveRequest } from './types/cognition.js'
 import type { CognitionCoreService } from './services/cognition-core.js'
 import type { CognitionResult } from './types/cognition-core.js'
+import type { SkillCatalogService, SkillLoaderService } from './types/skill.js'
 import type { OrderMcpService } from './services/orderMcp.js'
 
 /**
@@ -43,6 +44,10 @@ export interface CognitionActionIntent {
   attentionId: string
   /** 原始用户消息事件，用于 ActionResult 返回同一会话。 */
   eventId?: string
+  /** Optional catalog id used to validate the skill to action mapping. */
+  skillId?: string
+  /** Optional structured arguments; legacy protocol keeps JSON in reason. */
+  arguments?: Record<string, unknown>
 }
 
 /**
@@ -96,6 +101,8 @@ declare module '@deepseek-ai/cordis' {
     attention: AttentionEngineService
     decision: DecisionEngineService
     actionExecutor: ActionExecutorService
+    skillCatalog: SkillCatalogService
+    skillLoader: SkillLoaderService
     orderMcp: OrderMcpService
     contextAssembler: ContextAssembler
     cognitiveScheduler: CognitiveSchedulerService

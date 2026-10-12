@@ -466,7 +466,7 @@ function mkFakeClock(initial = 0) {
 // 设计：
 // - AttentionRuleRegistry 接口：register / unregister / getRules / getAllRules / setEnabled / size / clear
 // - AttentionEngine 接受 registry 注入（不再硬编码模块全局 Map）
-// - createAttentionEngine() 不传参 → 使用默认 Registry（包含 5 条内置规则；保持 Phase 3.A 行为）
+// - createAttentionEngine() 不传参 → 使用默认 Registry（包含 8 条内置规则）
 // - createAttentionEngine(reg) → 使用自定义 Registry（便于测试 + 未来配置化）
 // - engine.ruleCount() = registry.size()（仅算启用）
 
@@ -572,12 +572,12 @@ function mkTestRule(id, trigger = true, action = 'remember_only') {
   check('R11.5.5: feishu-deadline 仍触发（向后兼容）',
     r8deadline.length === 1 && r8deadline[0]?.ruleId === 'feishu-deadline')
 
-  // 自定义 Registry 替换默认：5 条规则不参与 evaluate
+  // 自定义 Registry 替换默认：默认规则不参与 evaluate
   const reg5b = createRuleRegistry()
   reg5b.register(mkTestRule('only-rule'))
   const engine5b = createAttentionEngine(reg5b)
   const r5b = engine5b.evaluate({ event: mkFeishuMsg('今晚前提交报告'), state: mkState() })
-  check('R11.5.6: 自定义 Registry（只有 only-rule）→ 不触发默认 5 条',
+  check('R11.5.6: 自定义 Registry（只有 only-rule）→ 不触发默认规则',
     r5b.length === 1 && r5b[0]?.ruleId === 'only-rule')
 }
 

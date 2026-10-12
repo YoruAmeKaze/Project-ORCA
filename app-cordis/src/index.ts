@@ -20,6 +20,7 @@ import { cognitionCorePlugin } from './plugins/cognition-core-plugin.js'
 import { cognitionOutputPlugin } from './plugins/cognition-output-plugin.js'
 import { actionExecutor } from './plugins/action-executor.js'
 import { orderMcpActions } from './plugins/order-mcp-actions.js'
+import { windowsMcpActions } from './plugins/windows-mcp-actions.js'
 import { deferredScheduler } from './plugins/deferred-scheduler.js'
 import { pcAdapter } from './plugins/input-adapters/pc-adapter.js'
 import { calendarAdapter } from './plugins/input-adapters/calendar-adapter.js'
@@ -143,6 +144,10 @@ if (config.runtime.enabled) {
         if (config.orderMcp.luckin.enabled || config.orderMcp.mcd.enabled) {
           ctx.plugin(orderMcpActions, config)
           ctx.logger.info('[orca-cordis] 点餐 MCP 只读 Action 初始化中')
+        }
+        if (config.windowsMcp.enabled) {
+          ctx.plugin(windowsMcpActions, config)
+          ctx.logger.info('[orca-cordis] Windows-MCP 只读 Action 初始化中')
         }
         // Phase 4.D：Deferred Scheduler 必须在 Action Executor 之后（依赖 ctx.actionExecutor.deferredStore）
         ctx.plugin(deferredScheduler, config)

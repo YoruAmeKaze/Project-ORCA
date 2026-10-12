@@ -123,6 +123,8 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       void handleMemory(req, res)
     } else if (url.pathname === '/api/runtime/state') {
       void handleRuntimePresentationState(req, res)
+    } else if (url.pathname === '/api/runtime/skills') {
+      void handleRuntimeSkills(url, res)
     } else if (url.pathname === '/api/runtime/events') {
       void handleRuntimePresentationEvents(req, res)
     } else if (url.pathname === '/api/runtime/stream' && req.method === 'GET') {
@@ -527,6 +529,24 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
     } catch (err) {
       sendJson(res, 500, { ok: false, error: String(err) })
     }
+  }
+
+  async function handleRuntimeSkills(url: URL, res: ServerResponse): Promise<void> {
+    const catalog = ctx.get('skillCatalog') as
+      | { list(): Array<{ id: string; category: { domain: string; subdomain: string; function: string }; summary: string; actions: string[]; risk: string; confirmation: string; available: boolean }> }
+      | undefined
+    if (!catalog) {
+      sendRuntimeJson(res, 200, { ok: true, skills: [] })
+      return
+    }
+    const domain = url.searchParams.get('domain') ?? undefined
+    const subdomain = url.searchParams.get('subdomain') ?? undefined
+    const functionName = url.searchParams.get('function') ?? undefined
+    const skills = catalog.list().filter((skill) =>
+      (!domain || skill.category.domain === domain)
+      && (!subdomain || skill.category.subdomain === subdomain)
+      && (!functionName || skill.category.function === functionName))
+    sendRuntimeJson(res, 200, { ok: true, skills })
   }
 
   /**

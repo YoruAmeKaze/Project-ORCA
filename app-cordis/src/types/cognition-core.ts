@@ -59,6 +59,8 @@ export interface WorkingMemory {
   goal: string
   /** 观察/中间结果（Phase B：来自 LLM 的原始输出）*/
   observations: string[]
+  /** Structured ActionResult summaries scoped to this cognition turn only. */
+  actionResults: string[]
 }
 
 /**

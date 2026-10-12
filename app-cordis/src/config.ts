@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import type { OrderMcpConfig } from './services/orderMcp.js'
+import type { WindowsMcpConfig } from './services/windowsMcp.js'
 
 export interface FeishuConfig {
   appId: string
@@ -274,6 +275,8 @@ export interface OrcaConfig {
   contextAssembler: OrcaContextAssemblerConfig
   /** 独立的瑞幸 / 麦当劳 MCP 只读 Action 配置（默认禁用） */
   orderMcp: OrderMcpConfig
+  /** Optional Windows-MCP read-only desktop observer (disabled by default). */
+  windowsMcp: WindowsMcpConfig
 }
 
 const here = dirname(fileURLToPath(import.meta.url)) // app-cordis/src
@@ -472,6 +475,13 @@ export function getConfig(): OrcaConfig {
         endpoint: 'https://mcp.mcd.cn',
         token: process.env.MCDONALD_TOKEN || '',
       },
+    },
+    windowsMcp: {
+      enabled: process.env.ORCA_WINDOWS_MCP_ENABLED === '1',
+      endpoint: process.env.ORCA_WINDOWS_MCP_ENDPOINT || '',
+      token: process.env.ORCA_WINDOWS_MCP_TOKEN || '',
+      timeoutMs: Number(process.env.ORCA_WINDOWS_MCP_TIMEOUT_MS ?? 15_000),
+      protocolVersion: process.env.ORCA_WINDOWS_MCP_PROTOCOL_VERSION || '2025-06-18',
     },
   }
 }
