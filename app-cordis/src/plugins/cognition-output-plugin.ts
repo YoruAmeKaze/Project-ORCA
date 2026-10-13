@@ -59,6 +59,18 @@ export function cognitionOutputPlugin(ctx: Context, config: OrcaConfig) {
         // Phase D：action 类型输出 → 转换为 Decision → emit 'orca/decision'
         case 'action':
           if (output.actionIntent) {
+            // Cognition-level control actions are not executable skills.
+            // no_action means "do not use a skill, but tell the user why";
+            // silent means "do not produce a user-visible reply".
+            if (output.actionIntent.action === 'silent') break
+            if (output.actionIntent.action === 'no_action') {
+              handleTextReply({
+                ...output,
+                outputType: 'text/reply',
+                output: output.actionIntent.reason,
+              }, feishu, ctx)
+              break
+            }
             const executor = ctx.get('actionExecutor') as { registry?: { get(action: string): unknown } } | undefined
             const catalog = ctx.get('skillCatalog') as { validateAction(skillId: string | undefined, action: string): { ok: true } | { ok: false; error: string } } | undefined
             const validation = catalog?.validateAction(output.actionIntent.skillId, output.actionIntent.action)
