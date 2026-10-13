@@ -54,7 +54,8 @@ import {
 /**
  * ActionExecutor Cordis plugin
  *
- * 无 inject 声明（executor 不强依赖 ctx 服务；remember/notify handler 由 plugin 内部按需获取）。
+ * EventBus 是 ActionResult 回流 CognitionCore 的必需依赖，使用 Cordis inject
+ * 门控确保插件激活时已处于正确的 runtime fiber。其他服务仍按需获取。
  * 订阅 ctx.on('orca/decision') 不阻塞 emit（ctx.on 注册的是 listener；emit 是 sync 派发所有 listener）。
  */
 export function actionExecutor(ctx: Context, _config: OrcaConfig) {
@@ -104,7 +105,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   const feishu = ctx.get('feishu') as
     | Parameters<typeof createNotifyHandler>[0]['feishu']
     | undefined
-  const eventBus = ctx.get('eventBus') as
+  const eventBus = ctx.eventBus as
     | Parameters<typeof createNotifyHandler>[0]['eventBus']
     | undefined
   if (feishu && eventBus) {
@@ -200,7 +201,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   // 4. ActionResult → EventBus bridge（Phase D）
   // 末端分发：所有 ActionResult 都进入 EventBus，但不修改 WorldState。
   // bridge 不参与调度/重试/路由，只负责事件分发。
-  const actionResultBus = ctx.get('eventBus') as
+  const actionResultBus = ctx.eventBus as
     | {
         get(id: string): { source: string; sessionId?: string; data: Record<string, unknown> } | undefined
         publish(input: {
@@ -273,3 +274,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
     locationService?.clear()
   }
 }
+
+// ActionResult bridge 必须存在，否则工具执行结果会停在 action-executor，
+// 无法经 EventBus 重新触发 CognitionCore 回复用户。
+actionExecutor.inject = ['eventBus']

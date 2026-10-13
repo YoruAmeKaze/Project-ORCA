@@ -28,32 +28,40 @@ type LocationReader = (timeoutMs: number) => Promise<LocationFix>
 
 const WINDOWS_LOCATION_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
-$watcher = $null
 try {
-  Add-Type -AssemblyName System.Device -ErrorAction Stop
-  $watcher = New-Object System.Device.Location.GeoCoordinateWatcher
-  $ready = $watcher.TryStart($false, [TimeSpan]::FromSeconds(__TIMEOUT_SECONDS__))
-  if ($ready) {
-    $position = $watcher.Position.Location
-    if ($position.IsUnknown) {
-      $payload = @{ status = 'no-data'; watcherStatus = $watcher.Status.ToString() }
-    } else {
-      $payload = @{
-        status = 'ok'
-        latitude = [double]$position.Latitude
-        longitude = [double]$position.Longitude
-        accuracyMeters = [double]$position.HorizontalAccuracy
-      }
-    }
-  } elseif ($watcher.Status.ToString() -eq 'Disabled') {
-    $payload = @{ status = 'permission-denied' }
+  Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+  $null = [Windows.Devices.Geolocation.Geolocator,Windows.Devices.Geolocation,ContentType=WindowsRuntime]
+  $geolocator = [Windows.Devices.Geolocation.Geolocator]::new()
+  $geolocator.DesiredAccuracy = [Windows.Devices.Geolocation.PositionAccuracy]::Default
+  $operation = $geolocator.GetGeopositionAsync()
+  $method = [System.WindowsRuntimeSystemExtensions].GetMethods() |
+    Where-Object { $_.Name -eq 'AsTask' -and $_.IsGenericMethodDefinition -and $_.GetGenericArguments().Count -eq 1 -and $_.GetParameters().Count -eq 1 } |
+    Select-Object -First 1
+  if ($null -eq $method) { throw 'Windows Runtime async bridge unavailable' }
+  $closed = $method.MakeGenericMethod([Windows.Devices.Geolocation.Geoposition])
+  $task = $closed.Invoke($null, @($operation))
+  if (-not $task.Wait(__TIMEOUT_MS__)) { throw 'Windows Runtime location request timed out' }
+  $position = $task.Result
+  if ($null -eq $position -or $null -eq $position.Coordinate) {
+    $payload = @{ status = 'no-data' }
   } else {
-    $payload = @{ status = 'unavailable'; watcherStatus = $watcher.Status.ToString() }
+    $point = $position.Coordinate.Point.Position
+    $payload = @{
+      status = 'ok'
+      latitude = [double]$point.Latitude
+      longitude = [double]$point.Longitude
+      accuracyMeters = [double]$position.Coordinate.Accuracy
+    }
   }
 } catch {
-  $payload = @{ status = 'unavailable' }
-} finally {
-  if ($null -ne $watcher) { try { $watcher.Stop() } catch {} }
+  $message = $_.Exception.Message
+  if ($message -match 'denied|unauthorized|access') {
+    $payload = @{ status = 'permission-denied' }
+  } elseif ($message -match 'timed out|timeout') {
+    $payload = @{ status = 'timeout' }
+  } else {
+    $payload = @{ status = 'unavailable' }
+  }
 }
 [Console]::Out.Write(($payload | ConvertTo-Json -Compress))
 `
@@ -64,8 +72,7 @@ async function readWindowsLocation(timeoutMs: number): Promise<LocationFix> {
   const windowsRoot = process.env.SystemRoot ?? 'C:\\Windows'
   const windowsPowerShell = resolve(windowsRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   const executable = existsSync(windowsPowerShell) ? windowsPowerShell : 'pwsh.exe'
-  const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000))
-  const script = WINDOWS_LOCATION_SCRIPT.replace('__TIMEOUT_SECONDS__', String(timeoutSeconds))
+  const script = WINDOWS_LOCATION_SCRIPT.replace('__TIMEOUT_MS__', String(timeoutMs))
   const encodedCommand = Buffer.from(script, 'utf16le').toString('base64')
   const stdout = await new Promise<string>((resolveOutput, reject) => {
     execFile(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodedCommand], {
@@ -89,12 +96,13 @@ async function readWindowsLocation(timeoutMs: number): Promise<LocationFix> {
     throw new Error('Windows 定位服务返回了无法识别的结果')
   }
   if (result.status === 'permission-denied') {
-    throw new Error('Windows 定位未开启或未授予权限。请在系统隐私设置中启用定位后重试。')
+    throw new Error('Windows Runtime 定位未开启或未授予权限。请在系统隐私设置中启用定位后重试。')
   }
   if (result.status === 'no-data') {
-    throw new Error('Windows 定位服务已启动，但当前没有可用的位置数据。请打开系统定位并等待位置锁定后重试。')
+    throw new Error('Windows Runtime 定位当前没有可用的位置数据。请打开系统定位并重试。')
   }
-  if (result.status !== 'ok') throw new Error('暂时无法获取设备位置，请检查系统定位服务和定位权限后重试。')
+  if (result.status === 'timeout') throw new Error('Windows Runtime 定位请求超时，请稍后重试。')
+  if (result.status !== 'ok') throw new Error('Windows Runtime 定位服务不可用，请检查系统定位服务后重试。')
   return {
     latitude: Number(result.latitude),
     longitude: Number(result.longitude),
