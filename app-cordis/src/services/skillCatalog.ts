@@ -88,15 +88,7 @@ export function createSkillCatalog(handlers: readonly ActionHandler[] | (() => r
       // the model explicitly supplies a skillId.
       if (!skillId) return { ok: true }
       const skill = skillId ? allSkills.find((entry) => entry.id === skillId) : undefined
-      if (skillId && !skill) {
-        // Models may emit a short natural identifier (for example "location")
-        // instead of the catalog id. Accept it only when the action has one
-        // unambiguous, available skill owner; the handler registry remains the
-        // final execution authority.
-        const owners = allSkills.filter((entry) => entry.available && entry.actions.includes(action))
-        if (owners.length === 1) return { ok: true }
-        return { ok: false, error: `unknown skill: ${skillId}` }
-      }
+      if (skillId && !skill) return { ok: false, error: `unknown skill: ${skillId}` }
       if (skillId && skill && !skill.available) return { ok: false, error: `skill ${skillId} is unavailable` }
       if (skill && !skill.actions.includes(action)) return { ok: false, error: `action ${action} is not allowed by skill ${skillId}` }
       if (!allSkills.some((entry) => entry.available && entry.actions.includes(action))) return { ok: false, error: `action ${action} is not registered in skill catalog` }
