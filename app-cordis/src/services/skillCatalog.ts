@@ -33,6 +33,11 @@ const ACTION_METADATA: Array<Omit<SkillMetadata, 'available'> & { actionPrefixes
     keywords: ['点单', '瑞幸', '咖啡', '菜单', '门店', '价格', '订单'],
   },
   {
+    id: 'location-current', category: normalizeCategory({ domain: 'basic-control', subdomain: 'location', function: 'current' }),
+    summary: '读取已授权的本机当前位置，用于附近门店查询。', docPath: 'location-current/SKILL.md',
+    actions: ['location.current'], risk: 'read_only', confirmation: 'none', keywords: ['位置', '定位', '附近', '最近', '距离'],
+  },
+  {
     id: 'order-mcdonalds', category: normalizeCategory({ domain: 'ordering', subdomain: 'mcdonalds', function: 'stores' }),
     summary: '查询麦当劳中国的只读门店、菜单、价格和订单信息。', docPath: 'order-food/SKILL.md', documentId: 'order-food',
     actions: [], actionPrefixes: ['order.mcd.'], risk: 'read_only', confirmation: 'none', keywords: ['点单', '麦当劳', '菜单', '门店', '价格', '订单'],

@@ -5,7 +5,7 @@ description: 在 Orca 中查询瑞幸与麦当劳中国门店、菜单、商品�
 
 # 瑞幸 / 麦当劳中国 MCP 接入 Skill（ORCA）
 
-> 当前状态：只读 MVP 已实现并通过本地协议 smoke 与两家官方 MCP 实查（2026-10-08）。目标是复用 Cordis 现有 `ActionExecutor → ActionHandler → ActionResult`。不新增 MCP Manager、Capability 层或新的 Agent 框架。建单确认闭环未实现，所有写操作仍关闭。
+> 当前状态：门店、菜单、商品、价格预览和订单状态查询已接入 Cordis 现有 `ActionExecutor → ActionHandler → ActionResult`。不新增 MCP Manager、Capability 层或新的 Agent 框架。建单确认闭环未实现，所有写操作仍关闭。瑞幸附近门店查询依赖独立的 `location.current` Action。
 
 ## 边界与隔离
 
@@ -22,7 +22,7 @@ description: 在 Orca 中查询瑞幸与麦当劳中国门店、菜单、商品�
 
 | ORCA Action | 服务 | 当前官方工具 | 范围 |
 |---|---|---|---|
-| `order.luckin.stores` | 瑞幸 | `queryShopList` | 只读门店查询；位置只从本机经纬度配置读取 |
+| `order.luckin.stores` | 瑞幸 | `queryShopList` | 只读门店查询；位置只从 `location.current` 的短期内存缓存读取 |
 | `order.luckin.products` | 瑞幸 | `searchProductForMcp` | 只读商品搜索 |
 | `order.luckin.product_detail` | 瑞幸 | `queryProductDetailInfo` | 只读商品详情 |
 | `order.luckin.preview` | 瑞幸 | `previewOrder` | 只读订单预览，不提交 |

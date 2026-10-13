@@ -255,7 +255,7 @@ const ruleInternalActionResult: AttentionRule = {
     (typeof event.data.dashboardMessageId === 'string' || typeof event.data.chatId === 'string'),
   produce: ({ event }) => ({
     priority: 'normal',
-    reason: `Action=${String(event?.data.action ?? 'unknown')} success=${String(event?.data.success === true)}\n${String(event?.data.message ?? '')}`,
+    reason: `Action=${String(event?.data.action ?? 'unknown')} success=${String(event?.data.success === true)}\n${String(event?.data.message ?? '')}${event?.data.error ? `\n错误：${String(event.data.error)}` : ''}`,
     action: 'ignore',
     eventId: event?.id,
     dashboardMessageId: typeof event?.data.dashboardMessageId === 'string' ? event.data.dashboardMessageId : undefined,

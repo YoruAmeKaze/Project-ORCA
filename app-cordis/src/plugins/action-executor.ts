@@ -240,6 +240,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
             success: result.success,
             decisionId: result.decisionId,
             message: result.message,
+            error: result.error,
             sourceEventId: result.sourceEventId,
             dashboardMessageId,
             chatId,

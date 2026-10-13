@@ -392,7 +392,8 @@ export interface OrderActionDeps {
 function fail(decision: Decision, message: string): ActionResult {
   return {
     success: false, action: decision.action, decisionId: decision.decisionId,
-    sourceEventId: decision.eventId, error: message, message: '这次查询没有完成，请稍后重试。', executedAt: Date.now(),
+    sourceEventId: decision.eventId, error: message,
+    message: `这次查询没有完成：${message}`.slice(0, 800), executedAt: Date.now(),
   }
 }
 

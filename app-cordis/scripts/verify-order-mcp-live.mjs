@@ -9,13 +9,14 @@ if (!config.orderMcp.luckin.token || !config.orderMcp.mcd.token) {
   process.exit(1)
 }
 
-// 只用上海人民广场周边的公开参考坐标验证瑞幸门店查询；不读用户定位/地址，也不写回配置。
 config.orderMcp.luckin.enabled = true
-config.orderMcp.luckin.longitude = 121.475
-config.orderMcp.luckin.latitude = 31.23
 config.orderMcp.mcd.enabled = true
 
-const service = createOrderMcpService(config.orderMcp)
+const service = createOrderMcpService(config.orderMcp, undefined, {
+  getLatest: () => ({ latitude: 31.23, longitude: 121.475, accuracyMeters: 100, capturedAt: Date.now(), expiresAt: Date.now() + 60_000 }),
+})
+// 瑞幸门店查询严格依赖 location.current 的短期缓存；live 验证只验证 MCP tools/list，
+// 通过一个明确的测试位置提供者避免把固定坐标写入生产配置。
 try {
   await service.initialize()
   const handlers = new Map(createOrderActionHandlers({ service }).map((handler) => [handler.action, handler]))

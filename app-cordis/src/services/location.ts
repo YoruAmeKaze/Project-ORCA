@@ -36,7 +36,7 @@ try {
   if ($ready) {
     $position = $watcher.Position.Location
     if ($position.IsUnknown) {
-      $payload = @{ status = 'unavailable' }
+      $payload = @{ status = 'no-data'; watcherStatus = $watcher.Status.ToString() }
     } else {
       $payload = @{
         status = 'ok'
@@ -48,7 +48,7 @@ try {
   } elseif ($watcher.Status.ToString() -eq 'Disabled') {
     $payload = @{ status = 'permission-denied' }
   } else {
-    $payload = @{ status = 'unavailable' }
+    $payload = @{ status = 'unavailable'; watcherStatus = $watcher.Status.ToString() }
   }
 } catch {
   $payload = @{ status = 'unavailable' }
@@ -90,6 +90,9 @@ async function readWindowsLocation(timeoutMs: number): Promise<LocationFix> {
   }
   if (result.status === 'permission-denied') {
     throw new Error('Windows 定位未开启或未授予权限。请在系统隐私设置中启用定位后重试。')
+  }
+  if (result.status === 'no-data') {
+    throw new Error('Windows 定位服务已启动，但当前没有可用的位置数据。请打开系统定位并等待位置锁定后重试。')
   }
   if (result.status !== 'ok') throw new Error('暂时无法获取设备位置，请检查系统定位服务和定位权限后重试。')
   return {
