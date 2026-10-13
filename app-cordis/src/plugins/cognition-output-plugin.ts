@@ -64,10 +64,29 @@ export function cognitionOutputPlugin(ctx: Context, config: OrcaConfig) {
             const validation = catalog?.validateAction(output.actionIntent.skillId, output.actionIntent.action)
             if (validation && !validation.ok) {
               ctx.logger.warn('[cognition-output] action validation rejected: action=%s reason=%s', output.actionIntent.action, validation.error)
-              const decision = cognitionIntentToDecision({
-                ...output.actionIntent, action: 'no_action', reason: `invalid-action:${validation.error}`,
-              })
-              ctx.emit('orca/decision', decision)
+              // 将运行时校验错误作为内部结果回馈 CognitionCore，让模型按
+              // 同一会话重新生成；不要执行 no_action，否则 sourceEventId
+              // 指向内部事件，ActionExecutor 无法路由回原 Dashboard。
+              const eventBus = ctx.get('eventBus') as {
+                publish(input: { source: string; type: string; data: Record<string, unknown>; priority?: number; sessionId?: string }): void
+              } | undefined
+              if (eventBus && (output.dashboardMessageId || output.chatId)) {
+                eventBus.publish({
+                  source: 'internal',
+                  type: 'action-result',
+                  data: {
+                    action: output.actionIntent.action,
+                    success: false,
+                    message: `运行时拒绝了 Action：${validation.error}。请根据可用 Action 清单重新生成；不要执行任何未注册或技能 ID 不匹配的 Action。`,
+                    dashboardMessageId: output.dashboardMessageId,
+                    chatId: output.chatId,
+                  },
+                  priority: 1,
+                  sessionId: output.channelSessionId,
+                })
+              } else {
+                ctx.logger.warn('[cognition-output] validation error cannot be routed back to source session')
+              }
               break
             }
             const registered = executor?.registry?.get(output.actionIntent.action)
