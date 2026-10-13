@@ -14,6 +14,8 @@ assert.deepEqual(catalog.search('瑞幸 门店')[0]?.id, 'order-luckin')
 assert.equal(catalog.search('麦当劳')[0]?.id, 'order-mcdonalds')
 assert.ok(catalog.list().some((skill) => skill.id === 'order-mcdonalds'))
 assert.equal(catalog.get('location-current')?.available, true)
+assert.deepEqual(catalog.validateAction('location', 'location.current'), { ok: true })
+assert.equal(catalog.validateAction('location', 'unknown.action').ok, false)
 assert.equal(catalog.get('windows-screenshot')?.available, false)
 assert.equal(catalog.get('system-info')?.available, true)
 
