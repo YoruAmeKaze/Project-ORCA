@@ -187,6 +187,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
             success: false,
             action: decision?.action ?? 'unknown',
             decisionId: decision?.decisionId ?? 'unknown',
+            sourceEventId: decision?.eventId,
             error: `executor threw (unexpected): ${detail}`,
             executedAt: Date.now(),
           })
@@ -218,15 +219,32 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   const unsubscribeActionResult = actionResultBus
       ? ctx.on('orca/action-result', (result: import('../types/action.js').ActionResult) => {
         if (disposed) return
+        // no_action 是 Attention/Decision 的无副作用终点：保留 orca/action-result
+        // 供执行审计观察，但不把它伪装成需要 Cognition 继续处理的工具结果。
+        if (result.action === 'no_action') {
+          ctx.logger.debug(
+            '[action-executor] 跳过 no_action 的 ActionResult→EventBus 回流 decisionId=%s sourceEventId=%s',
+            result.decisionId, result.sourceEventId ?? '(none)',
+          )
+          return
+        }
         // 工具结果作为内部事件进入 EventBus；Attention → Scheduler → CognitionCore
         // 负责把结果转成 Orca 回复。这里不直接把函数结果展示到 Dashboard/Feishu。
         const sourceEvent = result.sourceEventId ? actionResultBus.get(result.sourceEventId) : undefined
+        // A follow-up Action is triggered by the previous internal
+        // action-result event. Preserve the original channel route carried
+        // in that event instead of requiring every Decision to point directly
+        // at the first dashboard/Feishu message.
         const dashboardMessageId = sourceEvent?.source === 'dashboard' && typeof sourceEvent.data.id === 'string'
           ? sourceEvent.data.id
-          : undefined
+          : typeof sourceEvent?.data.dashboardMessageId === 'string'
+            ? sourceEvent.data.dashboardMessageId
+            : undefined
         const chatId = sourceEvent?.source === 'feishu' && typeof sourceEvent.data.chatId === 'string'
           ? sourceEvent.data.chatId
-          : undefined
+          : typeof sourceEvent?.data.chatId === 'string'
+            ? sourceEvent.data.chatId
+            : undefined
         if (!sourceEvent || (!dashboardMessageId && !chatId)) {
           ctx.logger.warn(
             '[action-executor] ActionResult 缺少原会话路由信息；结果事件无法触发用户回复 action=%s decisionId=%s sourceEventFound=%s',
