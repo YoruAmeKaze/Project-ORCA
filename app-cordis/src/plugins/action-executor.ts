@@ -50,6 +50,7 @@ import {
   createNotifyHandler,
   createRememberHandler,
 } from '../services/action.js'
+import { actionFingerprint, createContinuationStateService } from '../services/continuationState.js'
 
 /**
  * ActionExecutor Cordis plugin
@@ -62,6 +63,8 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   // 1. 创建 ActionExecutor（含 registry + deferred store）
   const executor: ActionExecutorService = createActionExecutor()
   ctx.provide('actionExecutor', executor)
+  const continuation = createContinuationStateService()
+  ctx.provide('continuationState', continuation)
   const skillCatalog = createSkillCatalog(() => executor.registry.list())
   ctx.provide('skillCatalog', skillCatalog)
   ctx.provide('skillLoader', createSkillLoader(defaultSkillsRoot(), skillCatalog))
@@ -171,10 +174,33 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   let disposed = false
   const unsubscribe = ctx.on('orca/decision', (decision: Decision) => {
     try {
+      const source = decision.eventId ? ctx.eventBus.get(decision.eventId) : undefined
+      const sessionId = source?.sessionId
+      if (sessionId && decision.reason.trim().startsWith('{')) {
+        let args: Record<string, unknown> = {}
+        try { args = JSON.parse(decision.reason) as Record<string, unknown> } catch { /* handler reports malformed args */ }
+        const task = continuation.get(sessionId)
+        const matching = task?.completedActions.filter((entry) => entry.argsFingerprint === actionFingerprint(task.id, decision.action, args)) ?? []
+        const duplicate = matching.some((entry) => entry.success) || matching.length >= 2
+        if (duplicate) {
+          ctx.logger.info('[action-executor] 跳过已完成或达到重试上限的重复 Action action=%s decisionId=%s sessionId=%s', decision.action, decision.decisionId, sessionId)
+          ctx.emit('orca/action-result', {
+            success: matching.some((entry) => entry.success), action: decision.action, decisionId: decision.decisionId, sourceEventId: decision.eventId,
+            message: matching.some((entry) => entry.success) ? '该查询已完成，复用之前的结果。' : '该查询此前失败且已达到重试上限。',
+            error: matching.some((entry) => entry.success) ? undefined : '同一参数的 Action 已达到重试上限',
+            errorInfo: matching.some((entry) => entry.success) ? undefined : { code: 'REMOTE_BUSINESS_ERROR', retryable: false, message: '同一参数的 Action 已达到重试上限' },
+            metadata: { duplicate: true, argumentsJson: decision.reason }, executedAt: Date.now(),
+          })
+          return
+        }
+      }
       // 异步执行；结果通过 emit 派发
       void executor.execute(decision)
         .then((result) => {
           if (disposed) return
+          if (!result.metadata && decision.reason.trim().startsWith('{')) {
+            result.metadata = { argumentsJson: decision.reason }
+          }
           ctx.emit('orca/action-result', result)
         })
         .catch((err: unknown) => {
@@ -231,6 +257,18 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
         // 工具结果作为内部事件进入 EventBus；Attention → Scheduler → CognitionCore
         // 负责把结果转成 Orca 回复。这里不直接把函数结果展示到 Dashboard/Feishu。
         const sourceEvent = result.sourceEventId ? actionResultBus.get(result.sourceEventId) : undefined
+        const sessionId = sourceEvent?.sessionId
+        if (sessionId) {
+          let args: Record<string, unknown> = {}
+          try { args = JSON.parse(result.metadata?.argumentsJson as string ?? '{}') as Record<string, unknown> } catch { /* metadata is optional */ }
+          const recorded = continuation.recordAction({ channelSessionId: sessionId, action: result.action, args, success: result.success, resultRef: result.decisionId, resultSummary: result.message ?? result.error })
+          if (!result.success && result.errorInfo && !result.errorInfo.retryable) recorded.state.status = 'failed'
+          if (result.success && result.data) {
+            for (const [name, value] of Object.entries(result.data.values)) {
+              continuation.setSlot(sessionId, name, { value, sourceAction: result.action, sourceEventId: result.sourceEventId })
+            }
+          }
+        }
         // A follow-up Action is triggered by the previous internal
         // action-result event. Preserve the original channel route carried
         // in that event instead of requiring every Decision to point directly
@@ -260,13 +298,15 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
             decisionId: result.decisionId,
             message: result.message,
             error: result.error,
+            errorInfo: result.errorInfo,
+            resultData: result.data,
             sourceEventId: result.sourceEventId,
             dashboardMessageId,
             chatId,
             metadata: result.metadata,
           },
           priority: 1,
-          sessionId: sourceEvent?.sessionId,
+          sessionId,
         })
         ctx.logger.info(
           '[action-executor] ActionResult 已发布到 EventBus action=%s decisionId=%s sourceEventFound=%s replyTarget=%s',

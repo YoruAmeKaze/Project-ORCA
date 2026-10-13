@@ -24,6 +24,7 @@ import type { CognitionCoreService } from './services/cognition-core.js'
 import type { CognitionResult } from './types/cognition-core.js'
 import type { SkillCatalogService, SkillLoaderService } from './types/skill.js'
 import type { OrderMcpService } from './services/orderMcp.js'
+import type { ContinuationStateService } from './services/continuationState.js'
 
 /**
  * CognitionActionIntent —— Phase D Cognition 产生的结构化 action 意图
@@ -104,6 +105,7 @@ declare module '@deepseek-ai/cordis' {
     skillCatalog: SkillCatalogService
     skillLoader: SkillLoaderService
     orderMcp: OrderMcpService
+    continuationState: ContinuationStateService
     contextAssembler: ContextAssembler
     cognitiveScheduler: CognitiveSchedulerService
     cognitionCore: CognitionCoreService

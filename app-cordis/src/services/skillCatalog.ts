@@ -80,6 +80,7 @@ export function createSkillCatalog(handlers: readonly ActionHandler[] | (() => r
   return {
     list,
     get: (id) => list().find((entry) => entry.id === id),
+    resolveAction: (action) => list().find((entry) => entry.available && entry.actions.includes(action))?.id,
     validateAction: (skillId, action) => {
       if (!action || !/^[a-z][a-z0-9_.-]{1,96}$/u.test(action)) return { ok: false, error: 'invalid action id' }
       const allSkills = list()

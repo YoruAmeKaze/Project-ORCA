@@ -168,6 +168,7 @@ export function createCurrentLocationHandler(location: LocationService): ActionH
           decisionId: decision.decisionId,
           sourceEventId: decision.eventId,
           error: 'location.current 不接受参数',
+          errorInfo: { code: 'INVALID_ARGUMENT', retryable: true, message: 'location.current 不接受参数' },
           message: '读取当前位置的参数格式无效。',
           executedAt: Date.now(),
         }
@@ -182,6 +183,7 @@ export function createCurrentLocationHandler(location: LocationService): ActionH
           decisionId: decision.decisionId,
           sourceEventId: decision.eventId,
           message: `已获取本机当前位置，可用于附近查询；定位精度约 ${Math.round(snapshot.accuracyMeters)} 米，有效期约 ${ttlMinutes} 分钟。精确坐标仅在内存中供后续查询使用。`,
+          data: { kind: 'location-fix', values: { accuracyMeters: Math.round(snapshot.accuracyMeters), capturedAt: snapshot.capturedAt, expiresAt: snapshot.expiresAt } },
           metadata: { accuracyMeters: Math.round(snapshot.accuracyMeters), capturedAt: snapshot.capturedAt, expiresAt: snapshot.expiresAt },
           executedAt: Date.now(),
         }
@@ -193,6 +195,7 @@ export function createCurrentLocationHandler(location: LocationService): ActionH
           decisionId: decision.decisionId,
           sourceEventId: decision.eventId,
           error: detail,
+          errorInfo: { code: /超时|timeout/i.test(detail) ? 'TIMEOUT' : /权限|permission/i.test(detail) ? 'AUTH_FAILED' : 'TOOL_UNAVAILABLE', retryable: /超时|timeout/i.test(detail), message: detail },
           message: detail,
           executedAt: Date.now(),
         }

@@ -72,8 +72,11 @@ export function cognitionOutputPlugin(ctx: Context, config: OrcaConfig) {
               break
             }
             const executor = ctx.get('actionExecutor') as { registry?: { get(action: string): unknown } } | undefined
-            const catalog = ctx.get('skillCatalog') as { validateAction(skillId: string | undefined, action: string): { ok: true } | { ok: false; error: string } } | undefined
-            const validation = catalog?.validateAction(output.actionIntent.skillId, output.actionIntent.action)
+            const catalog = ctx.get('skillCatalog') as { validateAction(skillId: string | undefined, action: string): { ok: true } | { ok: false; error: string }; resolveAction?(action: string): string | undefined } | undefined
+            const resolvedSkillId = catalog?.resolveAction?.(output.actionIntent.action)
+            const suppliedSkillId = output.actionIntent.skillId
+            const skillId = suppliedSkillId && resolvedSkillId === suppliedSkillId ? suppliedSkillId : undefined
+            const validation = catalog?.validateAction(skillId, output.actionIntent.action)
             if (validation && !validation.ok) {
               ctx.logger.warn('[cognition-output] action validation rejected: action=%s reason=%s', output.actionIntent.action, validation.error)
               // 将运行时校验错误作为内部结果回馈 CognitionCore，让模型按
@@ -114,7 +117,7 @@ export function cognitionOutputPlugin(ctx: Context, config: OrcaConfig) {
               break
             }
             const decision = cognitionIntentToDecision({
-              ...output.actionIntent,
+              ...output.actionIntent, skillId,
               reason: output.actionIntent.arguments
                 ? JSON.stringify(output.actionIntent.arguments)
                 : output.actionIntent.reason,

@@ -22,7 +22,7 @@ export interface OrderMcpService {
   initialize(): Promise<void>
   availableActions(): string[]
   describeActions(): string[]
-  execute(action: string, args: Record<string, unknown>): Promise<string>
+  execute(action: string, args: Record<string, unknown>): Promise<{ message: string; data?: ActionResult['data'] }>
   dispose(): void
 }
 
@@ -206,6 +206,27 @@ function formatResult(action: string, content: unknown): string {
   return summaries.join('\n\n').slice(0, 3_500)
 }
 
+function extractStructuredData(action: string, content: unknown): ActionResult['data'] | undefined {
+  const allowed = new Set(['deptId', 'deptName', 'storeCode', 'storeName', 'productId', 'productName', 'productCode', 'skuCode', 'distance', 'address', 'isOpen', 'price', 'totalPrice', 'status', 'orderId'])
+  const values: Record<string, unknown> = {}
+  const visit = (node: unknown, depth = 0) => {
+    if (depth > 6 || node === null || typeof node !== 'object') return
+    if (Array.isArray(node)) { for (const item of node.slice(0, 20)) visit(item, depth + 1); return }
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (allowed.has(key) && (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')) {
+        if (!(key in values)) values[key] = value
+      } else visit(value, depth + 1)
+    }
+  }
+  for (const block of Array.isArray(content) ? content : []) {
+    if (typeof block !== 'object' || block === null || typeof (block as { text?: unknown }).text !== 'string') continue
+    const parsed = extractJsonPayload((block as { text: string }).text)
+    if (parsed !== undefined) visit(parsed)
+  }
+  if (!Object.keys(values).length) return undefined
+  return { kind: action.endsWith('.stores') ? 'store-list' : action.endsWith('.menu') ? 'menu' : 'provider-query', values }
+}
+
 class ProviderClient {
   private tools = new Map<string, McpTool>()
   private signatures = new Map<string, string>()
@@ -233,7 +254,7 @@ class ProviderClient {
     return this.initialized && !this.disposed ? Object.keys(this.spec.tools) : []
   }
 
-  async call(action: string, input: Record<string, unknown>): Promise<string> {
+  async call(action: string, input: Record<string, unknown>): Promise<{ message: string; data?: ActionResult['data'] }> {
     if (!this.initialized || this.disposed) throw new Error('该点餐 MCP 服务未就绪')
     const mapping = this.spec.tools[action]
     if (!mapping) throw new Error('此 Action 未注册')
@@ -257,7 +278,7 @@ class ProviderClient {
         }
       }
     }
-    return formatResult(action, result.content)
+    return { message: formatResult(action, result.content), data: extractStructuredData(action, result.content) }
   }
 
   dispose(): void { this.disposed = true; this.tools.clear(); this.signatures.clear() }
@@ -389,10 +410,18 @@ export interface OrderActionDeps {
   logger?: OrderMcpLogger
 }
 
+function classifyOrderError(message: string): NonNullable<ActionResult['errorInfo']> {
+  const code = /schema|required|unexpected|校验|参数/u.test(message) ? 'SCHEMA_MISMATCH'
+    : /未就绪|unavailable|未提供|不可用/u.test(message) ? 'TOOL_UNAVAILABLE'
+      : /timeout|超时/u.test(message) ? 'TIMEOUT' : 'REMOTE_BUSINESS_ERROR'
+  return { code, retryable: code === 'TIMEOUT', message }
+}
+
 function fail(decision: Decision, message: string): ActionResult {
   return {
     success: false, action: decision.action, decisionId: decision.decisionId,
     sourceEventId: decision.eventId, error: message,
+    errorInfo: classifyOrderError(message),
     message: `这次查询没有完成：${message}`.slice(0, 800), executedAt: Date.now(),
   }
 }
@@ -408,11 +437,12 @@ export function createOrderActionHandlers(deps: OrderActionDeps): ActionHandler[
         let args: unknown
         try { args = JSON.parse(decision.reason) } catch { return fail(decision, '查询参数格式无效') }
         if (typeof args !== 'object' || args === null || Array.isArray(args)) return fail(decision, '查询参数必须是 JSON 对象')
-        const message = await deps.service.execute(action, args as Record<string, unknown>)
+        const result = await deps.service.execute(action, args as Record<string, unknown>)
         deps.logger?.info('[order-action] 查询结束 action=%s decisionId=%s success=true durationMs=%d', action, decision.decisionId, Date.now() - startedAt)
         return {
           success: true, action: decision.action, decisionId: decision.decisionId,
-          sourceEventId: decision.eventId, message, executedAt: Date.now(),
+          sourceEventId: decision.eventId, message: result.message, data: result.data,
+          executedAt: Date.now(),
         }
       } catch (err) {
         const detail = err instanceof Error ? err.message : '查询失败'

@@ -20,6 +20,7 @@ export interface SkillCatalogService {
   list(): SkillMetadata[]
   search(query: string, limit?: number): SkillMetadata[]
   get(id: string): SkillMetadata | undefined
+  resolveAction(action: string): string | undefined
   validateAction(skillId: string | undefined, action: string): { ok: true } | { ok: false; error: string }
 }
 
