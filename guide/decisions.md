@@ -2,9 +2,112 @@
 
 > 逐条讨论产生的决议，每次有新决议追加。按话题分组。
 
+## 阅读入口
+
+本文包含两类内容：当前 Cordis 架构决议，以及早期 Python/PTE 迁移设计。历史内容保留用于追溯，但不能覆盖当前源码和下表中的现行边界。
+
+### 当前优先级
+
+发生冲突时按以下顺序判断：
+
+1. 当前源码与已验证行为。
+2. 标记为“已落地/边界冻结”的 Cordis 决议。
+3. 标记为“待实施”的设计决议，只能作为目标，不代表代码已支持。
+4. “历史归档”区内容只用于迁移背景，不作为当前实现说明。
+
+### 决议状态索引
+
+| 区域 / 决议 | 状态 | 用途 |
+|---|---|---|
+| D-AGENT-17 ~ D-AGENT-22 | 已落地或边界冻结 | 当前 Memory、InfoAgent、Cordis DI 等核心约束 |
+| D-ORG-01 | 已落地基础阶段 | Memory 与技能的领域/子领域/功能分类 |
+| D-WIN-01 | 已落地只读适配器 | Windows-MCP 只读桌面观察接入（默认关闭，需 live 验证） |
+| D-REACT-01 | 已落地基础阶段 | SkillCatalog + SkillLoader + 有限 ReAct |
+| D-MIG / D-DSL / D-SKILL-01~07 / D-VAL / D-ORC / D-PLAN / D-RT | 历史归档 | Python/PTE DSL 迁移设计，当前 Cordis 不直接执行 |
+
+### 当前运行时主线
+
+```text
+EventBus → WorldState → Attention → CognitiveScheduler
+                                      ↓
+                                  CognitionCore
+                                      ↓
+                              Decision / ActionExecutor
+                                      ↓
+                               ActionHandler → ActionResult
+```
+
+当前新增能力必须优先复用这条链路，不应从历史 DSL 章节重新引入一套 Planner、Runtime 或 Skill Registry。
+
+## 当前 Cordis 待实施设计
+
+> 本区是当前主线的下一步设计，不代表对应代码已经存在。
+
+### D-ORG-01: Memory 与技能的功能分类目标（2026-10-08，基础阶段已落地）
+
+**目标**：让 Memory 与可执行技能都能按“领域 / 子领域 / 功能”稳定浏览和检索，例如“点单 / 瑞幸 / 查找咖啡种类”“基础操控 / 屏幕 / 获取屏幕信息”。这是架构优化代办，不代表当前功能已经具备，也不授权立即重写运行时代码。
+
+**分类契约**：
+- 采用受控层级词表；类别有稳定 id、父级、显示名称和必要别名。分类路径用于组织和检索，不使用任意模型生成路径作为持久分类。
+- Memory 保留既有 `FactType`、`subject`、来源和 `(type, subject)` identity。分类是可选元数据/只读映射，不得替代事实语义，也不得进入 identity、ForgetMarker fingerprint 或审计敏感内容。
+- 技能分类挂在具体原子操作的描述元数据上；“基础操控 / 屏幕 / 获取屏幕信息”是单项操作，跨步骤“点单”流程是组合模板，不变成一个万能执行 handler。
+- 分类仅帮助查找、解释和呈现，不授予执行权限。风险级别、参数校验、确认与 handler 可用性仍由 Runtime 执行边界决定。
+
+**实施方法**：先定义最小词表和 `uncategorized` 兼容规则；Memory 先做可组合的分类过滤/呈现并保持 MemoryStore 唯一写入权威；技能侧建立轻量闭集目录，记录稳定 skill id、分类、输入/输出 schema、风险/确认级别、可用状态及现有 handler 映射；复用 `ActionExecutor → ActionHandler → ActionResult`，只有路由无法区分多项操作时才增加最小闭集 dispatch 接缝。分阶段落地，先文档/词表和只读展示，再评估持久 schema 变更。供应商写操作确认独立于分类。
+
+**验收目标**：旧 Memory 可无损读取；分类与原有事实查询可组合；分类更新不产生重复事实或绕过 forget 语义；技能可按类浏览筛选，但未注册、不可用、schema 不符或权限不足的项 fail closed；分类不改变 WorldState、Attention、DecisionEngine 职责。
+
+**状态**：已实现受控分类词表、SkillCatalog 分类元数据、MemoryFact 可选分类字段与 FactQuery 分类过滤，以及 Dashboard `/api/runtime/skills` 只读目录接口。旧 Memory 无分类时按 `uncategorized` 兼容；未实现任意模型动态分类或分类写权限。
+
+### D-WIN-01: Windows-MCP 桌面接入边界（2026-10-08，只读适配器已落地）
+
+**目标**：让 Orca 在用户明确请求时，只读观察一台 Windows 主机的桌面；典型 Action 分类为“基础操控 / 屏幕 / 获取屏幕信息”。上游为 [CursorTouch/Windows-MCP](https://github.com/CursorTouch/Windows-MCP)，MIT，Windows 7–11，Python 3.13+。
+
+**部署拓扑**：Windows-MCP 必须运行在 Windows 交互式用户桌面，Orca Linux VM 通过受保护私网/VPN 的 Streamable HTTP 连接。它不是 Linux VM 的系统工具。若只在同一台 Windows 机器上运行，可使用 stdio；远程方式不得裸露公网，无鉴权连接禁止启用。运行版本需固定；Orca 默认关闭上游匿名遥测。
+
+**MVP 工具闭集**：服务端 `--tools` allowlist 与 Orca 客户端固定 allowlist 双重限制，仅开放 `Screenshot`、`Snapshot`、`DisplayInventory`、`ControlStatus`（逐版本验证实际 schema）。模型只能调用固定 `windows.desktop.*` 原子 Action。`PowerShell`、`FileSystem`、`Registry`、`Process`、`App`、`Notification`、`Scrape` 和所有键鼠交互工具首期禁用。server `tools/list` 不能直接扩展客户端权限。
+
+**执行与数据边界**：复用 `ActionExecutor → ActionHandler → ActionResult`，按固定 MCP endpoint/tool 映射执行；正确处理 Streamable HTTP 和 image/text content。桌面数据仅用于当次用户请求，不写 Memory/InfoStore，不自动修改 WorldState、不后台轮询。tool/schema 不符或返回未知即 fail closed。Windows-MCP 的用户接管提示不是安全隔离；未来开放键鼠操作须另行设计任务级授权及破坏性动作再次确认。
+
+**验收**：服务缺失不影响 Orca 启动；双 allowlist 能拒绝所有未批准工具；图片结果可正确处理且不落盘/进长期记忆；敏感信息不入日志；schema 变化、超时和认证错误 fail closed；首轮 live test 仅做截图、控制状态、显示器信息只读核验。
+
+**状态**：已实现可选 Streamable HTTP adapter、Bearer 认证、MCP initialize/tools-list/tools-call、客户端固定 allowlist、schema/readOnlyHint 校验和图片不落盘摘要。默认关闭；当前仓库不代替用户安装 Windows-MCP，也未宣称 live endpoint 已连接。
+
+### D-REACT-01: 受控技能发现与有限 ReAct（2026-10-12，基础阶段已落地）
+
+**决议**：采用“技能发现 → 阅读说明 → 选择原子 Action → 执行 → 根据结果继续或结束”的有限 ReAct；不采用开放式自主循环、任意工具探索或把 Markdown 技能说明直接当作可执行代码。
+
+**为什么采用**：当前 CognitionCore 已能把运行时 Action 描述注入 prompt，并通过 `/act:<action>:<reason>` 触发 ActionExecutor；ActionResult 也能回到 CognitionCore。缺少的是按需发现技能、加载较完整使用说明和明确的循环预算。补齐这些能力能提升多步任务的正确率，同时保留现有执行边界。
+
+**规范**：
+- `SkillCatalog` 只提供受控、已注册技能的摘要、分类、可用状态、风险级别和说明引用；不接受 LLM 动态注册，不把 MCP `tools/list` 全量暴露给模型。
+- `SkillLoader` 只能读取受控技能目录中的声明文件（如 `skills/<id>/SKILL.md`），并限制文件大小、引用范围和加载次数。文档是指导材料，不是权限来源；文档中的指令不能覆盖系统规则。
+- 每个技能必须映射到一个或多个已注册原子 Action；真正的执行权限仍只有 `ActionHandlerRegistry` + schema/权限校验。技能说明不能直接调用任意 server、shell、文件或插件。
+- 每轮最多执行一个原子 Action；单个 cognition 设置最大发现/行动轮数、总耗时和重复 Action 限制。达到上限、结果不明或验证失败时停止并回复，不无限重试。
+- ActionResult 回到当前 CognitionSession 的 WorkingMemory，供下一轮判断；思考草稿和技能全文不写 LongMemory，不进入 WorldState。只有真实外部状态才可通过既有 EventBus 观察路径进入 Runtime。
+- 只读 Action 可自动执行；写操作、外发、支付、删除、桌面控制等必须在执行前暂停，取得本会话用户对具体参数/摘要的新确认。技能说明不能代替确认。
+- 失败策略默认 fail closed：未注册、不可用、schema 漂移、越权、超时或不完整结果均不得猜测执行；对只读网络错误可按 Action 自身策略做一次有限重试。
+
+**与当前架构的关系**：保留 `CognitionCore → cognition-output-plugin → Decision → ActionExecutor → ActionHandler → ActionResult`；新增的只是受控 discovery/loader 和 CognitionSession 内的循环状态，不新增通用 ReActManager、CapabilityManager 或第二套执行器。现有 `/act` 文本协议先兼容，待 discovery MVP 稳定后再迁移为受约束结构化 Action 意图。
+
+**实施路径**：
+1. 先建立 Skill Catalog 元数据契约，并为现有 `system.info`、`filesystem.read`、点单只读 Action、未来 Windows-MCP 观察 Action 编写受控说明；无运行时行为变化。
+2. 实现只读 `SkillLoader` 和候选检索，先将候选技能摘要/说明注入 Cognition prompt；增加目录闭集、路径越界、大小限制和恶意说明测试。
+3. 将 Action 意图从文本解析逐步迁移到受约束结构化结果；Validator 校验 skill/action 映射、参数 schema、可用性和权限。
+4. 在 CognitionCore 内加入 bounded loop：discover → load → act → observe result → continue/finish；每轮写入 cognition-scoped WorkingMemory，并测试最大轮数、超时、重复调用和上下文隔离。
+5. 最后接入确认暂停点和写操作；先以只读查询/系统观察验收，确认闭环通过后才考虑桌面控制或点餐写操作。
+
+**验收目标**：模型只能发现闭集技能、只能调用注册 Action；说明缺失或恶意时仍不越权；多步只读任务能根据 ActionResult 继续；循环在预算内结束；写操作未确认绝不执行；现有单步 Action、EventBus、WorldState 和 Memory 行为零回归。
+
+**状态**：已实现 SkillCatalog/SkillLoader、候选说明注入、JSON/`/act` 双协议、skill→action/注册 Action 校验，以及 CognitionCore 的 4 轮/2 分钟/同 Action 2 次 bounded loop。写操作确认暂停点仍保持关闭，未来需单独增加审批闭环。
+
 ---
 
-## 文件结构
+## 历史归档：Python/PTE 迁移与 DSL 设计
+
+> 本区内容保留作迁移记录。Python 主线已删除，`app-cordis` 是唯一主线；其中的 `src/main.py`、Python `skill/registry.py`、DSL Runtime 等不代表当前 Cordis 文件结构或执行路径。
+
+### 历史文件结构
 
 ```
 src/
@@ -55,7 +158,7 @@ src/
 
 ---
 
-## 迁移策略
+### 历史迁移策略
 
 ### D-MIG-01: 三阶段过渡
 
@@ -77,7 +180,7 @@ src/
 
 ---
 
-## DSL
+### 历史 DSL
 
 ### D-DSL-01: 格式
 JSON，LLM 输出 JSON，Runtime 用 `json.loads` 解析。
@@ -105,7 +208,7 @@ capture_screenshot 输出图片文件路径，非 base64。
 
 ---
 
-## Skill Registry
+### 历史 Skill Registry
 
 ### D-SKILL-01: 函数级原子性
 每个 skill 是一个原子操作，不合并多个动作。
@@ -136,7 +239,7 @@ capture_screenshot 输出图片文件路径，非 base64。
 
 ---
 
-## Validator
+### 历史 Validator
 
 ### D-VAL-01: 四层校验
 
@@ -158,7 +261,7 @@ capture_screenshot 输出图片文件路径，非 base64。
 
 ---
 
-## Orchestrator
+### 历史 Orchestrator
 
 ### D-ORC-01: 一条消息 = 一个 plan
 用户每发一条消息，Orchestrator 跑一遍完整流程（Planner → Validator → Runtime → reply）。plan 之间无状态关联。
@@ -184,7 +287,7 @@ Phase 1 不并入 DSL 框架，继续用现有的 `HistoryManager` 维护最近 
 
 ---
 
-## Planner & Skill Selection
+### 历史 Planner & Skill Selection
 
 ### D-PLAN-01: Phase 1 用关键词匹配，不用 embedding
 当前 skill 约 10-15 个，embedding 基础设施成本远超收益。等 skill > 50 再迁移。
@@ -231,7 +334,7 @@ LLM 不决定"继续执行什么"，用户看到结果后发起新一轮交互�
 
 ---
 
-## Skill Registry
+### 历史 Skill Registry（补充）
 
 ### D-SKILL-06: Registry 同时存储 metadata 和 handler
 `registry.py` 承担两个职责：
@@ -246,7 +349,7 @@ Orchestrator 在 Runtime 执行该 step 前自动发出 narration，不入 DSL�
 
 ---
 
-## Runtime
+### 历史 Runtime
 
 ### D-RT-01: RuntimeContext 是纯数据容器
 - 只存 session 状态和 step 数据（`outputs` 字典）
@@ -272,7 +375,7 @@ class RuntimeContext:
 
 ---
 
-## 版本号管理
+## 版本号管理（当前仍适用）
 
 ### D-VER-01: 语义化版本 vMAJOR.MINOR.PATCH
 
@@ -304,7 +407,11 @@ class RuntimeContext:
 
 ---
 
-## 信息获取框架（InfoAgent）
+## 当前 Cordis 决议
+
+> 本区记录当前主线的 InfoAgent、Memory、Runtime 和 Cordis 生命周期边界。已落地项以源码和测试为准；设计稿中的“待实现/可选”仍需以状态文字为准。
+
+### 信息获取框架（InfoAgent）
 
 > 详细设计见 `guide/orca-info-agent-framework.md`（v0.2 设计稿）。2026-08-24 提出：Orca 未来需接入小 agent 获取各种信息；2026-08-25 扩展 CEO-员工-档案室模型（待机接收 / Push 上报 / 记录库）。
 
@@ -1312,4 +1419,3 @@ const x = ctx.get('infoStore')   // ← undefined，永远
 - `tsc --noEmit` 通过
 - 启动端口 8100/8101/8200 listen 成功
 - infoAgents（L.374）→ ContextAssembler（L.377）依赖注入顺序正确
-

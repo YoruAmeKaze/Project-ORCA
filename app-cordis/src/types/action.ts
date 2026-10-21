@@ -40,6 +40,8 @@ import type { Decision, DecisionAction } from './decision.js'
 export interface ActionHandler {
   /** 该 handler 处理的 action（一个 handler 一个 action） */
   action: DecisionAction
+  /** 可选的模型可见说明；未声明的内部 handler 不会作为可调用能力暴露给模型。 */
+  llmDescription?: string
   /**
    * 执行该 action。
    *
@@ -81,6 +83,14 @@ export interface ActionResult {
   decisionId: string
   /** 错误描述（仅 success=false 时存在） */
   error?: string
+  /** Structured machine-readable error classification. */
+  errorInfo?: { code: 'INVALID_ARGUMENT' | 'SCHEMA_MISMATCH' | 'TOOL_UNAVAILABLE' | 'AUTH_FAILED' | 'TIMEOUT' | 'REMOTE_BUSINESS_ERROR' | 'UNKNOWN_RESULT'; retryable: boolean; message: string }
+  /** 可回传给触发会话的中文结果；仅来自经 schema 校验并整理后的只读 handler。 */
+  message?: string
+  /** Structured, sanitized handler output for continuation state. */
+  data?: { kind: string; values: Record<string, unknown> }
+  /** 触发该 Action 的原始 EventBus 事件 ID，用于安全地回到原会话。 */
+  sourceEventId?: string
   /** 执行完成时间戳 */
   executedAt: number
   /**

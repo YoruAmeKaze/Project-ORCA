@@ -42,6 +42,7 @@ import type {
   MemoryStore,
   OrcaMemoryConfig,
 } from '../types/memory.js'
+import { categoryMatches, normalizeCategory } from '../types/category.js'
 
 // ── 工具函数 ────────────────────────────────────────────────────────────
 
@@ -276,6 +277,7 @@ export class JsonlMemoryStore implements MemoryStore {
       if (q.subject && fact.subject !== q.subject) continue
       if (q.subjectPrefix && !fact.subject.toLowerCase().startsWith(q.subjectPrefix.toLowerCase())) continue
       if (q.source && fact.source !== q.source) continue
+      if (q.category && !categoryMatches(fact.category, q.category)) continue
       results.push(fact)
     }
     // 默认按 updatedAt 降序
@@ -311,6 +313,7 @@ export class JsonlMemoryStore implements MemoryStore {
         evidenceSummary: fact.evidenceSummary,
         representativeEvidenceIds: fact.representativeEvidenceIds,
         evidenceCount: fact.evidenceCount,
+        category: fact.category ? normalizeCategory(fact.category) : old.category,
         updatedAt: Date.now(),
         supersededBy: undefined,
       }
@@ -330,6 +333,7 @@ export class JsonlMemoryStore implements MemoryStore {
       const finalFact: LongMemoryFact = {
         ...fact,
         id: fact.id || randomUUID(),
+        category: normalizeCategory(fact.category),
         updatedAt: Date.now(),
       }
       await this.appendAudit(finalFact.id, 'created', finalFact.source, {

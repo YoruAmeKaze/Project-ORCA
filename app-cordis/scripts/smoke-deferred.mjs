@@ -90,7 +90,7 @@ async function pollFor(predicate, timeoutMs = 1000) {
 // ────────────────────────────────────────────────────────────
 {
   // defaultRegistry 隔离检查
-  check('R17.0.1: 初始 defaultRegistry 启用规则数 === 5', ruleRegistrySize() === 5)
+  check('R17.0.1: 初始 defaultRegistry 启用规则数 === 8', ruleRegistrySize() === 8)
 }
 
 // ────────────────────────────────────────────────────────────

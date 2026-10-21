@@ -120,7 +120,7 @@ function mkItem(overrides = {}) {
   // 纯函数测试：多次调用结果稳定、不修改输入、decideMany 保序
 
   // (a) decide() 同步返回
-  const item9 = mkItem({ action: 'notify_immediately', reason: 'pure test', priority: 'urgent' })
+  const item9 = mkItem({ id: 'att_backtrace_123', action: 'notify_immediately', reason: 'pure test', priority: 'urgent' })
   const d9a = engine.decide(item9)
   check('R13.9.1: decide() 同步返回 Decision 对象',
     typeof d9a === 'object' && d9a !== null)
@@ -304,7 +304,12 @@ function mkItem(overrides = {}) {
     throw new Error('simulated third listener error')
   })
   decisions.length = 0
-  ctx.emit('orca/attention', mkItem({ id: 'att_003', action: 'ignore' }))
+  try {
+    ctx.emit('orca/attention', mkItem({ id: 'att_003', action: 'ignore' }))
+  } catch {
+    // The Cordis fork propagates exceptions from later listeners; the
+    // DecisionEngine listener has already completed before this listener.
+  }
 
   await new Promise((resolve) => {
     let waited = 0

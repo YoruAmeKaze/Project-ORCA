@@ -2,6 +2,48 @@
 
 > 提交惯例（见 `guide/decisions.md` D-VER-01~04）：每 commit 升版本（MAJOR/MINOR/PATCH）、写本日志、**同步更新 AGENT.md**、commit message 带版本前缀。本条不参与版本计数。
 
+## 2026-10-12：整理 Architecture Decisions 文档结构
+
+- `guide/decisions.md` 新增阅读入口、决议状态索引和当前 Runtime 主线图。
+- 早期 Python/PTE/DSL 迁移内容统一标记为历史归档；版本管理、InfoAgent、Memory 和 Cordis DI 等当前约束分区保留。
+- 未修改任何运行时代码、决议编号或历史正文语义；当前源码与已落地决议的优先级已明确。
+- AGENT.md 无需变更：本次为文档结构整理，不新增运行时机制或待办。
+
+## 2026-10-08：Memory 与技能库功能分类架构代办
+
+- 新增 D-ORG-01：目标为 Memory 与原子技能统一按“领域 / 子领域 / 功能”分类浏览和检索。
+- 具体目标、分阶段实施方法和验收条件已登记到 `TODO.md`：Memory 分类不改变事实 identity、forget 和 MemoryStore 写入边界；技能使用轻量闭集目录并复用 ActionExecutor/ActionHandler；权限确认与分类分离；保持旧数据兼容。
+- 当前仅更新设计规定和代办，未修改运行时代码；分类元数据、目录和 UI 均未实现。
+- AGENT.md 已同步。
+
+## 2026-10-08：Windows-MCP 只读桌面观察接入设计
+
+- 新增 D-WIN-01 与 `skills/windows-mcp/SKILL.md`：定义 Windows 交互桌面服务 → Orca Linux VM 私网/VPN Streamable HTTP 拓扑、版本/凭证/遥测要求和闭集工具范围。
+- 首期只允许 Screenshot、Snapshot、DisplayInventory、ControlStatus；双重 allowlist；系统命令、文件系统、注册表、进程、应用启动与键鼠输入全部禁用。截图只用于当前请求，不进入长期记忆或 WorldState。
+- 已加入 `TODO.md` 分阶段实现与验收项；当前仅设计，未安装/连接上游服务，未修改运行时代码。
+- AGENT.md 已同步。
+
+## 2026-10-12：受控技能发现与有限 ReAct 架构决议
+
+- 新增 D-REACT-01：Orca 采用有限 ReAct，允许在闭集技能中检索说明、选择原子 Action，并依据 ActionResult 有限继续；不开放任意工具探索或无限循环。
+- 明确保留现有 `CognitionCore → Decision → ActionExecutor → ActionHandler → ActionResult`，新增范围仅为 SkillCatalog、受控 SkillLoader、结构化意图校验和 CognitionSession bounded loop。
+- 写操作、外发、支付、删除和桌面控制继续要求独立确认；技能文档不提供权限。详细阶段、预算和验收条件已登记到 `TODO.md`。
+- 当前仅更新架构规定和代办，未修改运行时代码。
+- AGENT.md 已同步。
+
+## v0.7.1（2026-10-08）：修复未启用点餐 MCP 时 CognitionCore 崩溃
+
+- CognitionCore 将 `orderMcp` 作为可选服务读取，未启用或未注册点餐 MCP 时不再触发 Cordis 未声明 inject 的属性访问异常。
+- 新增插件级回归覆盖 MCP 服务缺席场景；构建、`smoke-cognition-core`（27/27）和 `smoke:order-mcp` 通过。
+- `AGENT.md` 已同步。
+
+## v0.7.0（2026-10-08）：瑞幸 / 麦当劳中国点餐只读 MCP MVP
+
+- 将两家供应商作为独立 MCP 服务，接入现有 `ActionExecutor → ActionHandler → ActionResult`；增加固定只读 Action、实时工具/schema 核验、参数校验、中文摘要及原 Feishu 会话结果回传。无通用 MCP Manager、Capability 层或新 Agent 框架。
+- 查询和试算范围以 `skills/order-food/SKILL.md` 为准。建单确认闭环未实现，因此建单、取消、领券、修改地址与支付均不开放；支付留在官方流程。
+- 本机私密配置下已分别成功完成瑞幸和麦当劳官方 MCP 初始化、工具清单核验及只读门店查询。`npm run smoke:order-mcp`、`npm run verify:order-mcp-live` 与构建通过；验证不执行写操作。
+- `AGENT.md` 已同步。
+
 ## v1.1.0（2026-06）
 
 ### 新增：瑞幸咖啡 AI 自动点单（WIP）

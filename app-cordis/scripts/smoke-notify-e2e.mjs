@@ -16,7 +16,7 @@
  *
  * 关键不变量（约束）：
  * - ❌ 不调用 registerRule() 污染 defaultRegistry
- * - ❌ 不修改 services/attention.ts 5 条默认规则
+ * - ❌ 不修改 services/attention.ts 默认规则
  * - ❌ 不修改 plugins/attention-engine.ts / decision-engine.ts / action-executor.ts
  * - ❌ 不修改 types/attention.ts / types/decision.ts
  * - ❌ 不增加任何生产配置键
@@ -85,7 +85,7 @@ async function pollFor(predicate, timeoutMs = 1000) {
 {
   // 验证 defaultRegistry 不被污染（构造前快照）
   const beforeDefaultCount = ruleRegistrySize()
-  check('R16.0.1: 初始 defaultRegistry 启用规则数 === 5', beforeDefaultCount === 5)
+  check('R16.0.1: 初始 defaultRegistry 启用规则数 === 8', beforeDefaultCount === 8)
 
   // 构造独立测试组件
   const e2eRegistry = createRuleRegistry()
@@ -117,10 +117,10 @@ async function pollFor(predicate, timeoutMs = 1000) {
   check('R16.0.4: 独立 AttentionEngine.ruleCount() === 1', e2eEngine.ruleCount() === 1)
 
   // 验证 defaultRegistry 仍未被污染
-  check('R16.0.5: defaultRegistry 启用规则数仍 === 5（独立 Registry 隔离）',
-    ruleRegistrySize() === 5)
-  check('R16.0.6: defaultRegistry.getRules().length === 5',
-    getDefaultRegistry().getRules().length === 5)
+  check('R16.0.5: defaultRegistry 启用规则数仍 === 8（独立 Registry 隔离）',
+    ruleRegistrySize() === 8)
+  check('R16.0.6: defaultRegistry.getRules().length === 8',
+    getDefaultRegistry().getRules().length === 8)
   check('R16.0.7: defaultRegistry 不含 e2e rule id',
     !getDefaultRegistry().getAllRules().some((r) => r.id === E2E_RULE_ID))
 }
@@ -165,8 +165,8 @@ async function pollFor(predicate, timeoutMs = 1000) {
   ctx.provide('attention', e2eEngine)
 
   // 5. R16.1/R16.2 验证：defaultRegistry 隔离 + 独立 engine 只有 1 条
-  check('R16.1: defaultRegistry 启用规则数 === 5（未被 e2e rule 污染）',
-    ruleRegistrySize() === 5)
+  check('R16.1: defaultRegistry 启用规则数 === 8（未被 e2e rule 污染）',
+    ruleRegistrySize() === 8)
   check('R16.2: 独立 e2eEngine 只含 e2e rule（ruleCount=1）',
     e2eEngine.ruleCount() === 1)
 
@@ -361,9 +361,9 @@ async function pollFor(predicate, timeoutMs = 1000) {
   check('R16.11.3: 非 feishu source → 0 个 AttentionItem',
     pcItems.length === 0)
 
-  // 4) 清理后 defaultRegistry 仍为 5 条（独立 Registry 完全隔离）
-  check('R16.11.4: 测试结束 defaultRegistry 仍 === 5（独立 Registry 完全隔离）',
-    ruleRegistrySize() === 5)
+  // 4) 清理后 defaultRegistry 仍为 8 条（独立 Registry 完全隔离）
+  check('R16.11.4: 测试结束 defaultRegistry 仍 === 8（独立 Registry 完全隔离）',
+    ruleRegistrySize() === 8)
 }
 
 // ────────── 结果 ──────────

@@ -59,7 +59,69 @@ export function cognitionOutputPlugin(ctx: Context, config: OrcaConfig) {
         // Phase D：action 类型输出 → 转换为 Decision → emit 'orca/decision'
         case 'action':
           if (output.actionIntent) {
-            const decision = cognitionIntentToDecision(output.actionIntent)
+            // Cognition-level control actions are not executable skills.
+            // no_action means "do not use a skill, but tell the user why";
+            // silent means "do not produce a user-visible reply".
+            if (output.actionIntent.action === 'silent') break
+            if (output.actionIntent.action === 'no_action') {
+              handleTextReply({
+                ...output,
+                outputType: 'text/reply',
+                output: output.actionIntent.reason,
+              }, feishu, ctx)
+              break
+            }
+            const executor = ctx.get('actionExecutor') as { registry?: { get(action: string): unknown } } | undefined
+            const catalog = ctx.get('skillCatalog') as { validateAction(skillId: string | undefined, action: string): { ok: true } | { ok: false; error: string }; resolveAction?(action: string): string | undefined } | undefined
+            const resolvedSkillId = catalog?.resolveAction?.(output.actionIntent.action)
+            const suppliedSkillId = output.actionIntent.skillId
+            const skillId = suppliedSkillId && resolvedSkillId === suppliedSkillId ? suppliedSkillId : undefined
+            const validation = catalog?.validateAction(skillId, output.actionIntent.action)
+            if (validation && !validation.ok) {
+              ctx.logger.warn('[cognition-output] action validation rejected: action=%s reason=%s', output.actionIntent.action, validation.error)
+              // 将运行时校验错误作为内部结果回馈 CognitionCore，让模型按
+              // 同一会话重新生成；不要执行 no_action，否则 sourceEventId
+              // 指向内部事件，ActionExecutor 无法路由回原 Dashboard。
+              const eventBus = ctx.get('eventBus') as {
+                publish(input: { source: string; type: string; data: Record<string, unknown>; priority?: number; sessionId?: string }): void
+              } | undefined
+              if (eventBus && (output.dashboardMessageId || output.chatId)) {
+                eventBus.publish({
+                  source: 'internal',
+                  type: 'action-result',
+                  data: {
+                    action: output.actionIntent.action,
+                    success: false,
+                    message: `运行时拒绝了 Action：${validation.error}。请根据可用 Action 清单重新生成；不要执行任何未注册或技能 ID 不匹配的 Action。`,
+                    dashboardMessageId: output.dashboardMessageId,
+                    chatId: output.chatId,
+                  },
+                  priority: 1,
+                  sessionId: output.channelSessionId,
+                })
+              } else {
+                ctx.logger.warn('[cognition-output] validation error cannot be routed back to source session')
+              }
+              break
+            }
+            const registered = executor?.registry?.get(output.actionIntent.action)
+            if (!registered) {
+              ctx.logger.warn('[cognition-output] unknown action rejected: action=%s cognitionId=%s',
+                output.actionIntent.action, output.cognitionId)
+              const decision = cognitionIntentToDecision({
+                ...output.actionIntent,
+                action: 'no_action',
+                reason: `unknown-action:${output.actionIntent.action}`,
+              })
+              ctx.emit('orca/decision', decision)
+              break
+            }
+            const decision = cognitionIntentToDecision({
+              ...output.actionIntent, skillId,
+              reason: output.actionIntent.arguments
+                ? JSON.stringify(output.actionIntent.arguments)
+                : output.actionIntent.reason,
+            })
             ctx.emit('orca/decision', decision)
             ctx.logger.info('[cognition-output] action intent → decision: action=%s decisionId=%s',
               decision.action, decision.decisionId)
@@ -99,8 +161,8 @@ function cognitionIntentToDecision(intent: CognitionActionIntent): Decision {
     action: intent.action as Decision['action'],
     priority: 'normal',
     reason: intent.reason,
-    eventId: undefined,
     source: 'cognition',
+    eventId: intent.eventId,
     decidedAt: Date.now(),
   }
 }
@@ -147,6 +209,21 @@ function handleTextReply(
   // 避免空输出
   if (!output.output.trim()) {
     return
+  }
+
+  // Runtime 飞书回复也写入 EventBus 短期窗口；CognitionCore 下轮按同一 sessionId
+  // 读取，用于理解“那家/刚才那个”等多轮指代，不写入长期记忆。
+  if (output.channelSessionId) {
+    const eventBus = ctx.get('eventBus') as {
+      publish(input: { source: string; type: string; data: Record<string, unknown>; priority?: number; sessionId?: string }): void
+    } | undefined
+    eventBus?.publish({
+      source: 'orca',
+      type: 'conversation-reply',
+      data: { text: output.output, role: 'assistant' },
+      priority: 1,
+      sessionId: output.channelSessionId,
+    })
   }
 
   feishu.sendToChat(output.chatId, output.output).catch((err: unknown) => {

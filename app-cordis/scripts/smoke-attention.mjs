@@ -102,9 +102,9 @@ function mkPcAppFocus(app) {
 // ────────────────────────────────────────────────────────────
 {
   const engine = createAttentionEngine()
-  check('R8.A0: ruleCount === 7（含 feishu-message + dashboard-message）', engine.ruleCount() === 7)
-  // 注意：ruleRegistrySize 也是 6（模块加载时硬编码注册）
-  check('R8.A0b: ruleRegistrySize === 7', ruleRegistrySize() === 7)
+  check('R8.A0: ruleCount === 8（含用户消息与点餐 Action 结果规则）', engine.ruleCount() === 8)
+  // 注意：ruleRegistrySize 包含用户消息与点餐 Action 结果规则。
+  check('R8.A0b: ruleRegistrySize === 8', ruleRegistrySize() === 8)
 
   // ── R8.A1: empty input ──
   const emptyItems = engine.evaluate({ event: null, state: mkState(), prevState: undefined })
@@ -466,7 +466,7 @@ function mkFakeClock(initial = 0) {
 // 设计：
 // - AttentionRuleRegistry 接口：register / unregister / getRules / getAllRules / setEnabled / size / clear
 // - AttentionEngine 接受 registry 注入（不再硬编码模块全局 Map）
-// - createAttentionEngine() 不传参 → 使用默认 Registry（包含 5 条内置规则；保持 Phase 3.A 行为）
+// - createAttentionEngine() 不传参 → 使用默认 Registry（包含 8 条内置规则）
 // - createAttentionEngine(reg) → 使用自定义 Registry（便于测试 + 未来配置化）
 // - engine.ruleCount() = registry.size()（仅算启用）
 
@@ -559,11 +559,11 @@ function mkTestRule(id, trigger = true, action = 'remember_only') {
 
   // ── R11.5: 现有内置规则迁移后行为不变 ──
   const defaultReg = getDefaultRegistry()
-  check('R11.5.1: defaultRegistry.size() === 7（含 feishu-message + dashboard-message）', defaultReg.size() === 7)
-  check('R11.5.2: ruleRegistrySize() === 7（向后兼容）', ruleRegistrySize() === 7)
+  check('R11.5.1: defaultRegistry.size() === 8（含用户消息与点餐 Action 结果规则）', defaultReg.size() === 8)
+  check('R11.5.2: ruleRegistrySize() === 8（向后兼容）', ruleRegistrySize() === 8)
   // 不传参 createAttentionEngine → 使用默认 Registry
   const engine5 = createAttentionEngine()
-  check('R11.5.3: 默认 engine.ruleCount() === 7', engine5.ruleCount() === 7)
+  check('R11.5.3: 默认 engine.ruleCount() === 8', engine5.ruleCount() === 8)
   // 验证 R8 关键场景仍触发
   const r8sleep = engine5.evaluate({ event: null, state: mkState({ status: 'sleeping' }), prevState: undefined })
   check('R11.5.4: sleeping-quiet 仍触发（向后兼容）',
@@ -572,12 +572,12 @@ function mkTestRule(id, trigger = true, action = 'remember_only') {
   check('R11.5.5: feishu-deadline 仍触发（向后兼容）',
     r8deadline.length === 1 && r8deadline[0]?.ruleId === 'feishu-deadline')
 
-  // 自定义 Registry 替换默认：5 条规则不参与 evaluate
+  // 自定义 Registry 替换默认：默认规则不参与 evaluate
   const reg5b = createRuleRegistry()
   reg5b.register(mkTestRule('only-rule'))
   const engine5b = createAttentionEngine(reg5b)
   const r5b = engine5b.evaluate({ event: mkFeishuMsg('今晚前提交报告'), state: mkState() })
-  check('R11.5.6: 自定义 Registry（只有 only-rule）→ 不触发默认 5 条',
+  check('R11.5.6: 自定义 Registry（只有 only-rule）→ 不触发默认规则',
     r5b.length === 1 && r5b[0]?.ruleId === 'only-rule')
 }
 

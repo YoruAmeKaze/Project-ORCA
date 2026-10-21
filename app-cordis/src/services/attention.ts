@@ -245,6 +245,24 @@ const ruleDashboardMessage: AttentionRule = {
   }),
 }
 
+/** User-facing internal Action results return to CognitionCore in the originating conversation. */
+const ruleInternalActionResult: AttentionRule = {
+  id: 'internal-action-result',
+  description: '带原会话路由的内部 Action 结果交由 CognitionCore 继续处理并回复用户',
+  predicate: ({ event }) => event?.source === 'internal' && event.type === 'action-result' &&
+    typeof event.data.action === 'string' &&
+    typeof event.data.message === 'string' && event.data.message.trim().length > 0 &&
+    (typeof event.data.dashboardMessageId === 'string' || typeof event.data.chatId === 'string'),
+  produce: ({ event }) => ({
+    priority: 'normal',
+    reason: `Action=${String(event?.data.action ?? 'unknown')} success=${String(event?.data.success === true)}\n${String(event?.data.message ?? '')}${event?.data.error ? `\n错误：${String(event.data.error)}` : ''}`,
+    action: 'ignore',
+    eventId: event?.id,
+    dashboardMessageId: typeof event?.data.dashboardMessageId === 'string' ? event.data.dashboardMessageId : undefined,
+    chatId: typeof event?.data.chatId === 'string' ? event.data.chatId : undefined,
+  }),
+}
+
 // 模块加载时一次性注册（与 Phase 2.A reducer 模式一致）
 registerRule(ruleSleepingQuiet)
 registerRule(ruleFeishuDeadline)
@@ -253,6 +271,7 @@ registerRule(ruleAwayArrival)
 registerRule(ruleFocusInterrupt)
 registerRule(ruleFeishuMessage)
 registerRule(ruleDashboardMessage)
+registerRule(ruleInternalActionResult)
 
 // ── AttentionEngine 服务 ────────────────────────────────────────────────
 

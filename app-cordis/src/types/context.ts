@@ -16,6 +16,7 @@
  */
 
 import type { FactType, LongMemoryFact } from './memory.js'
+import type { CategoryPath } from './category.js'
 import type { WorldState } from './worldState.js'
 import type { InfoRecord } from '../agents/types.js'
 
@@ -39,6 +40,7 @@ export interface MemoryRetrievalQuery {
   minConfidence?: number
   /** 默认 10（D-AGENT-20 §12.3.3） */
   limit?: number
+  category?: Partial<CategoryPath>
   /**
    * Per-call scoring override。
    * 优先级高于 Config.scoringPreset。

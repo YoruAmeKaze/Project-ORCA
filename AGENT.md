@@ -1,6 +1,6 @@
 # Project Orca — Agent 启动上下文（AGENT.md）
 
-> **给新会话/新代理的启动引导**：开工前先通读本文档，再按需深读具体文件。本文档是当前代码（**app-cordis v1.0.0 + Phase A+B**）+ 设计稿（**Phase 7.3 Architecture Review + IM Bridge IM-1.0 + guide/orca-memory-quality-design.md**）的权威快照。
+> **给新会话/新代理的启动引导**：开工前先通读本文档，再按需深读具体文件。本文档是当前代码（**app-cordis v1.0.0 + Phase A+B + 点餐只读 MCP MVP**）+ 设计稿（**Phase 7.3 Architecture Review + IM Bridge IM-1.0 + guide/orca-memory-quality-design.md**）的权威快照。
 > 与 `README.md`（对外概述）、`dev-log.md`（历史日志）、`TODO.md`（待办）配合使用；冲突时**以本文档 + 源码为准**。
 > **维护规则（硬性，见 `guide/decisions.md` D-VER-04）**：每次代码有实质变更（新机制、版本升级），**提交前必须同步本文档**——改目录结构/机制/配置键/版本号/待办中任一项即必改对应板块；dev-log 条目末尾标注"AGENT.md 已同步"。代码改了但本文档停在旧状态 = 违规提交。
 
@@ -48,6 +48,7 @@ npm start                         # node dist/index.js；或 npm run dev（tsx w
           └─ CognitiveScheduler（Phase A：enqueue → pendingAttentions → emit 'orca/cognition-request'）
             → CognitionCore（Phase B：消费 orca/cognition-request → 创建 CognitionSession → 发 cognition/started → LLM.chat() → 发 cognition/completed/failed）
         → ActionExecutor（Phase 4.B + 4.D + Phase 5.2：registry + builtin handlers + deferred store + scheduler consume + memory.remember/forget）→ emit 'orca/action-result'
+        → order-mcp-actions（独立瑞幸 / 麦当劳官方 MCP 只读 ActionHandler；schema 动态核验；默认关闭；不注册任何写操作）
         → NotifyHandler（Phase 4.C：EventBus.get(id) 反查 → FeishuClient.sendToChat）
         → Phase 4.E：deferred-scheduler 按 chatId 分组合并 → emit merged notify Decision（上限 5 条）
   → MemoryStore（Phase 5.0：LongMemory mutation authority；JSONL + 内存索引；提供 queryFacts/getFact/upsertFact/supersedeFact/mergeFacts/compressFactEvidence/forgetFact/forgetByQuery/createForgetMarker/queryForgetMarkers/queryAudit + Candidate promote/reject/expire）
@@ -83,13 +84,15 @@ app-cordis/                    # ★ Cordis/TypeScript 版（唯一主线）
 │   │   ├── context.ts         # Cordis Context 类型增强（feishu/llm/vision/sessions/info*/eventBus/worldState/attention/decision）
 │   │   ├── session.ts         # SessionStore：内存会话
 │   │   ├── agents/            # 信息获取框架：types/registry（闭集）/store（档案室 JSONL）/executor（Pull）/router（R0+R1）/builtins/food-log.ts（food-agent）
-│   │   ├── services/          # feishu / llm（DeepSeek）/ vision（Qwen VL）/ eventBus / worldState / attention / attention-config / decision / action / memoryStore（Phase 5.0）/ episodeEngine（Phase 5.1）/ reflectionEngine（Phase 5.3）/ scheduledRuleRegistry（Phase 7.1B）
-│   │   ├── plugins/           # feishu-channel / agent / info-agents / info-receiver / image-router / food-image / dashboard（legacy UI + Frontend-facing Runtime API）/ orca-runtime / world-state-updater / attention-engine / decision-engine / action-executor / episode-engine（Phase 5.1）/ reflection-engine（Phase 5.3）/ scheduled-rule-registry（Phase 7.1B）/ input-adapters/{feishu,dashboard,pc,calendar,phone,scheduler}-adapter
+│   │   ├── services/          # feishu / llm（DeepSeek）/ vision（Qwen VL）/ eventBus / worldState / attention / attention-config / decision / action / orderMcp（瑞幸、麦当劳独立只读 MCP）/ memoryStore（Phase 5.0）/ episodeEngine（Phase 5.1）/ reflectionEngine（Phase 5.3）/ scheduledRuleRegistry（Phase 7.1B）
+│   │   ├── plugins/           # feishu-channel / agent / info-agents / info-receiver / image-router / food-image / dashboard（legacy UI + Frontend-facing Runtime API）/ orca-runtime / world-state-updater / attention-engine / decision-engine / action-executor / order-mcp-actions（只读 MCP handlers）/ episode-engine（Phase 5.1）/ reflection-engine（Phase 5.3）/ scheduled-rule-registry（Phase 7.1B）/ input-adapters/{feishu,dashboard,pc,calendar,phone,scheduler}-adapter
 │   │   ├── types/             # event.ts（OrcaEvent）/ runtime-presentation.ts（stable Frontend contract）/ worldState.ts / attention.ts / decision.ts / action.ts / memory.ts（Phase 5.0+5.1：LongMemoryFact / MemoryCandidate / AuditEvent / ForgetMarker / Episode / MemoryStore 接口）/ runtime-adapter.ts（Phase 7.1A）/ scheduled-rule.ts（Phase 7.1B）
 │   │   ├── rules/scheduled/   # briefing.ts / reflection.ts（Phase 7.1B deterministic rules）
 │   │   └── data/              # records/ 档案室 JSONL + images/ 图片落盘（gitignore）
-│   └── scripts/               # smoke-info-agent / smoke-world-state / smoke-attention / smoke-cognitive-scheduler（Phase A） / smoke-cognition-core（Phase B） / smoke-decision / smoke-action / smoke-memory（Phase 5.0） / smoke-episode（Phase 5.1） / smoke-memory-handler（Phase 5.2） / smoke-reflection（Phase 5.3） / smoke-d-agent-18（Phase 5.3.1） / smoke-memory-attention（Phase 5.4.A） / smoke-memory-event-bridge（Phase 5.4.B） / smoke-scheduled-rule-registry（Phase 7.1B） / smoke-briefing-rule（Phase 7.1B） / smoke-reflection-rule（Phase 7.1B） / smoke-reminder-rule（Phase 7.1B） / recognize-food / list-food
+│   └── scripts/               # smoke-info-agent / smoke-world-state / smoke-attention / smoke-cognitive-scheduler（Phase A） / smoke-cognition-core（Phase B） / smoke-decision / smoke-action / smoke-order-mcp / verify-order-mcp-live（只读真实服务核验） / smoke-memory（Phase 5.0） / smoke-episode（Phase 5.1） / smoke-memory-handler（Phase 5.2） / smoke-reflection（Phase 5.3） / smoke-d-agent-18（Phase 5.3.1） / smoke-memory-attention（Phase 5.4.A） / smoke-memory-event-bridge（Phase 5.4.B） / smoke-scheduled-rule-registry（Phase 7.1B） / smoke-briefing-rule（Phase 7.1B） / smoke-reflection-rule（Phase 7.1B） / smoke-reminder-rule（Phase 7.1B） / recognize-food / list-food
 guide/                         # 设计文档（memory-pack / decisions / orca-cordis-migration-plan / orca-info-agent-framework / orca-iphone-channel）
+skills/order-food/SKILL.md    # 瑞幸 / 麦当劳中国点餐 Skill：只读 MVP 已接入 ActionExecutor；写操作未开放
+skills/windows-mcp/SKILL.md  # Windows-MCP 桌面只读观察接入规格（Orca 适配器已实现，默认关闭）
 AGENT.md                       # ★ 本文档
 dev-log.md / TODO.md / README.md
 ```
@@ -104,6 +107,7 @@ dev-log.md / TODO.md / README.md
 ### 4.2 InfoAgent 框架（agents/）
 - **CEO-员工-档案室模型**：主 agent（CEO）只决策汇总；信息源 = InfoAgent（员工）；档案室 = 每 namespace 一 JSONL
 - **闭集注册表**（D-AGENT-02）：新增信息源 = 注册一个 InfoAgent，主循环零改动
+- **点餐 MCP（只读 MVP）**：`services/orderMcp.ts` + `plugins/order-mcp-actions.ts` 将瑞幸和麦当劳作为独立 MCP 服务，固定 Action 经现有 `ActionExecutor → ActionHandler → ActionResult` 执行；实时 `tools/list` / schema 变化即 fail closed，输出中文摘要并回传原 Feishu 会话。CognitionCore 将 `orderMcp` 作为可选服务通过 `ctx.get('orderMcp')` 读取，未注册时仍可正常回复。需显式启用 Runtime、ActionExecutor 和单独供应商开关；`.env.example` 列出配置键。`skills/order-food/SKILL.md` 记录原子操作和安全边界。已对两家官方只读门店查询做凭证下实查，测试入口为 `npm run smoke:order-mcp` 与 `npm run verify:order-mcp-live`。当前不注册建单、取消、领券、改地址、支付；确认闭环尚未实现。
 - **R0 查档优先**（D-AGENT-10）：饮食类问题先查档案，命中直接复用（零视觉调用，省钱核心）
 - **档案室**（D-AGENT-09/11/12）：append-only + supersedes 更正、软删/整夹清空 + ttl 清理、pending 待汇报队列
 
@@ -586,6 +590,9 @@ Memory → Attention（唯一路径）：
 - **v1.8.0 hotfix（2026-09-08）**：ContextAssembler 插件激活顺序修复。**根因**：Cordis v4 `ctx.plugin()` 是**异步 Fiber 激活**——顶层 `ctx.plugin(infoAgents, config)` 紧跟 `ctx.get('infoStore')` 时，infoStore 仍是 undefined（fiber 还没跑完），ContextAssembler 永远跳过 → `agent.inject['contextAssembler']` 缺失 → agent INACTIVE → `ctx.on('feishu/message', ...)` 从未注册 → 飞书不回。**修复**：新建独立 plugin `src/plugins/context-assembler-provider.ts`，`inject=['memory','infoStore']`，plugin 体内同步 `ctx.provide('contextAssembler', ...)`，依赖由 Cordis DI 在 fiber 激活时保证就绪；同时补 index.ts L195/L198/L201 三处 plugin 调用漏传 `config`（v0.6.4 漏传 bug，并行 fix）。**架构边界冻结（详见 `guide/decisions.md` D-AGENT-22）**：顶层禁用 `ctx.get()` 抢 Service Locator 模式，依赖解析必须走 plugin inject。`tsc --noEmit` 通过；dist 启动日志确认 `Phase 6.A ContextAssembler 已启用`。**AGENT.md 已同步**。
 
 ### 8.2 待办（TODO.md）
+- **D-REACT-01（2026-10-12，基础阶段已落地）**：采用受控技能发现与有限 ReAct：SkillCatalog 检索闭集技能 → SkillLoader 按需读受控说明 → 选择固定原子 Action → bounded loop 根据 ActionResult 继续/结束。已落地 JSON/`/act` 意图校验、4 轮/2 分钟/同 Action 2 次预算；写操作确认仍未开放。详细路径见 `guide/decisions.md` D-REACT-01 和 `TODO.md`。
+- **D-WIN-01（2026-10-08，只读适配器已落地）**：Windows-MCP 只读桌面观察接入。Orca 通过受保护 Streamable HTTP 连接，固定开放 Screenshot / Snapshot / DisplayInventory / ControlStatus，系统命令、文件、注册表、进程和键鼠工具均禁用；默认关闭，live endpoint 需用户环境验证。详细规格见 `skills/windows-mcp/SKILL.md` 与 `guide/decisions.md` D-WIN-01。
+- **D-ORG-01（2026-10-08，基础阶段已落地）**：Memory 与技能按“领域 / 子领域 / 功能”浏览检索；SkillCatalog 与 MemoryFact 分类过滤已实现，旧 Memory 兼容 `uncategorized`，不改变 Memory identity/mutation authority 或 ActionExecutor 边界。详细方法与验收标准见 `guide/decisions.md` D-ORG-01 和 `TODO.md`。
 - **Phase 6 设计稿（2026-08-27）**：Memory-aware CEO Context——`guide/orca-memory-consumption-design.md` §12 + D-AGENT-20。CEO Context 四元组：input / worldState / info / memory；R3 层注入 memoryFacts，按 subject 匹配 → type 过滤 → 全局查询三优先级；Top-K=10，字符限制每条 ≤ 80 / R3 总计 ≤ 500；Token 预算 500 token 固定配额。**Phase 6.A（ContextAssembler）已实现（见 Phase 6.A 条目）**。**Phase 6.B：MemoryCache（TTL 5 分钟，`memory_changed` 事件失效）未实现**。
 - **Phase 4.F**：ActionPlan 拆分（payload / channel / target）；真实 act handler（最小权限 + 白名单校验）；支持 bark / 邮件等其他通知渠道（NotifyHandler 按 event.source 分支扩展）；urgency=2 推送门控
 - 迁移 search_web / capture_screenshot / analyze_image 为 InfoAgent（Pull）

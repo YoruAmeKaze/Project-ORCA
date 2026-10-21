@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import type { OrderMcpConfig } from './services/orderMcp.js'
+import type { WindowsMcpConfig } from './services/windowsMcp.js'
 
 export interface FeishuConfig {
   appId: string
@@ -239,6 +241,15 @@ export interface OrcaFilesystemConfig {
   readRoot: string
 }
 
+export interface OrcaLocationConfig {
+  /** 是否允许读取本机定位；默认关闭，需用户在本机显式启用 */
+  enabled: boolean
+  /** Windows 系统定位服务等待时间（毫秒） */
+  timeoutMs: number
+  /** 当前定位在内存中可供后续附近查询使用的有效期（毫秒） */
+  cacheTtlMs: number
+}
+
 export interface OrcaConfig {
   host: string
   port: number
@@ -247,6 +258,7 @@ export interface OrcaConfig {
   qwen: QwenConfig
   dryRun: boolean
   filesystem: OrcaFilesystemConfig
+  location: OrcaLocationConfig
   historyTurns: number
   infoRecordsDir: string
   imagesDir: string
@@ -261,6 +273,10 @@ export interface OrcaConfig {
   memory: OrcaMemoryConfig
   /** Phase 6.A ContextAssembler */
   contextAssembler: OrcaContextAssemblerConfig
+  /** 独立的瑞幸 / 麦当劳 MCP 只读 Action 配置（默认禁用） */
+  orderMcp: OrderMcpConfig
+  /** Optional Windows-MCP read-only desktop observer (disabled by default). */
+  windowsMcp: WindowsMcpConfig
 }
 
 const here = dirname(fileURLToPath(import.meta.url)) // app-cordis/src
@@ -336,6 +352,11 @@ export function getConfig(): OrcaConfig {
     sessionsDir: process.env.ORCA_SESSIONS_DIR || resolve(appRoot, 'data', 'sessions'),
     filesystem: {
       readRoot: process.env.ORCA_FS_READ_ROOT || resolve(appRoot, 'data'),
+    },
+    location: {
+      enabled: process.env.ORCA_LOCATION_ENABLED === '1',
+      timeoutMs: Number(process.env.ORCA_LOCATION_TIMEOUT_MS ?? 10_000),
+      cacheTtlMs: Number(process.env.ORCA_LOCATION_CACHE_TTL_MS ?? 5 * 60_000),
     },
     infoReceiver: {
       port: Number(process.env.INFO_RECEIVER_PORT ?? 8101),
@@ -442,6 +463,25 @@ export function getConfig(): OrcaConfig {
       infoRecordsLimit: Number(process.env.ORCA_MEMORY_CONTEXT_INFO_RECORDS_LIMIT ?? 3),
       scoringPreset: (process.env.ORCA_MEMORY_SCORING_PRESET as 'confidence' | 'source-confidence') ?? 'confidence',
       detectSemanticConflict: process.env.ORCA_MEMORY_CONFLICT_DETECT_SEMANTIC === '1',
+    },
+    orderMcp: {
+      luckin: {
+        enabled: process.env.ORCA_LUCKIN_MCP_ENABLED === '1',
+        endpoint: 'https://gwmcp.lkcoffee.com/order/user/mcp',
+        token: process.env.LUCKIN_COFFEE_TOKEN || '',
+      },
+      mcd: {
+        enabled: process.env.ORCA_MCD_MCP_ENABLED === '1',
+        endpoint: 'https://mcp.mcd.cn',
+        token: process.env.MCDONALD_TOKEN || '',
+      },
+    },
+    windowsMcp: {
+      enabled: process.env.ORCA_WINDOWS_MCP_ENABLED === '1',
+      endpoint: process.env.ORCA_WINDOWS_MCP_ENDPOINT || '',
+      token: process.env.ORCA_WINDOWS_MCP_TOKEN || '',
+      timeoutMs: Number(process.env.ORCA_WINDOWS_MCP_TIMEOUT_MS ?? 15_000),
+      protocolVersion: process.env.ORCA_WINDOWS_MCP_PROTOCOL_VERSION || '2025-06-18',
     },
   }
 }
