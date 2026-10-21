@@ -2400,6 +2400,14 @@ AttentionItem → orca/attention
 - 强化输出协议：单轮只输出一个 Action 意图；没有 Action 时输出自然语言；等待 ActionResult 时不得提前声称成功或结束任务。
 - `smoke-cognition-prompt.mjs` 增加动态清单和多轮循环约束断言。
 
+## 2026-10-22 Prompt 输入协议与 persona 边界收敛
+
+- `persona.ts` 不再维护固定的“已实装/未实装能力”清单，避免静态能力描述覆盖 Runtime 当前注入的 Action；persona 只保留身份和表达风格，并声明能力以运行时上下文为准。
+- CognitionCore prompt 新增输入协议：说明 system、user、Attention、内部 ActionResult、近期对话以及 source/device/rule 元数据各自的含义。
+- 明确 `registry.list()` 仅由 Runtime 用于构造当前 Action 清单，模型不能把它当成可绕过 ActionExecutor 的隐藏函数；当前也没有可由模型自行调用的通用 capability.list/capability.describe。
+- 新增每轮认知步骤：读取上下文、区分事实、判断是否需要 Action、单轮选择一个 Action、等待 ActionResult、复用结果并在停止时说明缺失条件。
+- 验证：`npm run build`、`npm run smoke:cognition-prompt`、`npm run smoke:action` 通过。
+
 ## 2026-09-19 Dashboard 前端视觉优化
 
 - 保留现有 Dashboard API、SSE 实时回复和命令输入逻辑，仅更新 `src/plugins/dashboard.ts` 内嵌样式。
