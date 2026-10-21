@@ -2451,7 +2451,6 @@ document.addEventListener('DOMContentLoaded', function() {
     if (!message) return
     message.className = 'chat-msg ' + classes
     message.textContent = text || 'No response received.'
-    if (chatThread) chatThread.scrollTop = chatThread.scrollHeight
   }
 
   function appendActivity(icon, cls, text, meta, id) {
