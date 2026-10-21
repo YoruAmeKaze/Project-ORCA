@@ -2393,6 +2393,13 @@ AttentionItem → orca/attention
 - 新增 `app-cordis/scripts/smoke-cognition-prompt.mjs`，覆盖 Skill/Action 边界、静态 capability 清单声明、ActionResult 状态边界和事实分类；未修改 ActionExecutor 执行链路。
 - 验证：`npm run build`、`npm run smoke:cognition-prompt`、`npm run smoke:action` 通过。现有 `npm run smoke:skill` 仍因 `order-luckin` 元数据 `documentId=order-food` 与文档加载契约不一致而失败，属于既有 Skill 文档身份问题。
 
+## 2026-10-22 动态 Action 与受控多轮认知补充
+
+- 移除 CognitionCore 固定 Action 示例的规则性依赖，明确 Action 名称、说明、schema、风险和确认要求全部以 Runtime 当前注入清单为准。
+- 增加受控多轮认知规则：每轮最多一个原子 Action，等待 Runtime 回灌 ActionResult 后再决定下一步；不编造中间结果，不自行无限循环。
+- 强化输出协议：单轮只输出一个 Action 意图；没有 Action 时输出自然语言；等待 ActionResult 时不得提前声称成功或结束任务。
+- `smoke-cognition-prompt.mjs` 增加动态清单和多轮循环约束断言。
+
 ## 2026-09-19 Dashboard 前端视觉优化
 
 - 保留现有 Dashboard API、SSE 实时回复和命令输入逻辑，仅更新 `src/plugins/dashboard.ts` 内嵌样式。
