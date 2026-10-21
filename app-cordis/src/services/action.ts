@@ -152,6 +152,7 @@ function okResult(decision: Decision, metadata?: Record<string, unknown>): Actio
     success: true,
     action: decision.action,
     decisionId: decision.decisionId,
+    sourceEventId: decision.eventId,
     executedAt: Date.now(),
   }
   if (metadata) r.metadata = metadata
@@ -163,6 +164,7 @@ function failResult(decision: Decision, error: string): ActionResult {
     success: false,
     action: decision.action,
     decisionId: decision.decisionId,
+    sourceEventId: decision.eventId,
     error,
     executedAt: Date.now(),
   }

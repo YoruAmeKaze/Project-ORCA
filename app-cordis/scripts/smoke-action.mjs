@@ -137,12 +137,13 @@ function makeTmpStore() {
 // ── R14.1: no_action → success=true ──
 {
   const executor = createActionExecutor()
-  const decision = mkDecision({ action: 'no_action', decisionId: 'dec_noop_001' })
+  const decision = mkDecision({ action: 'no_action', decisionId: 'dec_noop_001', eventId: 'evt_noop_001' })
   const result = await executor.execute(decision)
 
   check('R14.1.1: no_action → success=true', result.success === true)
   check('R14.1.2: no_action → action 保留', result.action === 'no_action')
   check('R14.1.3: no_action → decisionId 透传', result.decisionId === 'dec_noop_001')
+  check('R14.1.3b: no_action → sourceEventId 透传', result.sourceEventId === 'evt_noop_001')
   check('R14.1.4: no_action → executedAt 是 number', typeof result.executedAt === 'number' && result.executedAt > 0)
   check('R14.1.5: no_action → 无 error', result.error === undefined)
 
@@ -371,6 +372,16 @@ function makeTmpStore() {
   const r1 = results14c[0]
   check('R14.8.2: noop → result.success=true', r1?.success === true)
   check('R14.8.3: noop → result.decisionId 透传', r1?.decisionId === 'dec_integration_noop')
+
+  // no_action 仍产生执行层结果供审计，但不应作为工具结果回流 EventBus。
+  eventBus.publish({ id: 'noop-source-event', source: 'dashboard', type: 'message', sessionId: 'dashboard:noop', data: { id: 'noop-source-event', text: '无需操作', actor: 'user' } })
+  results14c.length = 0
+  ctx.emit('orca/decision', mkDecision({ action: 'no_action', decisionId: 'dec_integration_noop_bridge', eventId: 'noop-source-event' }))
+  await pollFor(() => results14c.some((r) => r.decisionId === 'dec_integration_noop_bridge'), 500)
+  const noopBridgeEvent = eventBus.recent(20).find((e) => e.source === 'internal' && e.type === 'action-result' && e.data.decisionId === 'dec_integration_noop_bridge')
+  const noopBridgeResult = results14c.find((r) => r.decisionId === 'dec_integration_noop_bridge')
+  check('R14.8.3b: noop ActionResult 保留 sourceEventId', noopBridgeResult?.sourceEventId === 'noop-source-event')
+  check('R14.8.3c: no_action 不回流为内部 action-result Event', !noopBridgeEvent)
 
   // ── R14.8.x: remember 决策 → 写入 infoStore ──
   results14c.length = 0

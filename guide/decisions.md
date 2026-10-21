@@ -101,6 +101,13 @@ EventBus → WorldState → Attention → CognitiveScheduler
 
 **状态**：已实现 SkillCatalog/SkillLoader、候选说明注入、JSON/`/act` 双协议、skill→action/注册 Action 校验，以及 CognitionCore 的 4 轮/2 分钟/同 Action 2 次 bounded loop。写操作确认暂停点仍保持关闭，未来需单独增加审批闭环。
 
+**实现收口（2026-10-12）**：
+- `src/services/skillCatalog.ts` 与 `src/types/skill.ts` 提供闭集 skill 元数据、分类、候选检索和 Action 映射；`src/services/skillCatalog.ts` 同时提供受控文档加载与提示注入检测。
+- `src/services/cognition-core.ts` 将候选说明、JSON Action 意图、旧 `/act` 兼容解析、Validator 和 bounded loop 接入同一 CognitionSession；`ActionResult` 只写入 ephemeral WorkingMemory，达到预算时统一输出正式 `no_action`。
+- `src/types/category.ts` 与 `src/types/memory.ts` 增加可选 Memory 分类元数据；分类过滤不改变 `(type, subject)` identity、forget 和审计语义。
+- `src/services/windowsMcp.ts`、`src/plugins/windows-mcp-actions.ts` 实现 Windows-MCP 只读适配器；`src/services/skillCatalog.ts` 的 Windows 条目只映射固定 `windows.desktop.*` Action，不把上游 `tools/list` 直接暴露给模型。
+- `scripts/smoke-skill.mjs`、`smoke-windows-mcp.mjs`、`smoke-memory-category.mjs` 覆盖闭集、fail-closed、分类兼容和只读协议边界；完整 `npm run smoke:all` 通过。当前仅缺用户环境下的 Windows-MCP live 验证。
+
 ---
 
 ## 历史归档：Python/PTE 迁移与 DSL 设计

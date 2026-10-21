@@ -2,6 +2,22 @@
 
 > 提交惯例（见 `guide/decisions.md` D-VER-01~04）：每 commit 升版本（MAJOR/MINOR/PATCH）、写本日志、**同步更新 AGENT.md**、commit message 带版本前缀。本条不参与版本计数。
 
+## 2026-10-13：修复 no_action ActionResult 来源追踪与回流误报
+
+- `okResult`、`failResult` 和 executor 兜底错误统一透传 `sourceEventId=Decision.eventId`。
+- ActionResult→EventBus bridge 对 `no_action` 保留执行层事件但跳过内部 `action-result` 回流；无副作用的 ignore/no_action 不再触发缺少原会话路由信息警告。
+- `smoke-action` 新增来源透传与 no_action 跳过回流回归，结果 92/92 PASS；构建、Dashboard runtime、Deferred scheduler smoke 均通过。
+- AGENT.md 已同步。
+
+## 2026-10-12：受控技能运行时实现收口
+
+- **分类与目录**：落地受控分类词表（领域 / 子领域 / 功能 + `uncategorized`），`LongMemoryFact`、`MemoryCandidate`、`FactQuery` 支持可选分类；新增闭集 `SkillCatalog`，记录 skill 分类、原子 Action、风险、确认级别和可用状态。分类只用于浏览/检索，不改变 Memory identity、forget fingerprint、审计或执行权限。
+- **技能说明加载**：新增 `SkillLoader`，只从受控技能根目录读取 `SKILL.md`，实施路径越界、文件大小、加载次数、文档身份和提示注入检测；补齐 `system-info`、`filesystem-read` 说明，并接入现有点餐和 Windows-MCP 说明。
+- **CognitionCore**：候选技能摘要/说明按需注入 prompt；支持结构化 JSON Action 意图并兼容旧 `/act`；增加 skill→Action 与注册 Action 校验，未知、不可用或越权 Action fail closed。CognitionSession 使用 bounded loop（最多 4 轮、总时长 2 分钟、同一 Action 最多 2 次），ActionResult 只进入当前 WorkingMemory；`no_action` 作为正式 Action，不输出“嗯/哦/收到”等占位自然语言。
+- **Windows-MCP**：新增默认关闭的 Streamable HTTP 只读适配器和固定四个 `windows.desktop.*` Action；Bearer 认证、MCP 会话、双 allowlist、`readOnlyHint`/schema 校验、超时/认证/未知响应均 fail closed，图片只生成摘要，不落盘、不写 Memory。
+- **Dashboard 与回归**：新增 `GET /api/runtime/skills` 只读技能目录接口；`smoke:all` 纳入 Skill、Windows-MCP、Memory 分类 smoke，并同步修正默认 Attention Registry 已扩展为 8 条规则后的旧断言。
+- 验证：`npm run build`、`npm run typecheck`、`npm run smoke:all`、`smoke:skill`、`smoke:windows-mcp`、`smoke:memory-category` 全部通过；Windows-MCP live endpoint 仍待用户环境凭证验证。`AGENT.md`、`TODO.md` 和相关决议已同步。
+
 ## 2026-10-12：整理 Architecture Decisions 文档结构
 
 - `guide/decisions.md` 新增阅读入口、决议状态索引和当前 Runtime 主线图。

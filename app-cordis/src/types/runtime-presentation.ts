@@ -12,6 +12,7 @@ export type RuntimePresentationMode = 'idle' | 'attention' | 'cognition' | 'acti
 export type RuntimePresentationEventType =
   | 'message.received'
   | 'message.completed'
+  | 'message.silent'
   | 'attention.created'
   | 'cognition.started'
   | 'cognition.completed'

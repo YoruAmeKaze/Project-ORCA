@@ -337,6 +337,17 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
           : undefined
         write({ id: sessionId, type: 'cognition.failed', at: Date.now(), source: 'orca', summary: 'Cognition did not complete', correlationId: requestId }); writeState()
       }),
+      ctx.on('orca/cognition-output', (output: { actionIntent?: { action?: string }; dashboardMessageId?: string }) => {
+        if (output.actionIntent?.action !== 'silent' || !output.dashboardMessageId) return
+        write({
+          id: `silent-${output.dashboardMessageId}-${Date.now()}`,
+          type: 'message.silent',
+          at: Date.now(),
+          source: 'orca',
+          summary: 'No response required',
+          correlationId: output.dashboardMessageId,
+        })
+      }),
     ]
     const ping = setInterval(() => res.write(': ping\n\n'), 15_000)
     req.on('close', () => { clearInterval(ping); unsubscribers.forEach((unsubscribe) => unsubscribe()) })
@@ -2487,7 +2498,7 @@ document.addEventListener('DOMContentLoaded', function() {
           var reply = ev.message && ev.message.text || 'No response received.'
           updateActivity(ev.correlationId, '◉', 'act-av-g', esc(reply), new Date(ev.at).toLocaleTimeString('zh-CN', { hour12: false }))
           updateChatMessage(ev.correlationId, 'orca', reply)
-        } else if (ev.type === 'cognition.completed' || ev.type === 'cognition.failed') {
+        } else if (ev.type === 'message.silent' || ev.type === 'cognition.completed' || ev.type === 'cognition.failed') {
           // Cognition may intentionally produce no reply (for example no_action).
           // End only the pending bubble associated with this dashboard request.
           var pendingId = ev.correlationId && 'chat-' + ev.correlationId
