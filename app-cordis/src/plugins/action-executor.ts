@@ -39,27 +39,53 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { OrcaConfig } from '../config.js'
 import type { Decision } from '../types/decision.js'
 import type { ActionExecutorService } from '../types/action.js'
+import { createCurrentLocationHandler, createLocationService } from '../services/location.js'
+import { createSkillCatalog, createSkillLoader, defaultSkillsRoot } from '../services/skillCatalog.js'
 import {
   createActionExecutor,
+  createFilesystemReadHandler,
+  createSystemInfoHandler,
   createMemoryForgetHandler,
   createMemoryRememberHandler,
   createNotifyHandler,
   createRememberHandler,
 } from '../services/action.js'
+import { actionFingerprint, createContinuationStateService } from '../services/continuationState.js'
 import { createCapabilityHandlers } from '../services/capability-actions.js'
-import { skillCatalog } from '../services/skill-catalog.js'
 
 /**
  * ActionExecutor Cordis plugin
  *
- * 无 inject 声明（executor 不强依赖 ctx 服务；remember/notify handler 由 plugin 内部按需获取）。
+ * EventBus 是 ActionResult 回流 CognitionCore 的必需依赖，使用 Cordis inject
+ * 门控确保插件激活时已处于正确的 runtime fiber。其他服务仍按需获取。
  * 订阅 ctx.on('orca/decision') 不阻塞 emit（ctx.on 注册的是 listener；emit 是 sync 派发所有 listener）。
  */
 export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   // 1. 创建 ActionExecutor（含 registry + deferred store）
   const executor: ActionExecutorService = createActionExecutor()
   ctx.provide('actionExecutor', executor)
+  const continuation = createContinuationStateService()
+  ctx.provide('continuationState', continuation)
+  const skillCatalog = createSkillCatalog(() => executor.registry.list())
   ctx.provide('skillCatalog', skillCatalog)
+  ctx.provide('skillLoader', createSkillLoader(defaultSkillsRoot(), skillCatalog))
+
+  const locationService = _config.location?.enabled
+    ? createLocationService(_config.location)
+    : undefined
+  if (locationService) {
+    ctx.provide('location', locationService)
+    executor.registry.register(createCurrentLocationHandler(locationService))
+    ctx.logger.info('[action-executor] location.current 已启用（系统授权定位；坐标仅短期保存在内存）')
+  } else {
+    ctx.logger.info('[action-executor] location.current 未启用（设置 ORCA_LOCATION_ENABLED=1 并授予系统定位权限后可用）')
+  }
+
+  ctx.provide('actionDescriptions', () => [
+    ...(locationService ? [
+      '- location.current: 获取本机当前定位，供需要当前位置的附近查询使用。仅在相关请求需要当前位置时调用；参数 JSON 为 {}。精确坐标不会返回给对话或写入日志。',
+    ] : []),
+  ])
 
   // 2. 注入 remember handler（依赖 infoStore）
   // infoStore 在 infoAgents plugin 中 provide；这里用 ctx.get 软获取（未启用时跳过）
@@ -83,7 +109,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   const feishu = ctx.get('feishu') as
     | Parameters<typeof createNotifyHandler>[0]['feishu']
     | undefined
-  const eventBus = ctx.get('eventBus') as
+  const eventBus = ctx.eventBus as
     | Parameters<typeof createNotifyHandler>[0]['eventBus']
     | undefined
   if (feishu && eventBus) {
@@ -123,6 +149,25 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
     logger: ctx.logger,
   })) executor.registry.register(handler)
 
+  // 2.8 注入 system.info handler（Phase E；只读系统环境）
+  if (_config.filesystem?.readRoot) {
+    executor.registry.register(createSystemInfoHandler({ diskPath: _config.filesystem.readRoot, logger: ctx.logger }))
+    ctx.logger.info('[action-executor] system.info handler 已挂载（只读系统快照）')
+  }
+
+  // 2.7 注入 filesystem.read handler（Phase D；依赖 config.filesystem.readRoot）
+  if (_config.filesystem?.readRoot) {
+    executor.registry.register(createFilesystemReadHandler({
+      allowedRoot: _config.filesystem.readRoot,
+      logger: ctx.logger,
+    }))
+    ctx.logger.info('[action-executor] filesystem.read handler 已挂载（readRoot=%s）', _config.filesystem.readRoot)
+  } else {
+    ctx.logger.info(
+      '[action-executor] filesystem.readRoot 未配置；filesystem.read handler 未挂载',
+    )
+  }
+
   ctx.logger.info(
     '[action-executor] 已启动（handlers: %s）',
     executor.registry.list().map((h) => `${h.action}=${h.name}`).join(', '),
@@ -136,10 +181,33 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   let disposed = false
   const unsubscribe = ctx.on('orca/decision', (decision: Decision) => {
     try {
+      const source = decision.eventId ? ctx.eventBus.get(decision.eventId) : undefined
+      const sessionId = source?.sessionId
+      if (sessionId && decision.reason.trim().startsWith('{')) {
+        let args: Record<string, unknown> = {}
+        try { args = JSON.parse(decision.reason) as Record<string, unknown> } catch { /* handler reports malformed args */ }
+        const task = continuation.get(sessionId)
+        const matching = task?.completedActions.filter((entry) => entry.argsFingerprint === actionFingerprint(task.id, decision.action, args)) ?? []
+        const duplicate = matching.some((entry) => entry.success) || matching.length >= 2
+        if (duplicate) {
+          ctx.logger.info('[action-executor] 跳过已完成或达到重试上限的重复 Action action=%s decisionId=%s sessionId=%s', decision.action, decision.decisionId, sessionId)
+          ctx.emit('orca/action-result', {
+            success: matching.some((entry) => entry.success), action: decision.action, decisionId: decision.decisionId, sourceEventId: decision.eventId,
+            message: matching.some((entry) => entry.success) ? '该查询已完成，复用之前的结果。' : '该查询此前失败且已达到重试上限。',
+            error: matching.some((entry) => entry.success) ? undefined : '同一参数的 Action 已达到重试上限',
+            errorInfo: matching.some((entry) => entry.success) ? undefined : { code: 'REMOTE_BUSINESS_ERROR', retryable: false, message: '同一参数的 Action 已达到重试上限' },
+            metadata: { duplicate: true, argumentsJson: decision.reason }, executedAt: Date.now(),
+          })
+          return
+        }
+      }
       // 异步执行；结果通过 emit 派发
       void executor.execute(decision)
         .then((result) => {
           if (disposed) return
+          if (!result.metadata && decision.reason.trim().startsWith('{')) {
+            result.metadata = { argumentsJson: decision.reason }
+          }
           ctx.emit('orca/action-result', result)
         })
         .catch((err: unknown) => {
@@ -152,6 +220,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
             success: false,
             action: decision?.action ?? 'unknown',
             decisionId: decision?.decisionId ?? 'unknown',
+            sourceEventId: decision?.eventId,
             error: `executor threw (unexpected): ${detail}`,
             executedAt: Date.now(),
           })
@@ -163,12 +232,114 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
     }
   })
 
-  // 4. dispose 钩子
+  // 4. ActionResult → EventBus bridge（Phase D）
+  // 末端分发：所有 ActionResult 都进入 EventBus，但不修改 WorldState。
+  // bridge 不参与调度/重试/路由，只负责事件分发。
+  const actionResultBus = ctx.eventBus as
+    | {
+        get(id: string): { source: string; sessionId?: string; data: Record<string, unknown> } | undefined
+        publish(input: {
+          id?: string
+          source: string
+          type: string
+          timestamp?: number
+          data?: Record<string, unknown>
+          priority?: number
+          sessionId?: string
+        }): void
+      }
+    | undefined
+  const unsubscribeActionResult = actionResultBus
+      ? ctx.on('orca/action-result', (result: import('../types/action.js').ActionResult) => {
+        if (disposed) return
+        // no_action 是 Attention/Decision 的无副作用终点：保留 orca/action-result
+        // 供执行审计观察，但不把它伪装成需要 Cognition 继续处理的工具结果。
+        if (result.action === 'no_action') {
+          ctx.logger.debug(
+            '[action-executor] 跳过 no_action 的 ActionResult→EventBus 回流 decisionId=%s sourceEventId=%s',
+            result.decisionId, result.sourceEventId ?? '(none)',
+          )
+          return
+        }
+        // 工具结果作为内部事件进入 EventBus；Attention → Scheduler → CognitionCore
+        // 负责把结果转成 Orca 回复。这里不直接把函数结果展示到 Dashboard/Feishu。
+        const sourceEvent = result.sourceEventId ? actionResultBus.get(result.sourceEventId) : undefined
+        const sessionId = sourceEvent?.sessionId
+        if (sessionId) {
+          let args: Record<string, unknown> = {}
+          try { args = JSON.parse(result.metadata?.argumentsJson as string ?? '{}') as Record<string, unknown> } catch { /* metadata is optional */ }
+          const recorded = continuation.recordAction({ channelSessionId: sessionId, action: result.action, args, success: result.success, resultRef: result.decisionId, resultSummary: result.message ?? result.error })
+          if (!result.success && result.errorInfo && !result.errorInfo.retryable) recorded.state.status = 'failed'
+          if (result.success && result.data) {
+            for (const [name, value] of Object.entries(result.data.values)) {
+              continuation.setSlot(sessionId, name, { value, sourceAction: result.action, sourceEventId: result.sourceEventId })
+            }
+          }
+        }
+        // A follow-up Action is triggered by the previous internal
+        // action-result event. Preserve the original channel route carried
+        // in that event instead of requiring every Decision to point directly
+        // at the first dashboard/Feishu message.
+        const dashboardMessageId = sourceEvent?.source === 'dashboard' && typeof sourceEvent.data.id === 'string'
+          ? sourceEvent.data.id
+          : typeof sourceEvent?.data.dashboardMessageId === 'string'
+            ? sourceEvent.data.dashboardMessageId
+            : undefined
+        const chatId = sourceEvent?.source === 'feishu' && typeof sourceEvent.data.chatId === 'string'
+          ? sourceEvent.data.chatId
+          : typeof sourceEvent?.data.chatId === 'string'
+            ? sourceEvent.data.chatId
+            : undefined
+        if (!sourceEvent || (!dashboardMessageId && !chatId)) {
+          ctx.logger.warn(
+            '[action-executor] ActionResult 缺少原会话路由信息；结果事件无法触发用户回复 action=%s decisionId=%s sourceEventFound=%s',
+            result.action, result.decisionId, String(Boolean(sourceEvent)),
+          )
+        }
+        actionResultBus.publish({
+          source: 'internal',
+          type: 'action-result',
+          data: {
+            action: result.action,
+            success: result.success,
+            decisionId: result.decisionId,
+            message: result.message,
+            error: result.error,
+            errorInfo: result.errorInfo,
+            resultData: result.data,
+            sourceEventId: result.sourceEventId,
+            dashboardMessageId,
+            chatId,
+            metadata: result.metadata,
+          },
+          priority: 1,
+          sessionId,
+        })
+        ctx.logger.info(
+          '[action-executor] ActionResult 已发布到 EventBus action=%s decisionId=%s sourceEventFound=%s replyTarget=%s',
+          result.action, result.decisionId, String(Boolean(sourceEvent)),
+          dashboardMessageId ? 'dashboard' : chatId ? 'feishu' : 'none',
+        )
+      })
+    : () => {}
+  if (actionResultBus) {
+    ctx.logger.info('[action-executor] ActionResult→EventBus bridge 已挂载')
+  } else {
+    ctx.logger.info('[action-executor] eventBus 未提供；ActionResult→EventBus bridge 未挂载')
+  }
+
+  // 5. dispose 钩子
   return () => {
     ctx.logger.info('[action-executor] 关闭（disposed=true + unsubscribe + registry.clear + deferredStore.clear）')
     disposed = true  // 必须在 unsubscribe 之前置位（in-flight .then/.catch 才会短路）
     unsubscribe()
+    unsubscribeActionResult()
     executor.registry.clear()
     executor.deferredStore.clear()
+    locationService?.clear()
   }
 }
+
+// ActionResult bridge 必须存在，否则工具执行结果会停在 action-executor，
+// 无法经 EventBus 重新触发 CognitionCore 回复用户。
+actionExecutor.inject = ['eventBus']

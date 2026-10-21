@@ -151,6 +151,7 @@ const ruleFeishuDeadline: AttentionRule = {
       reason: `消息含 deadline 关键词：「${text.slice(0, 30)}」`,
       action: 'remember_only',
       eventId: event?.id,
+      chatId: event?.data?.chatId as string | undefined,
     }
   },
 }
@@ -206,6 +207,59 @@ const ruleFocusInterrupt: AttentionRule = {
     reason: `用户在 ${event && 'focus'}，仅入档不打断`,
     action: 'remember_only',
     eventId: event?.id,
+    chatId: event?.data?.chatId as string | undefined,
+  }),
+}
+
+/** 普通飞书文本消息也必须进入 Runtime cognition。 */
+const ruleFeishuMessage: AttentionRule = {
+  id: 'feishu-message',
+  description: '普通飞书用户消息交由 CognitionCore 回复',
+  predicate: ({ event, state, prevState }) =>
+    event?.source === 'feishu' && event.type === 'message' &&
+    typeof event.data.text === 'string' && event.data.text.trim().length > 0 &&
+    state.user.status !== 'sleeping' && state.user.status !== 'away' &&
+    state.user.currentActivity !== 'focus' && state.user.currentActivity !== 'meeting' &&
+    prevState?.user.status !== 'away' &&
+    !/今晚前|明天前|截止|ddl|报告|due/i.test(event.data.text),
+  produce: ({ event }) => ({
+    priority: 'normal',
+    reason: String(event?.data.text ?? ''),
+    action: 'ignore',
+    eventId: event?.id,
+    chatId: event?.data?.chatId as string | undefined,
+  }),
+}
+
+/** Dashboard 的显式用户输入必须触发一次 Cognition。 */
+const ruleDashboardMessage: AttentionRule = {
+  id: 'dashboard-message',
+  description: 'Dashboard 用户发送文本消息，交由 CognitionCore 回复',
+  predicate: ({ event }) => event?.source === 'dashboard' && event.type === 'message' &&
+    typeof event.data.text === 'string' && event.data.text.trim().length > 0,
+  produce: ({ event }) => ({
+    priority: 'normal',
+    reason: String(event?.data.text ?? ''),
+    action: 'ignore',
+    eventId: event?.id,
+  }),
+}
+
+/** User-facing internal Action results return to CognitionCore in the originating conversation. */
+const ruleInternalActionResult: AttentionRule = {
+  id: 'internal-action-result',
+  description: '带原会话路由的内部 Action 结果交由 CognitionCore 继续处理并回复用户',
+  predicate: ({ event }) => event?.source === 'internal' && event.type === 'action-result' &&
+    typeof event.data.action === 'string' &&
+    typeof event.data.message === 'string' && event.data.message.trim().length > 0 &&
+    (typeof event.data.dashboardMessageId === 'string' || typeof event.data.chatId === 'string'),
+  produce: ({ event }) => ({
+    priority: 'normal',
+    reason: `Action=${String(event?.data.action ?? 'unknown')} success=${String(event?.data.success === true)}\n${String(event?.data.message ?? '')}${event?.data.error ? `\n错误：${String(event.data.error)}` : ''}`,
+    action: 'ignore',
+    eventId: event?.id,
+    dashboardMessageId: typeof event?.data.dashboardMessageId === 'string' ? event.data.dashboardMessageId : undefined,
+    chatId: typeof event?.data.chatId === 'string' ? event.data.chatId : undefined,
   }),
 }
 
@@ -215,6 +269,9 @@ registerRule(ruleFeishuDeadline)
 registerRule(ruleCalendarBusySoon)
 registerRule(ruleAwayArrival)
 registerRule(ruleFocusInterrupt)
+registerRule(ruleFeishuMessage)
+registerRule(ruleDashboardMessage)
+registerRule(ruleInternalActionResult)
 
 // ── AttentionEngine 服务 ────────────────────────────────────────────────
 
@@ -241,6 +298,12 @@ export class AttentionEngine implements AttentionEngineService {
     const evaluatedAt = Date.now()
     const stateSnapshot = JSON.parse(JSON.stringify(input.state)) as AttentionInput['state']
     const eventId = input.event?.id
+    const chatId = input.event?.data?.chatId as string | undefined
+    const dashboardMessageId = input.event?.source === 'dashboard' && typeof input.event.data.id === 'string'
+      ? input.event.data.id
+      : undefined
+    const sessionId = input.event?.sessionId
+    const device = typeof input.event?.data?.device === 'string' ? input.event.data.device : undefined
 
     for (const rule of this.registry.getRules()) {
       if (!rule.predicate(input)) continue
@@ -257,6 +320,11 @@ export class AttentionEngine implements AttentionEngineService {
         ...partial,
         // eventId 优先用 produce 返回的，否则用 input.event.id
         eventId: partial.eventId ?? eventId,
+        // chatId：从 OrcaEvent.data 提取（feishu 消息路由用）；produce 已返回则用返回的，否则用 event.data.chatId
+        chatId: partial.chatId ?? chatId,
+        dashboardMessageId: partial.dashboardMessageId ?? dashboardMessageId,
+        sessionId: partial.sessionId ?? sessionId,
+        device: partial.device ?? device,
       })
     }
     return out

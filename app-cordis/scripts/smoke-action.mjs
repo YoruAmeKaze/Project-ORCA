@@ -46,6 +46,7 @@ import {
   noopHandler,
 } from '../dist/services/action.js'
 import { actionExecutor } from '../dist/plugins/action-executor.js'
+import { EventBus } from '../dist/services/eventBus.js'
 
 const results = []
 function check(name, cond, detail = '') {
@@ -136,12 +137,13 @@ function makeTmpStore() {
 // ── R14.1: no_action → success=true ──
 {
   const executor = createActionExecutor()
-  const decision = mkDecision({ action: 'no_action', decisionId: 'dec_noop_001' })
+  const decision = mkDecision({ action: 'no_action', decisionId: 'dec_noop_001', eventId: 'evt_noop_001' })
   const result = await executor.execute(decision)
 
   check('R14.1.1: no_action → success=true', result.success === true)
   check('R14.1.2: no_action → action 保留', result.action === 'no_action')
   check('R14.1.3: no_action → decisionId 透传', result.decisionId === 'dec_noop_001')
+  check('R14.1.3b: no_action → sourceEventId 透传', result.sourceEventId === 'evt_noop_001')
   check('R14.1.4: no_action → executedAt 是 number', typeof result.executedAt === 'number' && result.executedAt > 0)
   check('R14.1.5: no_action → 无 error', result.error === undefined)
 
@@ -344,6 +346,8 @@ function makeTmpStore() {
   ctx.logger.exporter({ colors: 0, levels: { default: 3 }, export() {} })
 
   const store = makeTmpStore()
+  const eventBus = new EventBus()
+  ctx.provide('eventBus', eventBus)
   // 先 provide infoStore（plugin 内部 ctx.get 依赖此 service）
   ctx.provide('infoStore', store)
 
@@ -368,6 +372,16 @@ function makeTmpStore() {
   const r1 = results14c[0]
   check('R14.8.2: noop → result.success=true', r1?.success === true)
   check('R14.8.3: noop → result.decisionId 透传', r1?.decisionId === 'dec_integration_noop')
+
+  // no_action 仍产生执行层结果供审计，但不应作为工具结果回流 EventBus。
+  eventBus.publish({ id: 'noop-source-event', source: 'dashboard', type: 'message', sessionId: 'dashboard:noop', data: { id: 'noop-source-event', text: '无需操作', actor: 'user' } })
+  results14c.length = 0
+  ctx.emit('orca/decision', mkDecision({ action: 'no_action', decisionId: 'dec_integration_noop_bridge', eventId: 'noop-source-event' }))
+  await pollFor(() => results14c.some((r) => r.decisionId === 'dec_integration_noop_bridge'), 500)
+  const noopBridgeEvent = eventBus.recent(20).find((e) => e.source === 'internal' && e.type === 'action-result' && e.data.decisionId === 'dec_integration_noop_bridge')
+  const noopBridgeResult = results14c.find((r) => r.decisionId === 'dec_integration_noop_bridge')
+  check('R14.8.3b: noop ActionResult 保留 sourceEventId', noopBridgeResult?.sourceEventId === 'noop-source-event')
+  check('R14.8.3c: no_action 不回流为内部 action-result Event', !noopBridgeEvent)
 
   // ── R14.8.x: remember 决策 → 写入 infoStore ──
   results14c.length = 0
@@ -430,13 +444,26 @@ function makeTmpStore() {
     typeof results14c[0]?.error === 'string' &&
     results14c[0].error.includes('no handler registered'))
 
+  // Dashboard 点餐函数结果只进 EventBus，留给 Attention/CognitionCore 生成用户回复。
+  eventBus.publish({ id: 'dash-order-request', source: 'dashboard', type: 'message', sessionId: 'dashboard:test-client', data: { id: 'dash-order-request', text: '查麦当劳菜单', actor: 'user' } })
+  executor.registry.register({ name: 'test-order-query', action: 'order.store.search', async execute(decision) {
+    return { success: true, action: decision.action, decisionId: decision.decisionId, sourceEventId: decision.eventId, message: '测试菜单结果', executedAt: Date.now() }
+  } })
+  results14c.length = 0
+  ctx.emit('orca/decision', mkDecision({ action: 'order.store.search', eventId: 'dash-order-request', decisionId: 'dec_dashboard_order' }))
+  await pollFor(() => eventBus.recent(10).some((e) => e.source === 'internal' && e.type === 'action-result' && e.data.decisionId === 'dec_dashboard_order'), 500)
+  const orderResultEvent = eventBus.recent(10).find((e) => e.source === 'internal' && e.type === 'action-result' && e.data.decisionId === 'dec_dashboard_order')
+  check('R14.8.19: 点餐函数结果作为内部 ActionResult Event 发布', orderResultEvent?.data.message === '测试菜单结果')
+  check('R14.8.20: ActionResult Event 保留原消息关联与会话', orderResultEvent?.data.dashboardMessageId === 'dash-order-request' && orderResultEvent?.sessionId === 'dashboard:test-client')
+  check('R14.8.21: ActionExecutor 不直接向 Dashboard 发布函数结果', !eventBus.recent(10).some((e) => e.type === 'dashboard-reply' && e.data.id === 'dash-order-request'))
+
   // ── R14.8.x: 不阻塞其他 decision listener ──
   let otherListenerCalled = false
   ctx.on('orca/decision', () => { otherListenerCalled = true })
   results14c.length = 0
   ctx.emit('orca/decision', mkDecision({ action: 'no_action', decisionId: 'dec_listener_check' }))
   await pollFor(() => results14c.length > 0 && otherListenerCalled, 500)
-  check('R14.8.19: 其他 decision listener 也被调（不阻塞）', otherListenerCalled === true)
+  check('R14.8.22: 其他 decision listener 也被调（不阻塞）', otherListenerCalled === true)
 
   // ── R14.10: dispose 后不再执行 ──
   dispose()

@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import type { OrderMcpConfig } from './services/orderMcp.js'
+import type { WindowsMcpConfig } from './services/windowsMcp.js'
 
 export interface FeishuConfig {
   appId: string
@@ -8,12 +10,23 @@ export interface FeishuConfig {
   baseUrl: string
 }
 
+export type LlmBackend = 'dashscope' | 'ollama'
+
 export interface LlmConfig {
+  /** 后端类型；决定请求协议细节（auth header、超时、错误语义） */
+  backend: LlmBackend
   apiKey: string
+  /** 统一根地址，不含 /chat/completions；不同后端语义一致 */
   baseUrl: string
   model: string
   temperature: number
   maxTokens: number
+  /**
+   * 可选 dashscope 备份配置。当 backend='ollama' 且首次 chat() 时探测 ollama 失败，
+   * LlmClient 切到此配置继续运行（无感知切换，agent.ts 异常处理路径不变）。
+   * 由 buildLlmConfig() 自动从 DEEPSEEK_* 构造；未配置则 fallback 不可用。
+   */
+  fallback?: LlmConfig
 }
 
 export interface QwenConfig {
@@ -30,6 +43,40 @@ export interface InfoReceiverConfig {
 }
 
 /**
+ * IM Observation 配置（IM-1.5A Phase）
+ */
+export interface OrcaIMObservationConfig {
+  /** 是否启用（默认 false） */
+  enabled: boolean
+  /** 突发检测窗口（毫秒），默认 60 分钟 */
+  burstWindowMs: number
+  /** 突发最小消息数，默认 3 */
+  burstMinCount: number
+  /** 是否写入 im.burst Episode（IM-2.0 范围，默认 false） */
+  emitEpisodes: boolean
+}
+
+/**
+ * IM Bridge Adapter 配置（IM-1.0 Phase）
+ */
+export interface OrcaIMConfig {
+  /** 是否启用（默认 false） */
+  enabled: boolean
+  /** 平台来源（'im.qq' | 'im.wechat'）*/
+  platform: 'im.qq' | 'im.wechat'
+  /** 适配器模式 */
+  mode: 'mock' | 'http' | 'ws'
+  /** Mock 模式消息模拟间隔（毫秒）；仅 mode=mock 使用 */
+  mockIntervalMs: number
+  /** QQ NapCatQQ HTTP Server 配置（mode=http 时使用）*/
+  qq?: {
+    httpHost: string
+    httpPort: number
+    accessToken?: string
+  }
+}
+
+/**
  * Orca Persistent Context Runtime 配置（Phase 0+1 最小版）。
  * ORCA_RUNTIME_ENABLED=1 才会挂载 orcaRuntime plugin（默认 0 关闭，零侵入）。
  */
@@ -40,6 +87,8 @@ export interface OrcaRuntimeConfig {
   eventWindowSize: number
   /** Phase 2.A WorldState 子配置 */
   worldState: OrcaWorldStateConfig
+  /** Phase 7.1A Scheduler adapter 配置（默认 enabled=false） */
+  scheduler: OrcaSchedulerConfig
   /** Phase 2.D PC adapter 配置（默认 enabled=false） */
   pc: OrcaInputAdapterConfig
   /** Phase 2.D Calendar adapter 配置（默认 enabled=false） */
@@ -52,6 +101,10 @@ export interface OrcaRuntimeConfig {
   decision: OrcaDecisionConfig
   /** Phase 4.B Action Executor 子配置 */
   action: OrcaActionConfig
+  /** IM Bridge Adapter 配置（IM-1.0 Phase；默认 enabled=false，mock 模式） */
+  im: OrcaIMConfig
+  /** IM Observation 配置（IM-1.5A Phase；默认 enabled=false） */
+  imObservation: OrcaIMObservationConfig
 }
 
 /**
@@ -100,6 +153,40 @@ export interface OrcaWorldStateConfig {
 }
 
 /**
+ * Scheduler Adapter 配置（Phase 7.1A：纯 Time Producer）
+ *
+ * Scheduler 是"纯时间信号生产者"，只产生 scheduler:tick 事件。
+ * 业务逻辑（briefing/reflection/reminder）由 ScheduledRuleRegistry（7.1B）订阅后决策。
+ */
+export interface OrcaSchedulerConfig {
+  /** 是否启用（默认 false） */
+  enabled: boolean
+  /** tick 心跳间隔（毫秒，默认 60000） */
+  tickMs?: number
+  /** Phase 7.2：Scheduled Rules 配置（按需启用） */
+  scheduledRules?: OrcaScheduledRulesConfig
+}
+
+/**
+ * Phase 7.2：Scheduled Rules 子配置
+ */
+export interface OrcaScheduledRulesConfig {
+  briefing?: OrcaScheduledRuleConfig
+  reflection?: OrcaScheduledRuleConfig
+  reminder?: OrcaScheduledRuleConfig
+}
+
+/**
+ * Phase 7.2：单个 Scheduled Rule 配置
+ */
+export interface OrcaScheduledRuleConfig {
+  /** 是否启用（默认 false） */
+  enabled?: boolean
+  /** 触发间隔（毫秒）；默认 4h（briefing）/ 24h（reflection）/ 1h（reminder） */
+  intervalMs?: number
+}
+
+/**
  * 输入 adapter 子配置（Phase 2.D，pc/calendar/phone 共用）。
  */
 export interface OrcaInputAdapterConfig {
@@ -131,6 +218,38 @@ export interface OrcaMemoryConfig {
   attentionTopK: number
 }
 
+/** Phase 6.A + Phase 6.C.1 ContextAssembler 配置 */
+export interface OrcaContextAssemblerConfig {
+  /** 是否启用（默认 true） */
+  enabled: boolean
+  /** Memory facts Top-K（默认 10） */
+  memoryTopK: number
+  /** 单条 fact 格式化后最大字符数（默认 80） */
+  memoryPerFactChars: number
+  /** Memory facts 总字符数预算（默认 500） */
+  memoryBudgetChars: number
+  /** InfoRecords 最近条目数（默认 3） */
+  infoRecordsLimit: number
+  /** Scoring preset（默认 'confidence'，Phase 6.C.1） */
+  scoringPreset: 'confidence' | 'source-confidence'
+  /** 是否启用 L3 语义冲突检测（默认 false，Phase 6.C.2） */
+  detectSemanticConflict: boolean
+}
+
+export interface OrcaFilesystemConfig {
+  /** filesystem.read handler 允许读取的根目录（默认 appRoot/data）；空字符串表示不限制（不推荐） */
+  readRoot: string
+}
+
+export interface OrcaLocationConfig {
+  /** 是否允许读取本机定位；默认关闭，需用户在本机显式启用 */
+  enabled: boolean
+  /** Windows 系统定位服务等待时间（毫秒） */
+  timeoutMs: number
+  /** 当前定位在内存中可供后续附近查询使用的有效期（毫秒） */
+  cacheTtlMs: number
+}
+
 export interface OrcaConfig {
   host: string
   port: number
@@ -138,9 +257,13 @@ export interface OrcaConfig {
   llm: LlmConfig
   qwen: QwenConfig
   dryRun: boolean
+  filesystem: OrcaFilesystemConfig
+  location: OrcaLocationConfig
   historyTurns: number
   infoRecordsDir: string
   imagesDir: string
+  /** Phase 7.3 Session 持久化目录 */
+  sessionsDir: string
   infoReceiver: InfoReceiverConfig
   /** 会话绑定路由（D-AGENT-15）：chat_id → agent 名，未绑定会话 → 默认 Orca 主管线 */
   chatBindings: Record<string, string>
@@ -148,6 +271,12 @@ export interface OrcaConfig {
   runtime: OrcaRuntimeConfig
   /** Phase 5.0 LongMemory MemoryStore */
   memory: OrcaMemoryConfig
+  /** Phase 6.A ContextAssembler */
+  contextAssembler: OrcaContextAssemblerConfig
+  /** 独立的瑞幸 / 麦当劳 MCP 只读 Action 配置（默认禁用） */
+  orderMcp: OrderMcpConfig
+  /** Optional Windows-MCP read-only desktop observer (disabled by default). */
+  windowsMcp: WindowsMcpConfig
 }
 
 const here = dirname(fileURLToPath(import.meta.url)) // app-cordis/src
@@ -214,18 +343,21 @@ export function getConfig(): OrcaConfig {
       appSecret: process.env.FEISHU_APP_SECRET ?? '',
       baseUrl: (process.env.FEISHU_API_URL ?? 'https://open.feishu.cn').replace(/\/$/, ''),
     },
-    llm: {
-      apiKey: process.env.DEEPSEEK_API_KEY ?? '',
-      baseUrl: rawApiUrl.replace(/\/chat\/completions$/, ''),
-      model: process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash',
-      temperature: Number(process.env.ORCA_TEMPERATURE ?? 0.3),
-      maxTokens: Number(process.env.ORCA_MAX_TOKENS ?? 2000),
-    },
+    llm: buildLlmConfig(rawApiUrl),
     qwen: buildVisionConfig(),
     dryRun: process.env.ORCA_DRY_RUN === '1',
     historyTurns: Number(process.env.ORCA_HISTORY_TURNS ?? 10),
     infoRecordsDir: process.env.INFO_RECORDS_DIR || resolve(appRoot, 'data', 'records'),
     imagesDir: process.env.IMAGES_DIR || resolve(appRoot, 'data', 'images'),
+    sessionsDir: process.env.ORCA_SESSIONS_DIR || resolve(appRoot, 'data', 'sessions'),
+    filesystem: {
+      readRoot: process.env.ORCA_FS_READ_ROOT || resolve(appRoot, 'data'),
+    },
+    location: {
+      enabled: process.env.ORCA_LOCATION_ENABLED === '1',
+      timeoutMs: Number(process.env.ORCA_LOCATION_TIMEOUT_MS ?? 10_000),
+      cacheTtlMs: Number(process.env.ORCA_LOCATION_CACHE_TTL_MS ?? 5 * 60_000),
+    },
     infoReceiver: {
       port: Number(process.env.INFO_RECEIVER_PORT ?? 8101),
       tokens: receiverTokens,
@@ -240,6 +372,26 @@ export function getConfig(): OrcaConfig {
         // Phase 2.C：time tick 间隔（默认 60000ms）
         timeRefreshMs: Number(process.env.ORCA_WORLD_STATE_REFRESH_MS ?? 60_000),
       },
+      // Phase 7.1A：Scheduler adapter（纯 Time Producer）
+      scheduler: {
+        enabled: process.env.ORCA_SCHEDULER_ENABLED === '1',
+        tickMs: Number(process.env.ORCA_SCHEDULER_TICK_MS ?? 60_000),
+        // Phase 7.2：Scheduled Rules 配置
+        scheduledRules: {
+          briefing: {
+            enabled: process.env.ORCA_SCHEDULER_BRIEFING_ENABLED === '1',
+            intervalMs: Number(process.env.ORCA_SCHEDULER_BRIEFING_INTERVAL_MS ?? 4 * 60 * 60 * 1000),
+          },
+          reflection: {
+            enabled: process.env.ORCA_SCHEDULER_REFLECTION_ENABLED === '1',
+            intervalMs: Number(process.env.ORCA_SCHEDULER_REFLECTION_INTERVAL_MS ?? 24 * 60 * 60 * 1000),
+          },
+          reminder: {
+            enabled: process.env.ORCA_SCHEDULER_REMINDER_ENABLED === '1',
+            intervalMs: Number(process.env.ORCA_SCHEDULER_REMINDER_INTERVAL_MS ?? 60 * 60 * 1000),
+          },
+        },
+      },
       pc: {
         // 默认 disabled（Phase 2.D 第一版 mock，需要显式启用）
         enabled: process.env.ORCA_PC_ENABLED === '1',
@@ -252,6 +404,25 @@ export function getConfig(): OrcaConfig {
       phone: {
         enabled: process.env.ORCA_PHONE_ENABLED === '1',
         refreshMs: Number(process.env.ORCA_PHONE_REFRESH_MS ?? 300_000),
+      },
+      // IM Bridge（IM-1.0 Phase；默认 disabled，mock 模式）
+      im: {
+        enabled: process.env.ORCA_IM_ENABLED === '1',
+        platform: (process.env.ORCA_IM_PLATFORM === 'im.wechat' ? 'im.wechat' : 'im.qq') as 'im.qq' | 'im.wechat',
+        mode: (process.env.ORCA_IM_MODE as 'mock' | 'http' | 'ws') ?? 'mock',
+        mockIntervalMs: Number(process.env.ORCA_IM_MOCK_INTERVAL_MS ?? 5_000),
+        qq: {
+          httpHost: process.env.ORCA_IM_QQ_HTTP_HOST ?? '127.0.0.1',
+          httpPort: Number(process.env.ORCA_IM_QQ_PORT ?? 3000),
+          accessToken: process.env.ORCA_IM_QQ_ACCESS_TOKEN || undefined,
+        },
+      },
+      // IM Observation（IM-1.5A Phase；默认 disabled）
+      imObservation: {
+        enabled: process.env.ORCA_IM_OBSERVATION_ENABLED === '1',
+        burstWindowMs: Number(process.env.ORCA_IM_OBSERVATION_BURST_WINDOW_MS ?? 60 * 60 * 1000),
+        burstMinCount: Number(process.env.ORCA_IM_OBSERVATION_BURST_MIN_COUNT ?? 3),
+        emitEpisodes: process.env.ORCA_IM_OBSERVATION_EMIT_EPISODES === '1',
       },
       attention: {
         // 默认启用（Phase 3 第一版：纯评估不执行任何 action，安全默认）
@@ -283,6 +454,35 @@ export function getConfig(): OrcaConfig {
       attentionPollIntervalMs: Number(process.env.ORCA_MEMORY_ATTENTION_POLL_INTERVAL_MS ?? 60_000),
       attentionTopK: Number(process.env.ORCA_MEMORY_ATTENTION_TOP_K ?? 5),
     },
+    // Phase 6.A + Phase 6.C.1 + Phase 6.C.2
+    contextAssembler: {
+      enabled: process.env.ORCA_MEMORY_CONTEXT_ENABLED !== '0',
+      memoryTopK: Number(process.env.ORCA_MEMORY_CONTEXT_TOP_K ?? 10),
+      memoryPerFactChars: Number(process.env.ORCA_MEMORY_CONTEXT_PER_FACT_CHARS ?? 80),
+      memoryBudgetChars: Number(process.env.ORCA_MEMORY_CONTEXT_BUDGET_CHARS ?? 500),
+      infoRecordsLimit: Number(process.env.ORCA_MEMORY_CONTEXT_INFO_RECORDS_LIMIT ?? 3),
+      scoringPreset: (process.env.ORCA_MEMORY_SCORING_PRESET as 'confidence' | 'source-confidence') ?? 'confidence',
+      detectSemanticConflict: process.env.ORCA_MEMORY_CONFLICT_DETECT_SEMANTIC === '1',
+    },
+    orderMcp: {
+      luckin: {
+        enabled: process.env.ORCA_LUCKIN_MCP_ENABLED === '1',
+        endpoint: 'https://gwmcp.lkcoffee.com/order/user/mcp',
+        token: process.env.LUCKIN_COFFEE_TOKEN || '',
+      },
+      mcd: {
+        enabled: process.env.ORCA_MCD_MCP_ENABLED === '1',
+        endpoint: 'https://mcp.mcd.cn',
+        token: process.env.MCDONALD_TOKEN || '',
+      },
+    },
+    windowsMcp: {
+      enabled: process.env.ORCA_WINDOWS_MCP_ENABLED === '1',
+      endpoint: process.env.ORCA_WINDOWS_MCP_ENDPOINT || '',
+      token: process.env.ORCA_WINDOWS_MCP_TOKEN || '',
+      timeoutMs: Number(process.env.ORCA_WINDOWS_MCP_TIMEOUT_MS ?? 15_000),
+      protocolVersion: process.env.ORCA_WINDOWS_MCP_PROTOCOL_VERSION || '2025-06-18',
+    },
   }
 }
 
@@ -304,5 +504,63 @@ function buildVisionConfig(): QwenConfig {
     apiKey: process.env.QWEN_API_KEY ?? '',
     baseUrl: (process.env.QWEN_API_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions').replace(/\/$/, ''),
     model: process.env.QWEN_VL_MODEL ?? 'qwen3.7-plus',
+  }
+}
+
+/**
+ * LLM 文本对话配置：ORCA_LLM_BACKEND=ollama 走本地 Ollama（OLLAMA_HOST + OLLAMA_LM_MODEL，免 apiKey）；
+ * 默认 dashscope（DeepSeek 云端，DEEPSEEK_API_KEY + DEEPSEEK_API_URL）。
+ *
+ * 设计约束：
+ * - baseUrl 统一根地址（如 http://localhost:11434/v1 或 https://api.deepseek.com），不含 /chat/completions
+ * - 不同后端的 baseUrl 语义一致：拼接 `${baseUrl}/chat/completions` 即可
+ * - 后端细节（auth header / 超时 / 错误语义）由 backend 字段显式声明，LlmClient 据此分支
+ * - 不依赖 localhost/127.0.0.1 字符串嗅探
+ *
+ * rawApiUrl 由 getConfig() 预解析（DEEPSEEK_API_URL 兼容完整端点形式），归一化为根地址后传入。
+ */
+export function buildLlmConfig(rawApiUrl?: string): LlmConfig {
+  const temperature = Number(process.env.ORCA_TEMPERATURE ?? 0.3)
+  const maxTokens = Number(process.env.ORCA_MAX_TOKENS ?? 2000)
+
+  const backendRaw = process.env.ORCA_LLM_BACKEND ?? 'dashscope'
+  const backend: LlmBackend = backendRaw === 'ollama' ? 'ollama' : 'dashscope'
+
+  // 构造 dashscope fallback 配置（仅在 backend='ollama' 且 DEEPSEEK_API_KEY 非空时附加）
+  const dashscopeUrl = (rawApiUrl ?? process.env.DEEPSEEK_API_URL ?? 'https://api.deepseek.com').replace(/\/$/, '').replace(/\/chat\/completions$/, '')
+  const dashscopeFallback: LlmConfig | undefined = (() => {
+    if (backend !== 'ollama') return undefined // ollama 模式下才需要 fallback
+    if (!process.env.DEEPSEEK_API_KEY) return undefined // 未配 key 不构造 fallback
+    return {
+      backend: 'dashscope',
+      apiKey: process.env.DEEPSEEK_API_KEY,
+      baseUrl: dashscopeUrl,
+      model: process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash',
+      temperature,
+      maxTokens,
+    }
+  })()
+
+  if (backend === 'ollama') {
+    const ollamaBase = (process.env.OLLAMA_HOST ?? 'http://localhost:11434').replace(/\/$/, '')
+    return {
+      backend,
+      apiKey: '', // ollama 不校验 key；空字符串显式表示"无 key"语义
+      baseUrl: `${ollamaBase}/v1`, // 统一根地址（含 /v1，Ollama OpenAI 兼容前缀）
+      model: process.env.OLLAMA_LM_MODEL ?? 'qwythos:latest',
+      temperature,
+      maxTokens,
+      fallback: dashscopeFallback,
+    }
+  }
+
+  // dashscope / DeepSeek 默认（无 fallback）
+  return {
+    backend,
+    apiKey: process.env.DEEPSEEK_API_KEY ?? '',
+    baseUrl: dashscopeUrl,
+    model: process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash',
+    temperature,
+    maxTokens,
   }
 }

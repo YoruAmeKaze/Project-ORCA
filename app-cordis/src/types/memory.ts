@@ -1,3 +1,5 @@
+import type { CategoryPath } from './category.js'
+
 /**
  * Orca LongMemory —— 类型契约（Phase 5.0 + 5.1）
  *
@@ -61,6 +63,8 @@ export interface LongMemoryFact {
   privacyLevel: 'L1'
   /** 不设 = 永久 */
   ttlDays?: number
+  /** Optional controlled classification; never part of identity or forget fingerprint. */
+  category?: CategoryPath
 }
 
 // ── MemoryCandidate（Reflection 推断的待晋升候选）────────────────────────────
@@ -81,6 +85,7 @@ export interface MemoryCandidate {
   evidenceEpisodeIds: string[]
   reason: string
   source: 'reflection' // 必填且固定
+  category?: CategoryPath
   state: CandidateState
   decidedAt?: number
   decidedBy?: 'auto-confidence-threshold' | 'user-confirmed'
@@ -158,9 +163,9 @@ export interface ForgetMarker {
  */
 export interface Episode {
   id: string
-  category: 'message' | 'state'
-  /** message.burst | state.transition */
-  kind: 'message.burst' | 'state.transition'
+  category: 'message' | 'state' | 'communication'
+  /** message.burst | state.transition | im.burst */
+  kind: 'message.burst' | 'state.transition' | 'im.burst'
   /** 确定性规则生成；MVP 不调用 LLM */
   summary: string
   ts: number
@@ -178,8 +183,8 @@ export interface Episode {
 // ── Episode Query ───────────────────────────────────────────────────────
 
 export interface EpisodeQuery {
-  category?: 'message' | 'state'
-  kind?: 'message.burst' | 'state.transition'
+  category?: 'message' | 'state' | 'communication'
+  kind?: 'message.burst' | 'state.transition' | 'im.burst'
   /** ts >= today 00:00 UTC */
   today?: boolean
   /** 按 ts 降序，返回最多 limit 条 */
@@ -195,6 +200,8 @@ export interface FactQuery {
   subjectPrefix?: string
   state?: FactState
   source?: 'user-explicit' | 'reflection'
+  /** Optional composable functional classification filter. */
+  category?: Partial<CategoryPath>
 }
 
 /** MemoryCandidate 查询条件（D-AGENT-18 正式纳入 contract；含 limit） */

@@ -30,10 +30,14 @@ function feishuMessageToEvent(msg: FeishuMessageEvent) {
       openId: msg.openId,
       chatId: msg.chatId,
       messageId: msg.messageId,
+      actor: 'user',
+      messageKind: 'user_message',
+      device: 'unknown',
     },
     priority: 1 as const,
-    sessionId: msg.sessionId,
-    meta: { eventId: msg.eventId, kind: 'text' },
+    // chatId 是通道内真正的对话边界；保留 openId/sessionId 作为无 chatId 时的回退。
+    sessionId: `feishu:${msg.chatId || msg.sessionId || msg.openId}`,
+    meta: { eventId: msg.eventId, kind: 'user_message', actor: 'user', device: 'unknown' },
   }
 }
 
@@ -53,7 +57,7 @@ function feishuImageToEvent(img: FeishuImageEvent) {
       messageId: img.messageId,
     },
     priority: 1 as const,
-    sessionId: img.sessionId,
+    sessionId: `feishu:${img.chatId || img.sessionId || img.openId}`,
     meta: { eventId: img.eventId, kind: 'image' },
   }
 }
@@ -68,7 +72,10 @@ export function feishuAdapter(ctx: Context, _config: OrcaConfig) {
   // 监听器必须 try/catch（cordis quirk：async 监听器 reject → unhandledRejection 崩进程）
   ctx.on('feishu/message', (msg: FeishuMessageEvent) => {
     try {
-      bus.publish(feishuMessageToEvent(msg))
+      const event = feishuMessageToEvent(msg)
+      ctx.logger.info('[feishu-adapter] input received channel=feishu sessionId=%s requestId=%s', event.sessionId, msg.eventId || msg.messageId)
+      bus.publish(event)
+      ctx.logger.debug('[feishu-adapter] event published channel=feishu sessionId=%s requestId=%s', event.sessionId, event.id)
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err)
       ctx.logger.warn('[feishu-adapter] publish message 失败: %s', detail)
@@ -77,7 +84,8 @@ export function feishuAdapter(ctx: Context, _config: OrcaConfig) {
 
   ctx.on('feishu/image', (img: FeishuImageEvent) => {
     try {
-      bus.publish(feishuImageToEvent(img))
+      const event = feishuImageToEvent(img)
+      bus.publish(event)
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err)
       ctx.logger.warn('[feishu-adapter] publish image 失败: %s', detail)

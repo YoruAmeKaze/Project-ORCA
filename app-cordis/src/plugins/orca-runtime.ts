@@ -18,6 +18,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { OrcaConfig } from '../config.js'
 import { EventBus } from '../services/eventBus.js'
+import { dashboardAdapter } from './input-adapters/dashboard-adapter.js'
 import { feishuAdapter } from './input-adapters/feishu-adapter.js'
 
 export function orcaRuntime(ctx: Context, config: OrcaConfig) {
@@ -32,6 +33,7 @@ export function orcaRuntime(ctx: Context, config: OrcaConfig) {
 
   // 2. 挂载内置 adapters
   feishuAdapter(ctx, config)
+  dashboardAdapter(ctx, config)
 
   // 3. 返回 dispose 钩子（cordis fiber 清理）
   return () => {

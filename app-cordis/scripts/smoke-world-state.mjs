@@ -42,6 +42,7 @@ import { worldStateUpdater } from '../dist/plugins/world-state-updater.js'
 import { feishuAdapter } from '../dist/plugins/input-adapters/feishu-adapter.js'
 
 const results = []
+const smokeContexts = []
 function check(name, cond, detail = '') {
   results.push({ name, ok: !!cond })
   console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`)
@@ -130,7 +131,7 @@ const logger = {
 
 // ---------- R2：WorldStateUpdater 集成 ----------
 {
-  const ctx = new Context()
+  const ctx = new Context(); smokeContexts.push(ctx)
   // 安装 logger exporter 避免 Node.js 默认 stderr 噪声
   ctx.logger.exporter({ colors: 0, levels: { default: 2 }, export() {} })
   const bus = new EventBus({ windowSize: 10 }, logger)
@@ -201,7 +202,7 @@ const logger = {
 // 异步处理：用 polling（每 10ms 检查 state 变化，最多 1s）而非任意 sleep，
 // 减少"任意过大 sleep 掩盖竞态"风险（用户明确要求）。
 {
-  const ctx = new Context()
+  const ctx = new Context(); smokeContexts.push(ctx)
   ctx.logger.exporter({ colors: 0, levels: { default: 2 }, export() {} })
   const bus = new EventBus({ windowSize: 10 }, logger)
   ctx.provide('eventBus', bus)
@@ -253,7 +254,7 @@ const logger = {
   check('R4.7: OrcaEvent.data.chatId 透传', evt?.data.chatId === 'oc_test_chat')
   check('R4.8: OrcaEvent.data.messageId 透传', evt?.data.messageId === 'om_test_msg_p2b_001')
   check('R4.9: OrcaEvent.data.openId 透传', evt?.data.openId === 'ou_test_user')
-  check('R4.10: OrcaEvent.sessionId 透传', evt?.sessionId === 'ou_test_session')
+  check('R4.10: OrcaEvent.sessionId 使用 Feishu channel:chat 会话标识', evt?.sessionId === 'feishu:oc_test_chat')
   check('R4.11: OrcaEvent.id === feishu eventId（adapter 透传作为幂等键）', evt?.id === feishuEventId)
   // timestamp 用 Date.now()（adapter 显式设置，不从 eventId 推导）
   check('R4.12: OrcaEvent.timestamp 在 [tBeforeEmit, tAfterEmit] 区间内',
@@ -418,7 +419,7 @@ const logger = {
   // ── R5.B：setInterval 集成（timeRefreshMs=50 加速）──
   // 验证：emit feishu:message with timestamp=past → lastSeenAt=past → time tick 检测 → status='away'
   {
-    const ctx = new Context()
+    const ctx = new Context(); smokeContexts.push(ctx)
     ctx.logger.exporter({ colors: 0, levels: { default: 2 }, export() {} })
     const bus = new EventBus({ windowSize: 10 }, logger)
     ctx.provide('eventBus', bus)
@@ -463,7 +464,7 @@ const logger = {
   // 验证：R5.A 测了 deriveUserStatus 纯函数（lastSeenAt=10分钟前 → null → 不变）；
   // 这里验证 setInterval tick 实际行为：user 不变 + time 短期不变 → 无 emit
   {
-    const ctx = new Context()
+    const ctx = new Context(); smokeContexts.push(ctx)
     ctx.logger.exporter({ colors: 0, levels: { default: 2 }, export() {} })
     const bus = new EventBus({ windowSize: 10 }, logger)
     ctx.provide('eventBus', bus)
@@ -498,6 +499,11 @@ const logger = {
   }
 }
 
+// Each block intentionally creates an isolated WorldState updater. Dispose the
+// root fiber before exiting so its Phase 2.C intervals do not keep this smoke
+// process alive after assertions finish.
+for (const candidate of smokeContexts) await candidate?.fiber?.dispose?.()
+
 // ---------- 结果 ----------
 const failed = results.filter((r) => !r.ok)
 console.log(`\n==== smoke-world-state 结果：${results.length - failed.length}/${results.length} PASS ====`)
@@ -505,3 +511,4 @@ if (failed.length) {
   console.log('失败项:', failed.map((f) => f.name).join(' | '))
   throw new Error(`smoke-world-state 失败 ${failed.length} 项`)
 }
+process.exit(0)
