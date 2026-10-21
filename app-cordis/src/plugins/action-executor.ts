@@ -46,6 +46,8 @@ import {
   createNotifyHandler,
   createRememberHandler,
 } from '../services/action.js'
+import { createCapabilityHandlers } from '../services/capability-actions.js'
+import { skillCatalog } from '../services/skill-catalog.js'
 
 /**
  * ActionExecutor Cordis plugin
@@ -57,6 +59,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   // 1. 创建 ActionExecutor（含 registry + deferred store）
   const executor: ActionExecutorService = createActionExecutor()
   ctx.provide('actionExecutor', executor)
+  ctx.provide('skillCatalog', skillCatalog)
 
   // 2. 注入 remember handler（依赖 infoStore）
   // infoStore 在 infoAgents plugin 中 provide；这里用 ctx.get 软获取（未启用时跳过）
@@ -113,6 +116,12 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
       '[action-executor] memory 未提供；memory.remember/forget handler 未挂载',
     )
   }
+
+  // 基础能力 Action：Skill 只描述能力，实际执行仍统一走 ActionHandlerRegistry。
+  for (const handler of createCapabilityHandlers({
+    workspaceRoot: process.env.ORCA_WORKSPACE_ROOT ?? process.cwd(),
+    logger: ctx.logger,
+  })) executor.registry.register(handler)
 
   ctx.logger.info(
     '[action-executor] 已启动（handlers: %s）',
