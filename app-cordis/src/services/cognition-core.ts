@@ -51,6 +51,20 @@ const MAX_SAME_ACTION_ROUNDS = 2
 const MAX_REACT_DURATION_MS = 2 * 60 * 1000
 const ACTION_FORMAT_ERROR = 'Runtime 格式校验错误：Action 指令格式不正确。没有执行任何操作。请重新生成，且只使用严格格式 `/act:<action>:<reason>`；不要添加前缀、替代拼写、Markdown 或其他文字。若不需要 Action，请直接用自然语言回复。'
 
+const COGNITION_DEBUG_ENABLED = process.env.ORCA_COGNITION_DEBUG === '1'
+
+function logLlmExchange(
+  ctx: Context,
+  phase: 'request' | 'response',
+  requestId: string,
+  round: string,
+  payload: ChatMessage[] | string,
+): void {
+  if (!COGNITION_DEBUG_ENABLED) return
+  const serialized = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2)
+  ctx.logger.info('[cognition-debug] llm %s request=%s round=%s\n%s', phase, requestId, round, serialized)
+}
+
 function hasMalformedActionMarker(output: string): boolean {
   const trimmed = output.trim()
   return trimmed.startsWith('/') || /(?:^|\s)\/(?:act|action|orca\.act|acit)(?::|\s|$)/i.test(trimmed)
@@ -175,7 +189,9 @@ export function createCognitionCore(ctx: Context) {
         throw new Error('llm service not available')
       }
 
+      logLlmExchange(ctx, 'request', request.id, 'initial', messages)
       let output = await llm.chat(messages)
+      logLlmExchange(ctx, 'response', request.id, 'initial', output)
       let intent = parseActionIntent(output)
       let formatRetries = 0
       while (!intent && hasMalformedActionMarker(output) && formatRetries < MAX_ACTION_FORMAT_RETRIES) {
@@ -186,7 +202,9 @@ export function createCognitionCore(ctx: Context) {
           { role: 'assistant', content: output },
           { role: 'user', content: `${ACTION_FORMAT_ERROR}\n这是第 ${formatRetries} 次格式重试。` },
         )
+        logLlmExchange(ctx, 'request', request.id, `format-retry-${formatRetries}`, messages)
         output = await llm.chat(messages)
+        logLlmExchange(ctx, 'response', request.id, `format-retry-${formatRetries}`, output)
         intent = parseActionIntent(output)
       }
       if (!intent && hasMalformedActionMarker(output)) {

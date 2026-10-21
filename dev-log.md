@@ -2408,6 +2408,13 @@ AttentionItem → orca/attention
 - 新增每轮认知步骤：读取上下文、区分事实、判断是否需要 Action、单轮选择一个 Action、等待 ActionResult、复用结果并在停止时说明缺失条件。
 - 验证：`npm run build`、`npm run smoke:cognition-prompt`、`npm run smoke:action` 通过。
 
+## 2026-10-22 Cognition LLM 调试日志
+
+- 新增环境变量 `ORCA_COGNITION_DEBUG=1`，默认关闭。
+- 开启后，CognitionCore 会在每次 LLM 请求前记录完整 ChatMessage 数组，并在返回后记录完整模型文本；Action 格式重试的每一轮也会分别记录。
+- 日志使用 `[cognition-debug]` 前缀和 request/round 标识，便于关联初始请求、格式重试与模型响应。
+- 因日志包含用户上下文和模型输出，调试完成后应关闭该开关。
+
 ## 2026-09-19 Dashboard 前端视觉优化
 
 - 保留现有 Dashboard API、SSE 实时回复和命令输入逻辑，仅更新 `src/plugins/dashboard.ts` 内嵌样式。

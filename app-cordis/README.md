@@ -59,6 +59,7 @@ npm run dev
 |----|------|------|
 | `CORDIS_PORT` | 8100 | 飞书通道端口 |
 | `ORCA_DRY_RUN` | — | 1 = AI 回复只写日志，不发飞书 |
+| `ORCA_COGNITION_DEBUG` | — | 1 = 在日志中记录 CognitionCore 发给 LLM 的完整 prompt 和模型返回内容（包含用户上下文，调试后应关闭） |
 | `ORCA_HISTORY_TURNS` | 10 | 每会话保留轮数 |
 | `INFO_RECORDS_DIR` | `data/records` | 档案室 JSONL 目录（每 namespace 一文件） |
 | `IMAGES_DIR` | `data/images` | 飞书图片落盘目录（food-image 用） |
