@@ -2384,6 +2384,15 @@ AttentionItem → orca/attention
 - `POST /api/chat` 现在先向 EventBus 发布 `{source:'dashboard', type:'message', sessionId:'dashboard'}`，再 emit Cordis `dashboard/message` 供 Agent 处理；Agent 回复继续以 `orca/dashboard-reply` 进入 EventBus。该输入事件目前用于可观测性，不复用 feishu adapter/reducer 语义。AGENT.md 已同步。
 - 前端收到 `action.executed` 且当前存在 pending thinking 气泡时，将其收束为“已处理。”；不改变 Cognition prompt 或 `no_action` Runtime 语义，避免无文本回复导致界面永久等待。
 
+## 2026-10-22 CognitionCore 提示词边界与 Action 诚实性
+
+- `app-cordis/src/services/cognition-core.ts` 的 `buildPrompt()` 现在明确区分 Skill、Action、ActionHandler 和 ActionExecutor；Skill 只提供说明，不是可执行对象。
+- Prompt 仅允许使用当前运行时已注册且实际注入清单中的 Action；禁止猜测 Action、参数、字段、MCP 工具或未实现的 capability discovery。
+- 补充 EventBus、WorldState、WorkingMemory、ContinuationState 与 ActionResult 的状态边界，并要求架构回答区分已确认事实、当前不可确认和设计建议。
+- 增加失败诊断与重复调用约束：优先检查实际关联字段，失败后不得无条件重复相同 Action；保留动态 Action、Skill、任务状态和 WorkingMemory 注入。
+- 新增 `app-cordis/scripts/smoke-cognition-prompt.mjs`，覆盖 Skill/Action 边界、静态 capability 清单声明、ActionResult 状态边界和事实分类；未修改 ActionExecutor 执行链路。
+- 验证：`npm run build`、`npm run smoke:cognition-prompt`、`npm run smoke:action` 通过。现有 `npm run smoke:skill` 仍因 `order-luckin` 元数据 `documentId=order-food` 与文档加载契约不一致而失败，属于既有 Skill 文档身份问题。
+
 ## 2026-09-19 Dashboard 前端视觉优化
 
 - 保留现有 Dashboard API、SSE 实时回复和命令输入逻辑，仅更新 `src/plugins/dashboard.ts` 内嵌样式。

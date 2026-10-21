@@ -28,7 +28,8 @@
     "smoke:skill": "npm run build && node scripts/smoke-skill.mjs",
     "smoke:windows-mcp": "npm run build && node scripts/smoke-windows-mcp.mjs",
     "smoke:memory-category": "npm run build && node scripts/smoke-memory-category.mjs",
-    "smoke:all": "npm run smoke && npm run smoke:world-state && npm run smoke:attention && npm run smoke:decision && npm run smoke:action && npm run smoke:notify && npm run smoke:notify-e2e && npm run smoke:deferred && npm run smoke:notify-merged && npm run smoke:delete-intent && npm run smoke:skill && npm run smoke:windows-mcp && npm run smoke:memory-category"
+    "smoke:cognition-prompt": "npm run build && node scripts/smoke-cognition-prompt.mjs",
+    "smoke:all": "npm run smoke && npm run smoke:world-state && npm run smoke:attention && npm run smoke:decision && npm run smoke:action && npm run smoke:notify && npm run smoke:notify-e2e && npm run smoke:deferred && npm run smoke:notify-merged && npm run smoke:delete-intent && npm run smoke:skill && npm run smoke:windows-mcp && npm run smoke:memory-category && npm run smoke:cognition-prompt"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1"

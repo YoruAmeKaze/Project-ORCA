@@ -31,3 +31,11 @@ project-orca-overview.md
 
 # Reasonix internal
 .reasonix/
+
+# Local test/evaluation artifacts
+localhost
+build_report.py
+make_test_images.py
+test_exception.png
+test_normal.png
+*.docx
