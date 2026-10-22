@@ -100,7 +100,7 @@ export function createSchedulerAdapter(
         safePublish()
       }, tickMs)
 
-      ctx.logger.info('[scheduler-adapter] 已启动（Phase 7.1A：纯 Time Producer，tickMs=%d）', tickMs)
+      ctx.logger.info('[scheduler-adapter] 已启动，纯 Time Producer，tickMs=%d', tickMs)
     },
 
     stop(): void {
@@ -123,7 +123,7 @@ export function schedulerAdapter(ctx: Context, config: OrcaConfig): RuntimeAdapt
   const cfg = getSchedulerConfig(config)
 
   if (!cfg.enabled) {
-    ctx.logger.info('[scheduler-adapter] 未启用（ORCA_SCHEDULER_ENABLED!=1）')
+    ctx.logger.info('[scheduler-adapter] 未启用，ORCA_SCHEDULER_ENABLED!=1')
     return {
       start() {},
       stop() {},

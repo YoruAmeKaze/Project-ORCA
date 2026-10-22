@@ -27,6 +27,16 @@ const ACTION_METADATA: Array<Omit<SkillMetadata, 'available'> & { actionPrefixes
     risk: 'read_only', confirmation: 'none', keywords: ['文件', '读取', '内容', '目录'],
   },
   {
+    id: 'filesystem-edit', category: normalizeCategory({ domain: 'basic-control', subdomain: 'filesystem', function: 'edit-file' }),
+    summary: '在用户查看 diff 并明确批准后修改允许目录中的文件。', docPath: 'filesystem-edit/SKILL.md', actions: ['filesystem.edit'],
+    risk: 'write', confirmation: 'required', keywords: ['文件', '修改', '编辑', '写入', 'diff', '批准'],
+  },
+  {
+    id: 'web-search', category: normalizeCategory({ domain: 'information', subdomain: 'web', function: 'search' }),
+    summary: '联网搜索并返回带来源 URL 的 provider 结果。', docPath: 'web-search/SKILL.md', actions: ['web.search'],
+    risk: 'read_only', confirmation: 'none', keywords: ['联网', '搜索', '网页', '来源'],
+  },
+  {
     id: 'order-luckin', category: normalizeCategory({ domain: 'ordering', subdomain: 'luckin', function: 'stores' }),
     summary: '查询瑞幸中国的只读门店、商品、价格和订单信息。', docPath: 'order-food/SKILL.md',
     documentId: 'order-food', actions: [], actionPrefixes: ['order.luckin.'], risk: 'read_only', confirmation: 'none',

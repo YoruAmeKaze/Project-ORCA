@@ -190,7 +190,7 @@ export function createQQAdapter(
       })
 
       server.listen(config.httpPort, config.httpHost, () => {
-        logger.info('[qq-adapter] HTTP server 启动（mode=http，listen %s:%d）', config.httpHost, config.httpPort)
+        logger.info('[qq-adapter] HTTP server 启动，mode=http，listen %s:%d', config.httpHost, config.httpPort)
       })
     },
 

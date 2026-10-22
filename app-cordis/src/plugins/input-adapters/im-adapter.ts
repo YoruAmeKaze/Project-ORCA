@@ -93,20 +93,20 @@ export function imAdapter(ctx: Context, config: OrcaConfig): RuntimeAdapter {
   }
 
   if (!imConfig.enabled) {
-    ctx.logger.info('[im-adapter] 未启用（ORCA_IM_ENABLED=0 或未配置）')
+    ctx.logger.info('[im-adapter] 未启用，ORCA_IM_ENABLED=0 或未配置')
     return { start() {}, stop() {} }
   }
 
   const mode = imConfig.mode ?? 'mock'
   if (mode === 'http') {
     ctx.logger.info(
-      '[im-adapter] 已启动（mode=http，NapCatQQ QQ adapter，listen %s:%d）',
+      '[im-adapter] 已启动，mode=http，NapCatQQ QQ adapter，listen %s:%d',
       imConfig.qq?.httpHost ?? '127.0.0.1',
       imConfig.qq?.httpPort ?? 3000,
     )
   } else {
     ctx.logger.info(
-      '[im-adapter] 已启动（mode=mock，platform=%s，mockIntervalMs=%d）',
+      '[im-adapter] 已启动，mode=mock，platform=%s，mockIntervalMs=%d',
       imConfig.platform,
       imConfig.mockIntervalMs,
     )

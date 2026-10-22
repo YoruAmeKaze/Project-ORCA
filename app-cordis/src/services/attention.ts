@@ -251,16 +251,32 @@ const ruleInternalActionResult: AttentionRule = {
   description: '带原会话路由的内部 Action 结果交由 CognitionCore 继续处理并回复用户',
   predicate: ({ event }) => event?.source === 'internal' && event.type === 'action-result' &&
     typeof event.data.action === 'string' &&
-    typeof event.data.message === 'string' && event.data.message.trim().length > 0 &&
+    (typeof event.data.message === 'string' || typeof event.data.error === 'string' ||
+      (event.data.resultData !== undefined && event.data.resultData !== null) ||
+      (event.data.metadata !== undefined && event.data.metadata !== null)) &&
     (typeof event.data.dashboardMessageId === 'string' || typeof event.data.chatId === 'string'),
   produce: ({ event }) => ({
     priority: 'normal',
-    reason: `Action=${String(event?.data.action ?? 'unknown')} success=${String(event?.data.success === true)}\n${String(event?.data.message ?? '')}${event?.data.error ? `\n错误：${String(event.data.error)}` : ''}`,
+    reason: `Action=${String(event?.data.action ?? 'unknown')} success=${String(event?.data.success === true)}\n${formatActionResultContext(event?.data)}`,
     action: 'ignore',
     eventId: event?.id,
     dashboardMessageId: typeof event?.data.dashboardMessageId === 'string' ? event.data.dashboardMessageId : undefined,
     chatId: typeof event?.data.chatId === 'string' ? event.data.chatId : undefined,
   }),
+}
+
+function formatActionResultContext(data: Record<string, unknown> | undefined): string {
+  if (!data) return 'ActionResult 未提供结果内容。'
+  const parts: string[] = []
+  if (typeof data.message === 'string' && data.message.trim()) parts.push(data.message.trim())
+  if (typeof data.error === 'string' && data.error.trim()) parts.push(`错误：${data.error.trim()}`)
+  if (data.resultData !== undefined && data.resultData !== null) parts.push(`结果数据：${safeJson(data.resultData)}`)
+  if (data.metadata !== undefined && data.metadata !== null) parts.push(`结果元数据：${safeJson(data.metadata)}`)
+  return parts.join('\n') || 'ActionResult 未提供结果内容。'
+}
+
+function safeJson(value: unknown): string {
+  try { return JSON.stringify(value).slice(0, 6000) } catch { return '[结果不可序列化]' }
 }
 
 // 模块加载时一次性注册（与 Phase 2.A reducer 模式一致）

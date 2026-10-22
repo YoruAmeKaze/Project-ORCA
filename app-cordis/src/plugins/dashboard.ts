@@ -364,7 +364,7 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       | { recent(n: number, filter?: { source?: string }): unknown[]; size(): number }
       | undefined
     if (!bus) {
-      sendJson(res, 503, { ok: false, error: 'EventBus 未启用（设置 ORCA_RUNTIME_ENABLED=1 启用 Persistent Context Runtime）' })
+      sendJson(res, 503, { ok: false, error: 'EventBus 未启用，设置 ORCA_RUNTIME_ENABLED=1 启用 Persistent Context Runtime' })
       return
     }
     const url2 = new URL(_req.url ?? '/', `http://localhost:${DASHBOARD_PORT}`)
@@ -391,7 +391,7 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       | { getState(): unknown }
       | undefined
     if (!ws) {
-      sendJson(res, 503, { ok: false, error: 'WorldState 未启用（设置 ORCA_RUNTIME_ENABLED=1 启用 Persistent Context Runtime，且 ORCA_WORLD_STATE_ENABLED 不为 0）' })
+      sendJson(res, 503, { ok: false, error: 'WorldState 未启用，设置 ORCA_RUNTIME_ENABLED=1 启用 Persistent Context Runtime，且 ORCA_WORLD_STATE_ENABLED 不为 0' })
       return
     }
     const state = ws.getState()
@@ -414,7 +414,7 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       | { ruleCount(): number; evaluate(input: unknown): unknown[] }
       | undefined
     if (!att) {
-      sendJson(res, 503, { ok: false, error: 'Attention Engine 未启用（设置 ORCA_RUNTIME_ENABLED=1 启用 Persistent Context Runtime，且 ORCA_ATTENTION_ENABLED 不为 0）' })
+      sendJson(res, 503, { ok: false, error: 'Attention Engine 未启用，设置 ORCA_RUNTIME_ENABLED=1 启用 Persistent Context Runtime，且 ORCA_ATTENTION_ENABLED 不为 0' })
       return
     }
 
@@ -430,7 +430,7 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
     if (req.method === 'POST' && req.url?.endsWith('/evaluate')) {
       const ws = ctx.get('worldState') as { getState(): unknown } | undefined
       if (!ws) {
-        sendJson(res, 503, { ok: false, error: 'WorldState 未启用（evaluate 需要 worldState）' })
+        sendJson(res, 503, { ok: false, error: 'WorldState 未启用，evaluate 需要 worldState' })
         return
       }
       // 读取 body
@@ -651,7 +651,7 @@ export function dashboard(ctx: Context, config: OrcaConfig) {
       | { publish: (input: { source: string; type: string; data?: Record<string, unknown>; priority?: number }) => void }
       | undefined
     if (!bus) {
-      sendJson(res, 503, { ok: false, error: 'EventBus 未启用（设置 ORCA_RUNTIME_ENABLED=1 启用 Persistent Context Runtime）' })
+      sendJson(res, 503, { ok: false, error: 'EventBus 未启用，设置 ORCA_RUNTIME_ENABLED=1 启用 Persistent Context Runtime' })
       return
     }
     // 读取 body（限制 8KB；调试用不需要大 payload）

@@ -30,7 +30,7 @@
  * - scheduler 内部逻辑（由 DeferredActionScheduler plugin 负责）
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFile, statfs } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { arch, cpus, freemem, hostname, loadavg, platform, totalmem, uptime, userInfo } from 'node:os'
@@ -789,6 +789,7 @@ export function createFilesystemReadHandler(ctx: FilesystemReadContext): ActionH
   return {
     name: 'filesystem.read',
     action: 'filesystem.read',
+    llmDescription: '读取配置允许的工作区文件。参数 schema：{"path": string, "encoding"?: "utf8"|"base64"}。path 必须位于当前配置的读取根目录内；结果包含 content、size 和 sha256，后续 filesystem.edit 需要使用该 sha256。',
     async execute(decision: Decision): Promise<ActionResult> {
       // 1. 解析 reason JSON
       const params = tryParseReadParams(decision.reason)
@@ -835,6 +836,7 @@ export function createFilesystemReadHandler(ctx: FilesystemReadContext): ActionH
           encoding,
           content,
           size: Buffer.byteLength(String(content), encoding as BufferEncoding),
+          sha256: createHash('sha256').update(Buffer.from(String(content), encoding as BufferEncoding)).digest('hex'),
         })
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err)

@@ -111,7 +111,7 @@ export interface ActionResult {
  * - register(handler) —— 注册或覆盖（Last-Write-Wins）
  * - unregister(action) —— 注销
  * - get(action)        —— 查找
- * - list()             —— 列出所有已注册（debug 用）
+ * - list()             —— 列出所有已注册，debug 用
  *
  * 严格无副作用（除 register/unregister 本身）：
  * - 不执行 handler

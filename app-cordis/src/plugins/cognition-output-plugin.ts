@@ -139,7 +139,7 @@ export function cognitionOutputPlugin(ctx: Context, config: OrcaConfig) {
     }
   })
 
-  ctx.logger.info('[cognition-output] 已启动（Runtime enabled，订阅 orca/cognition-output）')
+  ctx.logger.info('[cognition-output] 已启动，Runtime enabled，订阅 orca/cognition-output')
 
   return () => {
     ctx.logger.info('[cognition-output] 关闭')
@@ -229,7 +229,7 @@ function handleTextReply(
   feishu.sendToChat(output.chatId, output.output).catch((err: unknown) => {
     // 发送失败不抛异常（飞书接口问题不应该影响 cognition 本身的状态）
     const detail = err instanceof Error ? err.message : String(err)
-    console.warn('[cognition-output] Feishu sendToChat failed: %s', detail)
+  console.warn('cognition-output: Feishu sendToChat failed: %s', detail)
   })
   ctx.logger.info('[cognition-output] reply dispatched channel=feishu sessionId=%s requestId=%s',
     output.channelSessionId ?? '(unknown)', output.requestId)

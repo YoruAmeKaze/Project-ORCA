@@ -74,7 +74,7 @@ export function worldStateUpdater(ctx: Context, config: OrcaConfig) {
   // 启动日志（getState 返回深拷贝）
   const initialState = service.getState()
   ctx.logger.info(
-    '[world-state-updater] 已启动（user.status=%s timeOfDay=%s）',
+    '[world-state-updater] 已启动，user.status=%s timeOfDay=%s',
     initialState.user.status,
     initialState.time.timeOfDay,
   )
@@ -155,13 +155,13 @@ export function worldStateUpdater(ctx: Context, config: OrcaConfig) {
     }
   }, timeRefreshMs)
   ctx.logger.info(
-    '[world-state-updater] time tick 已启用（timeRefreshMs=%d）',
+    '[world-state-updater] time tick 已启用，timeRefreshMs=%d',
     timeRefreshMs,
   )
 
   // 4. dispose 钩子（cordis fiber 清理）
   return () => {
-    ctx.logger.info('[world-state-updater] 关闭（clearInterval + unsubscribe）')
+    ctx.logger.info('[world-state-updater] 关闭，clearInterval + unsubscribe')
     clearInterval(timer)
     unsubscribe()
   }

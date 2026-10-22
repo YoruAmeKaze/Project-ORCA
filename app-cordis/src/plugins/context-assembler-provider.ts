@@ -44,7 +44,7 @@ export function contextAssemblerProvider(ctx: Context, config: OrcaConfig): void
   }
 
   if (!config.contextAssembler.enabled) {
-    ctx.logger.info('[context-assembler-provider] 未启用（ORCA_CONTEXT_ASSEMBLER_ENABLED=0 关闭）')
+    ctx.logger.info('[context-assembler-provider] 未启用，ORCA_CONTEXT_ASSEMBLER_ENABLED=0 关闭')
     return
   }
 
@@ -53,7 +53,7 @@ export function contextAssemblerProvider(ctx: Context, config: OrcaConfig): void
     warn: ctx.logger.warn.bind(ctx.logger),
   }))
   ctx.logger.info(
-    '[orca-cordis] Phase 6.A ContextAssembler 已启用（memoryTopK=%d, memoryBudgetChars=%d）',
+    '[orca-cordis] ContextAssembler 已启用，memoryTopK=%d, memoryBudgetChars=%d',
     config.contextAssembler.memoryTopK,
     config.contextAssembler.memoryBudgetChars,
   )

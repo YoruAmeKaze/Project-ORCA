@@ -87,7 +87,7 @@ export function createPcAdapter(
         clearInterval(timer)
         timer = null
       }
-      logger.info('[pc-adapter] 已关闭（clearInterval）')
+      logger.info('[pc-adapter] 已关闭，clearInterval')
     },
   }
 }
@@ -112,7 +112,7 @@ export function pcAdapter(ctx: Context, config: OrcaConfig): RuntimeAdapter {
   const refreshMs = config.runtime.pc?.refreshMs ?? 60_000
 
   ctx.logger.info(
-    '[pc-adapter] 已启动（mock 模式，refreshMs=%d，候选=%s）',
+    '[pc-adapter] 已启动，mock 模式，refreshMs=%d，候选=%s',
     refreshMs,
     MOCK_PC_APPS.join('/'),
   )

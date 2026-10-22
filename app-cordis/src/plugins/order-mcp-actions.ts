@@ -21,7 +21,7 @@ export function orderMcpActions(ctx: Context, config: OrcaConfig) {
     for (const handler of createOrderActionHandlers({ service, logger: ctx.logger })) {
       executor.registry.register(handler)
     }
-    ctx.logger.info('[order-mcp] 只读 Action 已注册（%d 项）', service.availableActions().length)
+    ctx.logger.info('[order-mcp] 只读 Action 已注册，%d 项', service.availableActions().length)
   }).catch((err: unknown) => {
     const detail = err instanceof Error ? err.message : 'MCP discovery failed'
     ctx.logger.warn('[order-mcp] 初始化失败；相关 Action 保持关闭：%s', detail.slice(0, 160))

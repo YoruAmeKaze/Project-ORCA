@@ -392,7 +392,7 @@ export function deferredScheduler(ctx: Context, _config: OrcaConfig) {
   }
 
   ctx.logger.info(
-    '[deferred-scheduler] 已启动（tickMs=%d；Phase 4.D + Phase 4.E；chatId 合并；上限 %d 条/通知）',
+    '[deferred-scheduler] 已启动，tickMs=%d；Phase 4.D + Phase 4.E；chatId 合并；上限 %d 条/通知',
     DEFERRED_SCHEDULER_TICK_MS, MAX_MERGED_ITEMS,
   )
 
@@ -440,7 +440,7 @@ export function deferredScheduler(ctx: Context, _config: OrcaConfig) {
   // 6. dispose 钩子
   return () => {
     ctx.logger.info(
-      '[deferred-scheduler] 关闭（disposed=true + clearInterval；不调 store.clear）',
+      '[deferred-scheduler] 关闭，disposed=true + clearInterval；不调 store.clear',
     )
     disposed = true  // 必须在 clearInterval 之前置位（in-flight tick 才会短路）
     clearInterval(timer)

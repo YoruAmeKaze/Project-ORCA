@@ -41,7 +41,7 @@ const config = getConfig()
 
 // 仅 dashscope/backend 模式强制要求 apiKey；ollama 模式免 key
 if (config.llm.backend === 'dashscope' && !config.llm.apiKey) {
-  console.error('[orca-cordis] 缺少 DEEPSEEK_API_KEY：请在仓库根 .env 或 app-cordis/.env 配置（dashscope 模式必需；ollama 模式请设 ORCA_LLM_BACKEND=ollama）')
+  console.error('[orca-cordis] 缺少 DEEPSEEK_API_KEY。请在仓库根 .env 或 app-cordis/.env 配置。dashscope 模式必需；ollama 模式请设 ORCA_LLM_BACKEND=ollama。')
   process.exit(1)
 }
 
@@ -88,9 +88,9 @@ if (config.memory.enabled) {
     ...config.memory,
     eventEmitter: (event) => ctx.emit('memory_changed', event),
   }))
-  ctx.logger.info('[orca-cordis] MemoryStore 已启用（dataDir=%s）', config.memory.dataDir)
+  ctx.logger.info('[orca-cordis] MemoryStore 已启用，dataDir=%s', config.memory.dataDir)
 } else {
-  ctx.logger.info('[orca-cordis] MemoryStore 未启用（ORCA_MEMORY_ENABLED=0 关闭）')
+  ctx.logger.info('[orca-cordis] MemoryStore 未启用，ORCA_MEMORY_ENABLED=0 关闭')
 }
 
 // 插件装配
@@ -112,35 +112,35 @@ ctx.plugin(dashboard, config)    // Orca 仪表盘（状态监控 UI）
 // Orca Persistent Context Runtime（默认关闭；ORCA_RUNTIME_ENABLED=1 启用，挂载在 agent 之前以便订阅 feishu 事件）
 if (config.runtime.enabled) {
   ctx.plugin(orcaRuntime, config)
-  ctx.logger.info('[orca-cordis] Persistent Context Runtime 已启用（Phase 0+1）')
+  ctx.logger.info('[orca-cordis] Persistent Context Runtime 已启用')
   // Phase 2.A：WorldStateUpdater 必须在 orcaRuntime 之后（依赖 eventBus Service）
   if (config.runtime.worldState.enabled) {
     ctx.plugin(worldStateUpdater, config)
-    ctx.logger.info('[orca-cordis] WorldState 已启用（Phase 2.A）')
+    ctx.logger.info('[orca-cordis] WorldState 已启用')
   } else {
-    ctx.logger.info('[orca-cordis] WorldState 未启用（ORCA_WORLD_STATE_ENABLED=0 关闭）')
+    ctx.logger.info('[orca-cordis] WorldState 未启用，ORCA_WORLD_STATE_ENABLED=0 关闭')
   }
   // Phase 3：Attention Engine 必须在 WorldState 之后（依赖 worldState service）
   if (config.runtime.attention.enabled) {
     ctx.plugin(attentionEngine, config)
-    ctx.logger.info('[orca-cordis] Attention Engine 已启用（Phase 3）')
+    ctx.logger.info('[orca-cordis] Attention Engine 已启用')
     // Phase A：Cognitive Scheduler 在 Attention 之后（订阅 orca/attention，维护 pending 队列）
     ctx.plugin(cognitiveSchedulerPlugin, config)
-    ctx.logger.info('[orca-cordis] Cognitive Scheduler 已启用（Phase A）')
+    ctx.logger.info('[orca-cordis] Cognitive Scheduler 已启用')
     // Phase B：CognitionCore 在 Scheduler 之后（消费 orca/cognition-request）
     ctx.plugin(cognitionCorePlugin, config)
-    ctx.logger.info('[orca-cordis] CognitionCore 已启用（Phase B）')
+    ctx.logger.info('[orca-cordis] CognitionCore 已启用')
     // Phase C：Cognition Output 在 CognitionCore 之后（消费 orca/cognition-output，路由 text/reply → Feishu）
     ctx.plugin(cognitionOutputPlugin, config)
-    ctx.logger.info('[orca-cordis] Cognition Output Handler 已启用（Phase C）')
+    ctx.logger.info('[orca-cordis] Cognition Output Handler 已启用')
     // Phase 4.A：Decision Engine 必须在 Attention 之后（订阅 orca/attention emit）
     if (config.runtime.decision.enabled) {
       ctx.plugin(decisionEngine, config)
-      ctx.logger.info('[orca-cordis] Decision Engine 已启用（Phase 4.A）')
+      ctx.logger.info('[orca-cordis] Decision Engine 已启用')
       // Phase 4.B：Action Executor 必须在 Decision 之后（订阅 orca/decision emit）
       if (config.runtime.action.enabled) {
         ctx.plugin(actionExecutor, config)
-        ctx.logger.info('[orca-cordis] Action Executor 已启用（Phase 4.B）')
+        ctx.logger.info('[orca-cordis] Action Executor 已启用')
         if (config.orderMcp.luckin.enabled || config.orderMcp.mcd.enabled) {
           ctx.plugin(orderMcpActions, config)
           ctx.logger.info('[orca-cordis] 点餐 MCP 只读 Action 初始化中')
@@ -151,15 +151,15 @@ if (config.runtime.enabled) {
         }
         // Phase 4.D：Deferred Scheduler 必须在 Action Executor 之后（依赖 ctx.actionExecutor.deferredStore）
         ctx.plugin(deferredScheduler, config)
-        ctx.logger.info('[orca-cordis] Deferred Scheduler 已启用（Phase 4.D）')
+        ctx.logger.info('[orca-cordis] Deferred Scheduler 已启用')
       } else {
-        ctx.logger.info('[orca-cordis] Action Executor 未启用（ORCA_ACTION_ENABLED=0 关闭；默认安全）')
+        ctx.logger.info('[orca-cordis] Action Executor 未启用，ORCA_ACTION_ENABLED=0 关闭；默认安全')
       }
     } else {
-      ctx.logger.info('[orca-cordis] Decision Engine 未启用（ORCA_DECISION_ENABLED=0 关闭）')
+      ctx.logger.info('[orca-cordis] Decision Engine 未启用，ORCA_DECISION_ENABLED=0 关闭')
     }
   } else {
-    ctx.logger.info('[orca-cordis] Attention Engine 未启用（ORCA_ATTENTION_ENABLED=0 关闭）')
+    ctx.logger.info('[orca-cordis] Attention Engine 未启用，ORCA_ATTENTION_ENABLED=0 关闭')
   }
 
   // Phase 7.1A：RuntimeAdapters（GPT Review Phase 7.0）
@@ -170,33 +170,33 @@ if (config.runtime.enabled) {
   const schedulerRuntimeAdapter = schedulerAdapter(ctx, config)
   if (config.runtime.scheduler.enabled) {
     runtimeAdapters.push(schedulerRuntimeAdapter)
-    ctx.logger.info('[orca-cordis] Scheduler adapter 已启用（Phase 7.1A）')
+    ctx.logger.info('[orca-cordis] Scheduler adapter 已启用')
   }
 
   // Phase 2.D：mock 输入 adapter（pc/calendar/phone），全部默认 disabled
   if (config.runtime.pc.enabled) {
     const pcRuntimeAdapter = pcAdapter(ctx, config)
     runtimeAdapters.push(pcRuntimeAdapter)
-    ctx.logger.info('[orca-cordis] PC adapter 已启用（mock）')
+    ctx.logger.info('[orca-cordis] PC adapter 已启用，mock')
   }
   if (config.runtime.calendar.enabled) {
     const calendarRuntimeAdapter = calendarAdapter(ctx, config)
     runtimeAdapters.push(calendarRuntimeAdapter)
-    ctx.logger.info('[orca-cordis] Calendar adapter 已启用（mock）')
+    ctx.logger.info('[orca-cordis] Calendar adapter 已启用，mock')
   }
   if (config.runtime.phone.enabled) {
     const phoneRuntimeAdapter = phoneAdapter(ctx, config)
     runtimeAdapters.push(phoneRuntimeAdapter)
-    ctx.logger.info('[orca-cordis] Phone adapter 已启用（mock）')
+    ctx.logger.info('[orca-cordis] Phone adapter 已启用，mock')
   }
 
   // IM Bridge（IM-1.0 Phase；mock 模式）
   if (config.runtime.im.enabled) {
     const imRuntimeAdapter = imAdapter(ctx, config)
     runtimeAdapters.push(imRuntimeAdapter)
-    ctx.logger.info('[orca-cordis] IM adapter 已启用（IM-1.0，platform=%s）', config.runtime.im.platform)
+    ctx.logger.info('[orca-cordis] IM adapter 已启用，IM-1.0，platform=%s', config.runtime.im.platform)
   } else {
-    ctx.logger.info('[orca-cordis] IM adapter 未启用（ORCA_IM_ENABLED=0 或未配置；IM-1.0 仅 mock）')
+    ctx.logger.info('[orca-cordis] IM adapter 未启用，ORCA_IM_ENABLED=0 或未配置；IM-1.0 仅 mock')
   }
 
   // IM Observation（IM-1.5A Phase；订阅 EventBus im.* 事件，生成 CommunicationSignal）
@@ -212,28 +212,28 @@ if (config.runtime.enabled) {
       for (const rule of scheduledRules) {
         registry.register(rule)
       }
-      ctx.logger.info('[orca-cordis] ScheduledRules 已注册（Phase 7.2：%d 条）', scheduledRules.length)
+      ctx.logger.info('[orca-cordis] ScheduledRules 已注册，%d 条', scheduledRules.length)
     }
   }
 
   // Phase 5.1：EpisodeEngine（依赖 EventBus + WorldState，仅在 Runtime 启用时挂载）
   if (config.memory.enabled) {
     ctx.plugin(episodeEnginePlugin, config)
-    ctx.logger.info('[orca-cordis] EpisodeEngine 已启用（Phase 5.1：message.burst + state.transition）')
+    ctx.logger.info('[orca-cordis] EpisodeEngine 已启用，message.burst + state.transition')
     // Phase 5.3：ReflectionEngine（依赖 ctx.memory）
     ctx.plugin(reflectionEnginePlugin, config)
-    ctx.logger.info('[orca-cordis] ReflectionEngine 已启用（Phase 5.3：deterministic rule only）')
+    ctx.logger.info('[orca-cordis] ReflectionEngine 已启用，deterministic rule only')
     // Phase 5.4.A：MemoryAttentionAdapter（依赖 ctx.memory；通过 ctx.emit 注入 AttentionItems）
     ctx.plugin(memoryAttentionAdapter, config)
-    ctx.logger.info('[orca-cordis] MemoryAttentionAdapter 已挂载（Phase 5.4.A：Memory → Attention）')
+    ctx.logger.info('[orca-cordis] MemoryAttentionAdapter 已挂载，Memory → Attention')
   }
 } else {
-  ctx.logger.info('[orca-cordis] Persistent Context Runtime 未启用（ORCA_RUNTIME_ENABLED=1 启用）')
+  ctx.logger.info('[orca-cordis] Persistent Context Runtime 未启用，ORCA_RUNTIME_ENABLED=1 启用')
 }
 ctx.plugin(agent, config)
 
 ctx.logger.info(
-  '[orca-cordis] Phase 5.4.A 骨架已启动 host=%s port=%d model=%s dryRun=%s',
+  '[orca-cordis] 骨架已启动，host=%s port=%d model=%s dryRun=%s',
   config.host,
   config.port,
   config.llm.model,

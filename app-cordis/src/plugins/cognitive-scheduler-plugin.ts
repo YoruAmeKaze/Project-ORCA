@@ -35,7 +35,7 @@ export function cognitiveSchedulerPlugin(ctx: Context, _config: OrcaConfig) {
   // 1. 创建 CognitiveScheduler（注入 ctx 以便 emit 事件和订阅）
   const scheduler: CognitiveSchedulerService = createCognitiveScheduler(ctx)
   ctx.provide('cognitiveScheduler', scheduler)
-  ctx.logger.info('[cognitive-scheduler] 已启动（Phase A 骨架）')
+  ctx.logger.info('[cognitive-scheduler] 已启动，骨架')
 
   // 2. 订阅 'orca/attention'：每个 AttentionItem → scheduler.enqueue()
   // - 与 DecisionEngine 并行订阅（不阻塞 DecisionEngine 的 'orca/attention' listener）

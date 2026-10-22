@@ -46,7 +46,7 @@ export function decisionEngine(ctx: Context, _config: OrcaConfig) {
   // 1. 创建 DecisionEngine（纯函数，闭包无外部状态）
   const engine: DecisionEngineService = createDecisionEngine()
   ctx.provide('decision', engine)
-  ctx.logger.info('[decision-engine] 已启动（纯决策层；不执行 action）')
+  ctx.logger.info('[decision-engine] 已启动，纯决策层；不执行 action')
 
   // 2. 订阅 'orca/attention'：每个 AttentionItem → decide → emit 'orca/decision'
   // - listener 同步派发（不阻塞 emit 调用方）
@@ -64,7 +64,7 @@ export function decisionEngine(ctx: Context, _config: OrcaConfig) {
 
   // 3. dispose 钩子
   return () => {
-    ctx.logger.info('[decision-engine] 关闭（unsubscribe）')
+    ctx.logger.info('[decision-engine] 关闭，unsubscribe')
     unsubscribe()
   }
 }

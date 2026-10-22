@@ -9,6 +9,7 @@ export interface ApprovalRequest { action: string; path: string; diff: string; r
 export interface CapabilityActionContext {
   workspaceRoot: string
   logger?: LoggerLike
+  /** Must be provided by the user-facing approval channel; missing means fail closed. */
   approval?: { request(input: ApprovalRequest): Promise<boolean> }
   fetchImpl?: typeof fetch
 }
@@ -27,6 +28,7 @@ export function createCapabilityHandlers(ctx: CapabilityActionContext): ActionHa
 export function createFilesystemReadHandler(ctx: CapabilityActionContext): ActionHandler {
   return {
     name: 'filesystem.read', action: 'filesystem.read',
+    llmDescription: '读取 workspaceRoot 内的文件内容。参数 schema：{"path": string, "startLine"?: integer, "endLine"?: integer, "maxBytes"?: integer, "encoding"?: "utf8"|"base64"}。path 必须是工作区相对路径；这是只读 Action，结果包含内容、sha256 和是否截断。',
     async execute(decision) {
       try {
         const input = parseReason<ReadInput>(decision)
@@ -50,6 +52,7 @@ export function createFilesystemReadHandler(ctx: CapabilityActionContext): Actio
 export function createFilesystemEditHandler(ctx: CapabilityActionContext): ActionHandler {
   return {
     name: 'filesystem.edit', action: 'filesystem.edit',
+    llmDescription: '编辑 workspaceRoot 内的文件，必须先取得用户批准。参数 schema：{"path": string, "expectedSha256": string, "edits": [{"startLine": integer, "endLine": integer, "replacement": string}], "reason"?: string}。path 必须是工作区相对路径；expectedSha256 必须来自最近一次读取，编辑会在批准后执行。',
     async execute(decision) {
       try {
         const input = parseReason<EditInput>(decision)
@@ -76,18 +79,19 @@ export function createFilesystemEditHandler(ctx: CapabilityActionContext): Actio
 export function createWebSearchHandler(ctx: CapabilityActionContext): ActionHandler {
   return {
     name: 'web.search', action: 'web.search',
+    llmDescription: '通过 Bing 公开网页搜索并返回整理后的结果。参数 schema：{"query": string, "maxResults"?: integer, "domains"?: string[], "language"?: string, "recency"?: string}。需要联网；只能依据返回的搜索结果作答，不能把搜索请求本身当成事实。',
     async execute(decision) {
       try {
         const input = parseReason<SearchInput>(decision)
         if (!input.query?.trim()) return fail(decision, 'SEARCH_QUERY_REQUIRED')
         const maxResults = Math.min(Math.max(input.maxResults ?? 5, 1), MAX_SEARCH_RESULTS)
-        const url = new URL('https://html.duckduckgo.com/html/')
+        const url = new URL('https://www.bing.com/search')
         url.searchParams.set('q', input.domains?.length ? `${input.query} site:${input.domains.join(' OR site:')}` : input.query)
-        const response = await (ctx.fetchImpl ?? fetch)(url, { headers: { 'user-agent': 'Orca/1.0' } })
+        const response = await (ctx.fetchImpl ?? fetch)(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; Orca/1.0)' } })
         if (!response.ok) return fail(decision, `SEARCH_PROVIDER_HTTP_${response.status}`)
         const html = await response.text()
-        const results = parseDuckDuckGo(html).slice(0, maxResults)
-        return ok(decision, { query: input.query, provider: 'duckduckgo', results, searchedAt: new Date().toISOString(), sourceKind: 'provider result' })
+        const results = parseBing(html).slice(0, maxResults)
+        return ok(decision, { query: input.query, provider: 'bing', results, searchedAt: new Date().toISOString(), sourceKind: 'provider result' })
       } catch (err) { return fail(decision, errorCode(err, 'SEARCH_PROVIDER_UNAVAILABLE')) }
     },
   }
@@ -126,14 +130,14 @@ function makeDiff(before: string, after: string, path: string): string {
   return [`--- a/${path}`, `+++ b/${path}`, `@@ -1,${a.length} +1,${b.length} @@`, ...a.map((line) => `-${line}`), ...b.map((line) => `+${line}`)].join('\n')
 }
 
-function parseDuckDuckGo(html: string): Array<{ title: string; url: string; snippet: string }> {
+function parseBing(html: string): Array<{ title: string; url: string; snippet: string }> {
   const results: Array<{ title: string; url: string; snippet: string }> = []
-  const blockRe = /<div[^>]*class="result[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi
+  const blockRe = /<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>([\s\S]*?)<\/li>/gi
   for (const match of html.matchAll(blockRe)) {
     const block = match[1] ?? ''
-    const link = /class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i.exec(block)
+    const link = /<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i.exec(block)
     if (!link) continue
-    const snippet = /class="result__snippet"[^>]*>([\s\S]*?)<\/a?>/i.exec(block)?.[1] ?? ''
+    const snippet = /class="b_caption"[^>]*>[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/i.exec(block)?.[1] ?? ''
     results.push({ title: stripHtml(link[2] ?? ''), url: decodeHtml(link[1] ?? ''), snippet: stripHtml(snippet) })
   }
   return results
@@ -142,6 +146,6 @@ function parseDuckDuckGo(html: string): Array<{ title: string; url: string; snip
 function stripHtml(value: string): string { return decodeHtml(value.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()) }
 function decodeHtml(value: string): string { return value.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>') }
 function hash(data: Buffer): string { return createHash('sha256').update(data).digest('hex') }
-function ok(decision: Decision, metadata: Record<string, unknown>): ActionResult { return { success: true, action: decision.action, decisionId: decision.decisionId, executedAt: Date.now(), metadata } }
-function fail(decision: Decision, error: string): ActionResult { return { success: false, action: decision.action, decisionId: decision.decisionId, executedAt: Date.now(), error } }
+function ok(decision: Decision, metadata: Record<string, unknown>): ActionResult { return { success: true, action: decision.action, decisionId: decision.decisionId, sourceEventId: decision.eventId, executedAt: Date.now(), metadata } }
+function fail(decision: Decision, error: string): ActionResult { return { success: false, action: decision.action, decisionId: decision.decisionId, sourceEventId: decision.eventId, executedAt: Date.now(), error } }
 function errorCode(err: unknown, fallback: string): string { const message = err instanceof Error ? err.message : String(err); return message && /^[A-Z][A-Z0-9_]+$/.test(message) ? message : `${fallback}: ${message}` }

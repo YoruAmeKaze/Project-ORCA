@@ -97,7 +97,7 @@ export function createCalendarAdapter(
         clearInterval(timer)
         timer = null
       }
-      logger.info('[calendar-adapter] 已关闭（clearInterval）')
+      logger.info('[calendar-adapter] 已关闭，clearInterval')
     },
   }
 }
@@ -122,7 +122,7 @@ export function calendarAdapter(ctx: Context, config: OrcaConfig): RuntimeAdapte
   const refreshMs = config.runtime.calendar?.refreshMs ?? 120_000
 
   ctx.logger.info(
-    '[calendar-adapter] 已启动（mock 模式，refreshMs=%d，候选=%d）',
+    '[calendar-adapter] 已启动，mock 模式，refreshMs=%d，候选=%d',
     refreshMs, MOCK_TEMPLATES.length,
   )
 

@@ -32,12 +32,12 @@ export function imObservationAdapter(ctx: Context, config: OrcaConfig): () => vo
   }
 
   if (!obsConfig.enabled) {
-    ctx.logger?.info('[im-observation] 未启用（ORCA_IM_OBSERVATION_ENABLED=0 或未配置）')
+    ctx.logger?.info('[im-observation] 未启用，ORCA_IM_OBSERVATION_ENABLED=0 或未配置')
     return () => {}
   }
 
   ctx.logger?.info(
-    '[im-observation] Phase 1.5A 已启用（burstWindowMs=%d, burstMinCount=%d）',
+    '[im-observation] Phase 1.5A 已启用，burstWindowMs=%d, burstMinCount=%d',
     obsConfig.burstWindowMs,
     obsConfig.burstMinCount,
   )

@@ -90,7 +90,7 @@ export function createPhoneAdapter(
         clearInterval(timer)
         timer = null
       }
-      logger.info('[phone-adapter] 已关闭（clearInterval）')
+      logger.info('[phone-adapter] 已关闭，clearInterval')
     },
   }
 }
@@ -115,7 +115,7 @@ export function phoneAdapter(ctx: Context, config: OrcaConfig): RuntimeAdapter {
   const refreshMs = config.runtime.phone?.refreshMs ?? 300_000
 
   ctx.logger.info(
-    '[phone-adapter] 已启动（mock 模式，refreshMs=%d）',
+    '[phone-adapter] 已启动，mock 模式，refreshMs=%d',
     refreshMs,
   )
 

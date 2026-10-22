@@ -63,7 +63,7 @@ export function memoryAttentionAdapter(
 
   adapter.start()
 
-  ctx.logger?.info('[memory-attention-adapter] Phase 5.4.B MemoryAttentionAdapter 已挂载（轮询 + memory_changed 事件驱动）')
+  ctx.logger?.info('[memory-attention-adapter] Phase 5.4.B MemoryAttentionAdapter 已挂载，轮询 + memory_changed 事件驱动')
 
   return () => {
     unsubscribe()

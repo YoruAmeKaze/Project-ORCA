@@ -84,7 +84,7 @@ export function scheduledRuleRegistry(ctx: Context, _config: OrcaConfig) {
   ctx.provide('scheduledRuleRegistry', registry)
 
   ctx.logger.info(
-    '[scheduled-rule-registry] 已启动（%d 规则 registered）',
+    '[scheduled-rule-registry] 已启动，%d 规则 registered',
     registry.size(),
   )
 
@@ -114,7 +114,7 @@ export function scheduledRuleRegistry(ctx: Context, _config: OrcaConfig) {
   return () => {
     disposed = true
     unsubscribe()
-    ctx.logger.info('[scheduled-rule-registry] 已关闭（unsubscribe）')
+    ctx.logger.info('[scheduled-rule-registry] 已关闭，unsubscribe')
   }
 }
 

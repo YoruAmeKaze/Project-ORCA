@@ -15,7 +15,7 @@ export function windowsMcpActions(ctx: Context, config: OrcaConfig) {
       return
     }
     for (const handler of createWindowsDesktopActionHandlers(service, ctx.logger)) executor.registry.register(handler)
-    ctx.logger.info('[windows-mcp] 只读桌面 Action 已注册（%d 项）', service.availableActions().length)
+    ctx.logger.info('[windows-mcp] 只读桌面 Action 已注册，%d 项', service.availableActions().length)
   }).catch((error: unknown) => {
     ctx.logger.warn('[windows-mcp] 服务未启用：%s', error instanceof Error ? error.message : String(error))
   })

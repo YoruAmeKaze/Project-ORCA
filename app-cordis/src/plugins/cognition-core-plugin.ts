@@ -30,7 +30,7 @@ export function cognitionCorePlugin(ctx: Context, _config: OrcaConfig) {
   // 1. 创建 CognitionCore（注入 ctx 以便访问 llm service 和 emit 事件）
   const core: CognitionCoreService = createCognitionCore(ctx)
   ctx.provide('cognitionCore', core)
-  ctx.logger.info('[cognition-core] 已启动（Phase B 骨架）')
+  ctx.logger.info('[cognition-core] 已启动，骨架')
 
   // 2. 订阅 'orca/cognition-request'：Scheduler 发出的请求 → CognitionCore 处理
   const unsubscribe = ctx.on('orca/cognition-request', (request: CognitiveRequest) => {

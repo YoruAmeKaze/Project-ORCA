@@ -116,7 +116,7 @@ export function createMockIMAdapter(
     start(): void {
       if (disposed) return
       const intervalMs = config.mockIntervalMs ?? 5_000
-      logger.info('[mock-im-adapter] 启动（mock 模式，intervalMs=%d）', intervalMs)
+      logger.info('[mock-im-adapter] 启动，mock 模式，intervalMs=%d', intervalMs)
       mockInterval = setInterval(tick, intervalMs)
     },
 

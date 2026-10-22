@@ -188,12 +188,12 @@ export function createImageUploadHandler(opts: ReceiverOptions, deps: ImageUploa
 /**
  * 外部 Push 通道插件：独立 HTTP 服务（默认 8101，INFO_RECEIVER_PORT 可改）。
  * 路由：POST /info/records（结构化记录）/ POST /info/images（直连图片上传）。
- * 未配置 INFO_RECEIVER_TOKENS 时不启动（推送通道是可选项）。
+ * 未配置 INFO_RECEIVER_TOKENS 时不启动，推送通道是可选项。
  */
 export function infoReceiver(ctx: Context, config: OrcaConfig) {
   const { tokens, port } = config.infoReceiver
   if (!Object.keys(tokens).length) {
-    ctx.logger.info('[info-receiver] 未配置 INFO_RECEIVER_TOKENS，外部 Push 通道未启用（留空即关闭）')
+    ctx.logger.info('[info-receiver] 未配置 INFO_RECEIVER_TOKENS，外部 Push 通道未启用，留空即关闭')
     return
   }
   const recordsHandler = createReceiverHandler({ port, host: config.host, tokens }, (record) => {

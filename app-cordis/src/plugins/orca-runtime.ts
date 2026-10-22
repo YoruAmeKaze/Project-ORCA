@@ -27,7 +27,7 @@ export function orcaRuntime(ctx: Context, config: OrcaConfig) {
   ctx.provide('eventBus', bus)
 
   ctx.logger.info(
-    '[orca-runtime] Phase 0+1 已启动（windowSize=%d，feishu-adapter 即将挂载）',
+    '[orca-runtime] 已启动，windowSize=%d，feishu-adapter 即将挂载',
     config.runtime.eventWindowSize,
   )
 

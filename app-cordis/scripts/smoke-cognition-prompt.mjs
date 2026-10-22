@@ -3,6 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { createCognitionCore } from '../dist/services/cognition-core.js'
 import { createContinuationStateService } from '../dist/services/continuationState.js'
 import { getInitialState } from '../dist/services/worldState.js'
+import { createCapabilityHandlers } from '../dist/services/capability-actions.js'
 
 const prompts = []
 const ctx = new Context()
@@ -13,7 +14,10 @@ ctx.provide('llm', { chat: async (messages) => {
 } })
 ctx.provide('actionExecutor', {
   registry: {
-    list: () => [{ action: 'system.info', llmDescription: '读取当前系统快照。' }],
+    list: () => [
+      { action: 'system.info', llmDescription: '读取当前系统快照。' },
+      ...createCapabilityHandlers({ workspaceRoot: process.cwd() }),
+    ],
   },
 })
 ctx.provide('actionDescriptions', () => ['- location.current: 读取当前位置（参数：{}）。'])
@@ -58,36 +62,33 @@ await new Promise((resolve) => setTimeout(resolve, 40))
 
 assert.equal(prompts.length, 1)
 const prompt = prompts[0]
-assert.match(prompt, /Skill 是相关函数的小类、函数包和使用说明，不是可执行对象/u)
-assert.match(prompt, /Action 是唯一的原子执行单位/u)
-assert.match(prompt, /ActionHandler 是某个 Action 的具体实现；ActionExecutor 是统一调度入口/u)
-assert.match(prompt, /系统提示词不定义固定的 Action 名称/u)
-assert.match(prompt, /当前可用 Action 由 Runtime 在上下文中动态注入/u)
-assert.match(prompt, /每个 Action 的名称、说明、参数 schema、风险和确认要求/u)
-assert.match(prompt, /你会收到的输入及其含义/u)
-assert.match(prompt, /普通 Attention 中的“用户消息”是用户输入/u)
-assert.match(prompt, /内部 Action 执行结果/u)
-assert.match(prompt, /注册表 list\(\)/u)
-assert.match(prompt, /不是你可以绕过 ActionExecutor 直接调用的隐藏函数/u)
-assert.match(prompt, /每轮认知步骤/u)
-assert.match(prompt, /若循环停止、权限不足、需要确认或条件缺失/u)
-assert.match(prompt, /受控多轮认知/u)
-assert.match(prompt, /每轮最多调用一个原子 Action/u)
-assert.match(prompt, /不要在一次输出中假设多个 Action 已经执行/u)
-assert.match(prompt, /Runtime 可能因为最大轮数、超时、重复调用/u)
-assert.match(prompt, /每次需要执行操作时，只输出一个 Action 意图/u)
-assert.match(prompt, /不要同时声称 Action 已经成功/u)
-assert.match(prompt, /当前是静态 Action 清单注入，不是真正的运行时分层 capability discovery/u)
-assert.match(prompt, /不要猜测、创造相似名称、直接调用 MCP/u)
-assert.match(prompt, /ActionResult、原始工具全文、Action 日志和临时推理不会自动成为 WorldState/u)
-assert.match(prompt, /EventBus 主要负责事件传播/u)
-assert.match(prompt, /已确认事实（当前上下文、日志、Action 结果或代码明确提供）/u)
-assert.match(prompt, /当前不可确认（超出当前可见范围）/u)
-assert.match(prompt, /设计建议（未来方案，不代表已经实现）/u)
+assert.match(prompt, /Skill 只提供 Action 组织和使用说明，不是执行对象/u)
+assert.match(prompt, /ActionHandler 是实现，ActionExecutor 是统一调度入口/u)
+assert.match(prompt, /当前可用 Action 只来自本轮 Runtime 注入的清单/u)
+assert.match(prompt, /名称、说明、schema、风险和确认要求以清单为唯一依据/u)
+assert.match(prompt, /每轮最多选择一个当前清单中的原子 Action/u)
+assert.match(prompt, /ActionResult 是当前观察，不自动成为 WorldState/u)
+assert.match(prompt, /本轮运行时上下文开始/u)
+assert.match(prompt, /本轮运行时上下文结束/u)
+assert.match(prompt, /registry\.list\(\) 只是 Runtime 构造本轮清单/u)
+assert.match(prompt, /当前只是静态 Action 清单注入，不等于运行时分层 capability discovery/u)
+assert.match(prompt, /当前轮决策规则/u)
+assert.match(prompt, /已确认事实、当前不可确认、设计建议/u)
 assert.match(prompt, /WorkingMemory：当前 cognition 短期信息/u)
 assert.match(prompt, /ContinuationState：跨 cognition 任务状态/u)
 assert.match(prompt, /system\.info/u)
 assert.match(prompt, /location\.current/u)
-assert.doesNotMatch(prompt, /capability\.list.*已实现/u)
+assert.match(prompt, /filesystem\.read/u)
+assert.match(prompt, /workspaceRoot 内的文件内容/u)
+assert.match(prompt, /filesystem\.edit/u)
+assert.match(prompt, /必须先取得用户批准/u)
+assert.match(prompt, /web\.search/u)
+assert.match(prompt, /通过 Bing 公开网页搜索/u)
+assert.match(prompt, /不要假设 capability\.list、capability\.describe/u)
 assert.doesNotMatch(prompt, /system-info.*action/u)
+assert.ok(prompt.indexOf('固定执行协议') < prompt.indexOf('本轮运行时上下文开始'))
+assert.ok(prompt.indexOf('本轮运行时上下文开始') < prompt.indexOf('运行时可用 Action'))
+assert.ok(prompt.indexOf('运行时可用 Action') < prompt.indexOf('匹配的受控技能'))
+assert.ok(prompt.indexOf('匹配的受控技能') < prompt.indexOf('ContinuationState'))
+assert.ok(prompt.indexOf('ContinuationState') < prompt.indexOf('WorkingMemory'))
 console.log('smoke-cognition-prompt: PASS')

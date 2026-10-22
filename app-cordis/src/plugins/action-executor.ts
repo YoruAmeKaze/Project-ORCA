@@ -76,9 +76,9 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   if (locationService) {
     ctx.provide('location', locationService)
     executor.registry.register(createCurrentLocationHandler(locationService))
-    ctx.logger.info('[action-executor] location.current 已启用（系统授权定位；坐标仅短期保存在内存）')
+    ctx.logger.info('[action-executor] location.current 已启用，系统授权定位；坐标仅短期保存在内存')
   } else {
-    ctx.logger.info('[action-executor] location.current 未启用（设置 ORCA_LOCATION_ENABLED=1 并授予系统定位权限后可用）')
+    ctx.logger.info('[action-executor] location.current 未启用，设置 ORCA_LOCATION_ENABLED=1 并授予系统定位权限后可用')
   }
 
   ctx.provide('actionDescriptions', () => [
@@ -97,7 +97,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
       store,
       logger: ctx.logger,
     }))
-    ctx.logger.info('[action-executor] remember handler 已挂载（infoStore 依赖）')
+    ctx.logger.info('[action-executor] remember handler 已挂载，infoStore 依赖')
   } else {
     ctx.logger.info(
       '[action-executor] infoStore 未提供；remember handler 未挂载（其他 handler 不受影响）',
@@ -120,7 +120,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
       logger: ctx.logger,
     }))
     ctx.logger.info(
-      '[action-executor] notify handler 已挂载（真实通知；feishu + eventBus；dryRun=%s）',
+      '[action-executor] notify handler 已挂载，真实通知；feishu + eventBus；dryRun=%s',
       _config.dryRun,
     )
   } else {
@@ -136,7 +136,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   if (memory) {
     executor.registry.register(createMemoryRememberHandler({ memory, logger: ctx.logger }))
     executor.registry.register(createMemoryForgetHandler({ memory, logger: ctx.logger }))
-    ctx.logger.info('[action-executor] memory.remember + memory.forget handler 已挂载（Phase 5.2）')
+    ctx.logger.info('[action-executor] memory.remember + memory.forget handler 已挂载')
   } else {
     ctx.logger.info(
       '[action-executor] memory 未提供；memory.remember/forget handler 未挂载',
@@ -144,15 +144,16 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   }
 
   // 基础能力 Action：Skill 只描述能力，实际执行仍统一走 ActionHandlerRegistry。
+  const filesystemRoot = _config.filesystem?.readRoot || process.env.ORCA_WORKSPACE_ROOT || process.cwd()
   for (const handler of createCapabilityHandlers({
-    workspaceRoot: process.env.ORCA_WORKSPACE_ROOT ?? process.cwd(),
+    workspaceRoot: filesystemRoot,
     logger: ctx.logger,
   })) executor.registry.register(handler)
 
   // 2.8 注入 system.info handler（Phase E；只读系统环境）
   if (_config.filesystem?.readRoot) {
     executor.registry.register(createSystemInfoHandler({ diskPath: _config.filesystem.readRoot, logger: ctx.logger }))
-    ctx.logger.info('[action-executor] system.info handler 已挂载（只读系统快照）')
+    ctx.logger.info('[action-executor] system.info handler 已挂载，只读系统快照')
   }
 
   // 2.7 注入 filesystem.read handler（Phase D；依赖 config.filesystem.readRoot）
@@ -161,7 +162,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
       allowedRoot: _config.filesystem.readRoot,
       logger: ctx.logger,
     }))
-    ctx.logger.info('[action-executor] filesystem.read handler 已挂载（readRoot=%s）', _config.filesystem.readRoot)
+    ctx.logger.info('[action-executor] filesystem.read handler 已挂载，readRoot=%s', _config.filesystem.readRoot)
   } else {
     ctx.logger.info(
       '[action-executor] filesystem.readRoot 未配置；filesystem.read handler 未挂载',
@@ -169,7 +170,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
   }
 
   ctx.logger.info(
-    '[action-executor] 已启动（handlers: %s）',
+    '[action-executor] 已启动，handlers: %s',
     executor.registry.list().map((h) => `${h.action}=${h.name}`).join(', '),
   )
 
@@ -330,7 +331,7 @@ export function actionExecutor(ctx: Context, _config: OrcaConfig) {
 
   // 5. dispose 钩子
   return () => {
-    ctx.logger.info('[action-executor] 关闭（disposed=true + unsubscribe + registry.clear + deferredStore.clear）')
+    ctx.logger.info('[action-executor] 关闭，disposed=true + unsubscribe + registry.clear + deferredStore.clear')
     disposed = true  // 必须在 unsubscribe 之前置位（in-flight .then/.catch 才会短路）
     unsubscribe()
     unsubscribeActionResult()

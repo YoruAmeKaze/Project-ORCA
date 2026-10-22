@@ -99,7 +99,7 @@ export function attentionEngine(ctx: Context, _config: OrcaConfig) {
   const throttle: AttentionThrottleService = createAttentionThrottle() // 默认 cooldown=5s + cap=10/1h
   ctx.provide('attention', engine)
   ctx.logger.info(
-    '[attention-engine] 已启动（%d 规则 + dedup %dms + throttle cooldown=%dms cap=%d/%dms）',
+    '[attention-engine] 已启动，%d 规则 + dedup %dms + throttle cooldown=%dms cap=%d/%dms',
     engine.ruleCount(),
     DEFAULT_DEDUP_WINDOW_MS,
     DEFAULT_THROTTLE_COOLDOWN_MS,
@@ -148,7 +148,7 @@ export function attentionEngine(ctx: Context, _config: OrcaConfig) {
 
   // 4. dispose 钩子
   return () => {
-    ctx.logger.info('[attention-engine] 关闭（unsubscribe + dedup.clear + throttle.reset）')
+    ctx.logger.info('[attention-engine] 关闭，unsubscribe + dedup.clear + throttle.reset')
     unsubscribe()
     dedup.clear()
     throttle.reset()

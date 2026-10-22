@@ -38,7 +38,7 @@ export function episodeEnginePlugin(ctx: Context): () => void {
     )
   })
 
-  ctx.logger?.info('[episode-engine] Phase 5.1 EpisodeEngine 已挂载（message.burst + state.transition）')
+  ctx.logger?.info('[episode-engine] Phase 5.1 EpisodeEngine 已挂载，message.burst + state.transition')
 
   return () => {
     engine.dispose()

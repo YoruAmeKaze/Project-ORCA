@@ -38,7 +38,7 @@ export function reflectionEnginePlugin(ctx: Context): () => void {
   ctx.provide('reflection', engine)
 
   ctx.logger?.info?.(
-    '[reflection-engine] Phase 5.3 ReflectionEngine 已挂载（手动 reflectNow；deterministic rule only；无 LLM）',
+    '[reflection-engine] Phase 5.3 ReflectionEngine 已挂载，手动 reflectNow；deterministic rule only；无 LLM',
   )
 
   return () => {

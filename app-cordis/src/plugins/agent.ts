@@ -146,7 +146,7 @@ export function agent(ctx: Context, config: OrcaConfig) {
           // 只注入 memory facts 部分（summary 已包含 WorldState+R2+R3；这里只追加 R3）
           if (result.memoryFacts.length > 0) {
             const memLines = result.memoryFacts.map((f) => f.formatted)
-            memoryContext = `\n\n【长期记忆】以下事实来自你的长期记忆（直接引用，无需核实）：\n${memLines.join('\n')}`
+            memoryContext = `\n\n长期记忆：以下事实来自长期记忆，直接引用即可，无需核实。\n${memLines.join('\n')}`
           }
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err)
@@ -216,7 +216,7 @@ export function agent(ctx: Context, config: OrcaConfig) {
           selfProfile = result.selfProfile
           if (result.memoryFacts.length > 0) {
             const memLines = result.memoryFacts.map((f) => f.formatted)
-            memoryContext = `\n\n【长期记忆】以下事实来自你的长期记忆（直接引用，无需核实）：\n${memLines.join('\n')}`
+            memoryContext = `\n\n长期记忆：以下事实来自长期记忆，直接引用即可，无需核实。\n${memLines.join('\n')}`
           }
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err)
@@ -263,7 +263,7 @@ async function buildArchiveContext(
     records.sort((a, b) => b.ts - a.ts)
     if (records.length) {
       const lines = records.slice(0, 10).map(formatFoodRecord)
-      parts.push(`【档案室 R0 命中】以下是最近的饮食记录（直接引用即可，无需再识别/搜索）：\n${lines.join('\n')}`)
+      parts.push(`档案室 R0 命中：以下是最近的饮食记录，直接引用即可，无需再识别或搜索。\n${lines.join('\n')}`)
     }
   }
 
@@ -271,7 +271,7 @@ async function buildArchiveContext(
   const pending = await store.peekPending()
   if (pending.length) {
     const lines = pending.map((r) => `- [${r.namespace}/${r.type}] ${summarizePayload(r.payload)}`)
-    parts.push(`【待汇报】以下事项发生在用户上一条消息之后，请在回复里自然带一句（不展开成专题）：\n${lines.join('\n')}`)
+    parts.push(`待汇报：以下事项发生在用户上一条消息之后，请在回复里自然带一句，不展开成专题。\n${lines.join('\n')}`)
     pendingIds.push(...pending.map((r) => r.id))
   }
 

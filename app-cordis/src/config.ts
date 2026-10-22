@@ -237,7 +237,7 @@ export interface OrcaContextAssemblerConfig {
 }
 
 export interface OrcaFilesystemConfig {
-  /** filesystem.read handler 允许读取的根目录（默认 appRoot/data）；空字符串表示不限制（不推荐） */
+  /** filesystem.read/edit 允许访问的根目录（Windows 默认 D:\\；可用 ORCA_FS_READ_ROOT 覆盖） */
   readRoot: string
 }
 
@@ -351,7 +351,7 @@ export function getConfig(): OrcaConfig {
     imagesDir: process.env.IMAGES_DIR || resolve(appRoot, 'data', 'images'),
     sessionsDir: process.env.ORCA_SESSIONS_DIR || resolve(appRoot, 'data', 'sessions'),
     filesystem: {
-      readRoot: process.env.ORCA_FS_READ_ROOT || resolve(appRoot, 'data'),
+      readRoot: process.env.ORCA_FS_READ_ROOT || (process.platform === 'win32' ? 'D:\\' : resolve(appRoot, 'data')),
     },
     location: {
       enabled: process.env.ORCA_LOCATION_ENABLED === '1',
